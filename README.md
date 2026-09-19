@@ -280,6 +280,12 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   against trusted ingress headers (`CF-Connecting-IP`, then the first
   `X-Forwarded-For` hop, then `X-Real-IP`); fails closed when an allowlist is set
   but no client IP can be determined.
+- Per-IP abuse rate limit (NFR-3.6): a bounded in-memory fixed-window limiter
+  (`KINETIX_IP_RATE_LIMIT_PER_MIN`, default 600, 0 disables) applied before
+  virtual-key auth on `/v1`, so an unauthenticated flood is rejected cheaply
+  with a format-correct 429. It uses the same trusted client IP as the allowlist
+  and fails open when no client IP can be determined. Exposed as the
+  `kinetix_ip_rate_limited_total` metric.
 - User-authored configuration export/import (FR-10.12):
   `GET /admin/api/config/export` (secret-free by default; `?include_secrets=true`
   carries encrypted blobs) and `POST /admin/api/config/import` with a two-phase

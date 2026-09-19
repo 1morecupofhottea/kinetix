@@ -107,6 +107,7 @@ async fn main() -> Result<()> {
         http,
         http_redirect,
         log_queue,
+        config.ip_rate_limit_per_min,
     );
 
     // Background tasks.

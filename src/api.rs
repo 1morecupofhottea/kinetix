@@ -55,6 +55,16 @@ async fn handle(
 ) -> Response {
     let request_id = new_request_id();
 
+    // 0. Per-IP abuse limit, before key auth so an unauthenticated flood is
+    //    rejected cheaply (NFR-3.6). Fails open when no client IP is known.
+    if let Err(retry) = state.ip_limiter.check(limits::client_ip(&headers)) {
+        return error_response(
+            format,
+            &request_id,
+            ProxyError::rate_limited("too many requests from this client", Some(retry)),
+        );
+    }
+
     // 1. Authenticate the virtual key.
     let presented = match extract_virtual_key(&headers) {
         Some(k) => k,
@@ -138,6 +148,13 @@ pub async fn messages(State(state): State<AppState>, headers: HeaderMap, body: S
 /// `GET /v1/models`. The response shape is chosen by the client's auth style so
 /// both OpenAI and Anthropic clients can discover models (FR-1.2, FR-10.10).
 pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    if let Err(retry) = state.ip_limiter.check(limits::client_ip(&headers)) {
+        return error_response(
+            FrontendFormat::OpenAi,
+            &new_request_id(),
+            ProxyError::rate_limited("too many requests from this client", Some(retry)),
+        );
+    }
     let format = if headers.contains_key("x-api-key")
         || headers
             .get("anthropic-version")

@@ -52,6 +52,8 @@ pub struct AppState {
     pub last_backup_at: Arc<parking_lot::Mutex<Option<String>>>,
     /// Whether the last scheduled backup attempt failed.
     pub last_backup_failed: Arc<std::sync::atomic::AtomicBool>,
+    /// Per-IP abuse limiter (NFR-3.6), applied before virtual-key auth.
+    pub ip_limiter: crate::ratelimit::IpLimiter,
 }
 
 #[derive(Clone)]
@@ -70,6 +72,7 @@ impl AppState {
         http: reqwest::Client,
         http_redirect: reqwest::Client,
         log_queue: UsageLogQueue,
+        config_ip_limit: u64,
     ) -> Self {
         let credentials = Arc::new(StaticKeyStrategy::new(crypto.clone()));
         AppState {
@@ -96,6 +99,7 @@ impl AppState {
             route_fallbacks: Arc::new(AtomicU64::new(0)),
             last_backup_at: Arc::new(parking_lot::Mutex::new(None)),
             last_backup_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            ip_limiter: crate::ratelimit::IpLimiter::new(config_ip_limit),
         }
     }
 

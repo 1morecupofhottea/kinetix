@@ -2329,6 +2329,14 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
             errs as f64 / reqs as f64
         ));
     }
+    body.push_str(
+        "# HELP kinetix_ip_rate_limited_total Requests rejected by the per-IP limiter (NFR-3.6)\n",
+    );
+    body.push_str("# TYPE kinetix_ip_rate_limited_total counter\n");
+    body.push_str(&format!(
+        "kinetix_ip_rate_limited_total {}\n",
+        state.ip_limiter.limited_total()
+    ));
     body.push_str("# HELP kinetix_cost_usd_total Total computed cost in USD\n");
     body.push_str("# TYPE kinetix_cost_usd_total counter\n");
     body.push_str(&format!(

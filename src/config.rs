@@ -50,6 +50,8 @@ pub struct Config {
     pub alert_interval_secs: u64,
     /// p95 added-proxy-latency alert threshold in milliseconds (Monitoring).
     pub alert_p95_latency_ms: u64,
+    /// Per-IP requests/minute for the abuse limiter (NFR-3.6); 0 disables it.
+    pub ip_rate_limit_per_min: u64,
 }
 
 impl Config {
@@ -106,6 +108,9 @@ impl Config {
         let alert_p95_latency_ms = env_or("KINETIX_ALERT_P95_LATENCY_MS", "100")
             .parse::<u64>()
             .unwrap_or(100);
+        let ip_rate_limit_per_min = env_or("KINETIX_IP_RATE_LIMIT_PER_MIN", "600")
+            .parse::<u64>()
+            .unwrap_or(600);
 
         Ok(Config {
             bind,
@@ -131,6 +136,7 @@ impl Config {
             alert_min_requests,
             alert_interval_secs,
             alert_p95_latency_ms,
+            ip_rate_limit_per_min,
         })
     }
 }

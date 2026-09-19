@@ -32,6 +32,7 @@ pub mod passthrough;
 pub mod pipeline;
 pub mod pool;
 pub mod predicate;
+pub mod ratelimit;
 pub mod registry;
 pub mod router;
 pub mod sse;
