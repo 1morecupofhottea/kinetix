@@ -1,0 +1,439 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ *
+ * Kinetix admin dashboard. All data is loaded from the Kinetix admin API
+ * (/admin/api/*); there is no mock data. The app is served from the same origin
+ * as the API, so the admin session cookie is sent automatically.
+ */
+
+import React, { useCallback, useEffect, useState } from 'react';
+import { Navbar, NavTab, TAB_ROUTES } from './components/Navbar';
+import { LiveTesterModal } from './components/LiveTesterModal';
+import { LoginScreen } from './components/LoginScreen';
+import { KeysView } from './components/views/KeysView';
+import { CombosView } from './components/views/CombosView';
+import { ProvidersView } from './components/views/ProvidersView';
+import { AccountsView } from './components/views/AccountsView';
+import { UsageView } from './components/views/UsageView';
+import { RequestsView } from './components/views/RequestsView';
+import { AliasesView } from './components/views/AliasesView';
+import { AuditView } from './components/views/AuditView';
+import { SquiggleDivider, SketchButton, SketchBadge } from './components/HandDrawnElements';
+import { EMPTY_METRICS } from './lib/mappers';
+import { Kinetix } from './lib/resources';
+import { ApiError } from './lib/api';
+import {
+  VirtualKey,
+  Combo,
+  Provider,
+  Account,
+  ModelConfig,
+  ModelAlias,
+  AuditLog,
+  RequestLog,
+  ProxyMetrics,
+} from './types';
+import { Play, RefreshCw, AlertTriangle } from 'lucide-react';
+
+type AuthState = 'checking' | 'signed-out' | 'signed-in';
+
+function getTabFromPath(path: string): NavTab {
+  const normalized = path.replace(/\/$/, '');
+  const entries = Object.entries(TAB_ROUTES) as [NavTab, string][];
+  for (const [tab, route] of entries) {
+    if (normalized === route || normalized === route.replace('/admin', '')) {
+      return tab;
+    }
+  }
+  return 'keys';
+}
+
+export default function App() {
+  const [auth, setAuth] = useState<AuthState>('checking');
+  const [currentUser, setCurrentUser] = useState('admin');
+  const [activeTab, setActiveTab] = useState<NavTab>(() =>
+    typeof window !== 'undefined' ? getTabFromPath(window.location.pathname) : 'keys',
+  );
+  const [isTesterOpen, setIsTesterOpen] = useState(false);
+
+  // Reactive data, all sourced from the admin API.
+  const [keys, setKeys] = useState<VirtualKey[]>([]);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [accounts, setAccounts] = useState<Account[]>([]);
+  const [models, setModels] = useState<ModelConfig[]>([]);
+  const [combos, setCombos] = useState<Combo[]>([]);
+  const [aliases, setAliases] = useState<ModelAlias[]>([]);
+  const [requests, setRequests] = useState<RequestLog[]>([]);
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [metrics, setMetrics] = useState<ProxyMetrics>(EMPTY_METRICS);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // ---- session bootstrap --------------------------------------------------
+  useEffect(() => {
+    Kinetix.me()
+      .then((r) => {
+        setCurrentUser(r.user || 'admin');
+        setAuth('signed-in');
+      })
+      .catch(() => setAuth('signed-out'));
+  }, []);
+
+  // ---- data loading -------------------------------------------------------
+  const refresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      const [k, p, a, m, c, al, req, aud, met] = await Promise.all([
+        Kinetix.keys(),
+        Kinetix.providers(),
+        Kinetix.accounts(),
+        Kinetix.models(),
+        Kinetix.combos(),
+        Kinetix.aliases(),
+        Kinetix.requests(),
+        Kinetix.audit(),
+        Kinetix.overview(),
+      ]);
+      setKeys(k);
+      setProviders(p);
+      setAccounts(a);
+      setModels(m);
+      setCombos(c);
+      setAliases(al);
+      setRequests(req);
+      setAuditLogs(aud);
+      setMetrics(met);
+      setLoadError(null);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 401) {
+        setAuth('signed-out');
+      } else {
+        setLoadError(e instanceof Error ? e.message : String(e));
+      }
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (auth === 'signed-in') {
+      refresh();
+    }
+  }, [auth, refresh]);
+
+  // Poll overview metrics so the header stays live.
+  useEffect(() => {
+    if (auth !== 'signed-in') return;
+    const id = setInterval(() => {
+      Kinetix.overview().then(setMetrics).catch(() => {});
+    }, 15000);
+    return () => clearInterval(id);
+  }, [auth]);
+
+  // ---- routing ------------------------------------------------------------
+  useEffect(() => {
+    const handlePopState = () => setActiveTab(getTabFromPath(window.location.pathname));
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const handleSelectTab = (tab: NavTab) => {
+    setActiveTab(tab);
+    const targetPath = TAB_ROUTES[tab];
+    if (window.location.pathname !== targetPath) {
+      window.history.pushState({ tab }, '', targetPath);
+    }
+  };
+
+  // ---- auth ---------------------------------------------------------------
+  const handleLoginSuccess = (username: string) => {
+    setCurrentUser(username);
+    setAuth('signed-in');
+  };
+
+  const handleLogout = async () => {
+    try {
+      await Kinetix.logout();
+    } catch {
+      // ignore
+    }
+    setAuth('signed-out');
+  };
+
+  // ---- mutations (all server-backed, then refresh) ------------------------
+  const withRefresh = async (fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      await refresh();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const handleAddKey = async (
+    newKey: VirtualKey,
+  ): Promise<{ key: VirtualKey; fullKey: string } | null> => {
+    try {
+      const created = await Kinetix.createKey({
+        name: newKey.name,
+        owner: newKey.owner,
+        tag: newKey.tag,
+        allowed_models: newKey.allowedModels,
+        rpm_limit: newKey.rpmLimit || null,
+        tpm_limit: newKey.tpmLimit || null,
+        daily_budget: newKey.dailyBudget || null,
+        monthly_budget: newKey.monthlyBudget || null,
+      });
+      await refresh();
+      return created;
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+      return null;
+    }
+  };
+
+  const handleUpdateKeyStatus = (id: string, status: 'active' | 'disabled' | 'revoked') =>
+    withRefresh(() => Kinetix.updateKey(id, { status }));
+
+  const handleAddCombo = (newCombo: Combo) =>
+    withRefresh(() =>
+      Kinetix.createCombo({
+        name: newCombo.name,
+        description: newCombo.description,
+        strategy: newCombo.selectionStrategy,
+        fallback_triggers: newCombo.fallbackTriggers,
+        continuity_policy: newCombo.continuityPolicy,
+        sticky_routing: newCombo.stickyRouting,
+        targets: newCombo.targets.map((t) => ({
+          account_id: t.accountId || null,
+          model_id: t.modelId,
+          priority: t.priority,
+          weight: t.weight ?? 1,
+        })),
+      }),
+    );
+
+  const handleUpdateCombo = (updated: Combo) =>
+    withRefresh(() =>
+      Kinetix.updateCombo(updated.id, {
+        name: updated.name,
+        description: updated.description,
+        strategy: updated.selectionStrategy,
+        fallback_triggers: updated.fallbackTriggers,
+        continuity_policy: updated.continuityPolicy,
+        sticky_routing: updated.stickyRouting,
+        targets: updated.targets.map((t) => ({
+          account_id: t.accountId || null,
+          model_id: t.modelId,
+          priority: t.priority,
+          weight: t.weight ?? 1,
+        })),
+      }),
+    );
+
+  const handleDeleteCombo = (comboId: string) => withRefresh(() => Kinetix.deleteCombo(comboId));
+
+  const handleAddProvider = (prov: Provider) =>
+    withRefresh(() =>
+      Kinetix.createProvider({
+        name: prov.name,
+        base_url: prov.baseUrl,
+        wire_format: prov.wireFormat,
+        auth_scheme: prov.authScheme,
+        custom_header_name: prov.customHeaderName || null,
+        custom_param_name: prov.customParamName || null,
+        extra_headers: prov.extraHeaders || {},
+        timeout_ms: prov.timeoutMs,
+        capability_mode: prov.capabilityMode,
+      }),
+    );
+
+  const handleDeleteProvider = (providerId: string) =>
+    withRefresh(() => Kinetix.deleteProvider(providerId));
+
+  const handleAddModel = (model: ModelConfig) =>
+    withRefresh(() =>
+      Kinetix.createModel(model.providerId, {
+        upstream_id: model.upstreamModelId,
+        display_name: model.displayName,
+        enabled: model.enabled,
+        context_window: model.contextWindow,
+        max_output_tokens: model.maxOutputTokens,
+        capabilities: model.capabilities,
+        prices: {
+          input_per_1m: model.prices.inputPer1M,
+          output_per_1m: model.prices.outputPer1M,
+          cached_per_1m: model.prices.cachedPer1M,
+          thinking_per_1m: model.prices.thinkingPer1M,
+        },
+        parameters: model.parameters,
+        thinking_map: model.thinkingMap,
+      }),
+    );
+
+  const handleDeleteModel = (modelId: string) => withRefresh(() => Kinetix.deleteModel(modelId));
+
+  const handleAddAccount = (acc: Account & { apiKey?: string }) =>
+    withRefresh(() =>
+      Kinetix.createAccount({
+        provider_id: acc.providerId,
+        label: acc.label,
+        api_key: acc.apiKey,
+        priority: acc.priority,
+        soft_quota_usd: acc.softQuotaSpendLimit ?? null,
+        quota_type: acc.quotaType,
+      }),
+    );
+
+  const handleUpdateAccount = (acc: Account) =>
+    withRefresh(() => Kinetix.resetAccount(acc.id));
+
+  const handleDeleteAccount = (accountId: string) =>
+    withRefresh(() => Kinetix.deleteAccount(accountId));
+
+  const handleAddAlias = (alias: ModelAlias) =>
+    withRefresh(() =>
+      Kinetix.createAlias({
+        alias: alias.aliasName,
+        target_type: alias.targetType,
+        target_id: alias.targetId,
+        description: alias.description,
+      }),
+    );
+
+  const handleDeleteAlias = (id: string) => withRefresh(() => Kinetix.deleteAlias(id));
+
+  // ---- render -------------------------------------------------------------
+  if (auth === 'checking') {
+    return (
+      <div className="min-h-screen bg-[#fdfbf7] flex items-center justify-center font-heading text-[#2d2d2d]">
+        Checking gateway session…
+      </div>
+    );
+  }
+
+  if (auth === 'signed-out') {
+    return <LoginScreen onLoginSuccess={handleLoginSuccess} />;
+  }
+
+  return (
+    <div className="min-h-screen bg-[#fdfbf7] text-[#2d2d2d] flex flex-col selection:bg-[#fff9c4] selection:text-[#2d2d2d]">
+      <Navbar
+        activeTab={activeTab}
+        onSelectTab={handleSelectTab}
+        metrics={metrics}
+        onOpenTester={() => setIsTesterOpen(true)}
+        currentUser={currentUser}
+        onLogout={handleLogout}
+        onRefresh={refresh}
+        isRefreshing={isRefreshing}
+      />
+
+      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-8">
+        {loadError && (
+          <div className="mb-4 p-3 bg-[#ffebee] border-2 border-[#ff4d4d] rounded-lg text-sm font-mono text-[#b71c1c] flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4" />
+            <span className="flex-1">{loadError}</span>
+            <button onClick={() => setLoadError(null)} className="font-bold cursor-pointer">
+              ✕
+            </button>
+          </div>
+        )}
+
+        {activeTab === 'keys' && (
+          <KeysView keys={keys} onAddKey={handleAddKey} onUpdateKeyStatus={handleUpdateKeyStatus} />
+        )}
+
+        {activeTab === 'combos' && (
+          <CombosView
+            combos={combos}
+            accounts={accounts}
+            models={models}
+            onAddCombo={handleAddCombo}
+            onUpdateCombo={handleUpdateCombo}
+            onDeleteCombo={handleDeleteCombo}
+          />
+        )}
+
+        {activeTab === 'providers' && (
+          <ProvidersView
+            providers={providers}
+            models={models}
+            onAddProvider={handleAddProvider}
+            onAddModel={handleAddModel}
+            onDeleteModel={handleDeleteModel}
+            onDeleteProvider={handleDeleteProvider}
+            onRefresh={refresh}
+          />
+        )}
+
+        {activeTab === 'accounts' && (
+          <AccountsView
+            accounts={accounts}
+            providers={providers}
+            onAddAccount={handleAddAccount}
+            onUpdateAccount={handleUpdateAccount}
+            onDeleteAccount={handleDeleteAccount}
+          />
+        )}
+
+        {activeTab === 'usage' && <UsageView keys={keys} models={models} requests={requests} />}
+
+        {activeTab === 'requests' && <RequestsView requests={requests} />}
+
+        {activeTab === 'aliases' && (
+          <AliasesView
+            aliases={aliases}
+            combos={combos}
+            models={models}
+            onAddAlias={handleAddAlias}
+            onDeleteAlias={handleDeleteAlias}
+          />
+        )}
+
+        {activeTab === 'audit' && <AuditView logs={auditLogs} />}
+      </main>
+
+      <div className="max-w-7xl mx-auto w-full px-4">
+        <SquiggleDivider />
+      </div>
+
+      <footer className="w-full py-6 px-4 text-center font-body text-sm text-[#2d2d2d]/70">
+        <p className="flex items-center justify-center gap-2 flex-wrap">
+          <strong className="font-heading text-base text-[#2d2d2d]">Kinetix</strong>
+          <span>•</span>
+          <span>Zero-downtime LLM Multi-Protocol Proxy</span>
+          <span>•</span>
+          <span className="underline decoration-wavy decoration-[#ff4d4d]">Hand-Drawn Design System</span>
+        </p>
+        <p className="text-xs text-[#2d2d2d]/50 font-mono mt-1">
+          OpenAI &amp; Anthropic streaming in • Gemini, OpenAI, &amp; Anthropic upstream out • SQLite WAL at rest
+        </p>
+      </footer>
+
+      <div className="fixed bottom-6 right-6 z-40">
+        <SketchButton
+          variant="danger"
+          size="lg"
+          onClick={() => setIsTesterOpen(true)}
+          className="gap-2 font-heading font-bold shadow-lg shadow-black/10"
+        >
+          <Play className="w-5 h-5 fill-white" />
+          Test Proxy Live
+        </SketchButton>
+      </div>
+
+      <LiveTesterModal
+        isOpen={isTesterOpen}
+        onClose={() => {
+          setIsTesterOpen(false);
+          refresh();
+        }}
+        keys={keys}
+        combos={combos}
+        models={models}
+      />
+    </div>
+  );
+}

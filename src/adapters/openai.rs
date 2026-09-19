@@ -1,0 +1,449 @@
+//! OpenAI Chat Completions outbound adapter (wire format `openai`).
+//!
+//! Also used to translate for cross-provider combos (FR-12.7).
+
+use async_trait::async_trait;
+use serde_json::{json, Value};
+
+use crate::adapters::{Adapter, DiscoveredModel, UpstreamContext};
+use crate::types::{
+    FailureKind, FinishReason, ImageData, InternalRequest, Part, ProxyError, Role, StreamEvent,
+    TokenUsage, ToolChoice, UpstreamFailure,
+};
+
+pub struct OpenAiAdapter;
+
+impl OpenAiAdapter {
+    pub fn new() -> Self {
+        OpenAiAdapter
+    }
+
+    fn content_value(parts: &[Part]) -> Value {
+        let has_non_text = parts
+            .iter()
+            .any(|p| matches!(p, Part::Image(_)));
+        if !has_non_text {
+            // Plain string content.
+            let text: String = parts
+                .iter()
+                .filter_map(|p| match p {
+                    Part::Text(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+                .join("");
+            return json!(text);
+        }
+        let mut arr = Vec::new();
+        for p in parts {
+            match p {
+                Part::Text(t) => arr.push(json!({ "type": "text", "text": t })),
+                Part::Image(ImageData::Base64 { mime, data }) => arr.push(json!({
+                    "type": "image_url",
+                    "image_url": { "url": format!("data:{mime};base64,{data}") }
+                })),
+                Part::Image(ImageData::Url(url)) => {
+                    arr.push(json!({ "type": "image_url", "image_url": { "url": url } }))
+                }
+                _ => {}
+            }
+        }
+        Value::Array(arr)
+    }
+
+    fn build_messages(req: &InternalRequest) -> Vec<Value> {
+        let mut msgs = Vec::new();
+        for s in &req.system {
+            msgs.push(json!({ "role": "system", "content": s }));
+        }
+        for m in &req.messages {
+            match m.role {
+                Role::Assistant => {
+                    let text: String = m
+                        .parts
+                        .iter()
+                        .filter_map(|p| match p {
+                            Part::Text(t) => Some(t.clone()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join("");
+                    let tool_calls: Vec<Value> = m
+                        .parts
+                        .iter()
+                        .filter_map(|p| match p {
+                            Part::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                                ..
+                            } => Some(json!({
+                                "id": id.clone().unwrap_or_else(|| format!("call_{name}")),
+                                "type": "function",
+                                "function": { "name": name, "arguments": arguments }
+                            })),
+                            _ => None,
+                        })
+                        .collect();
+                    let mut msg = json!({ "role": "assistant" });
+                    if !text.is_empty() {
+                        msg["content"] = json!(text);
+                    } else {
+                        msg["content"] = Value::Null;
+                    }
+                    if !tool_calls.is_empty() {
+                        msg["tool_calls"] = Value::Array(tool_calls);
+                    }
+                    msgs.push(msg);
+                }
+                Role::Tool => {
+                    for p in &m.parts {
+                        if let Part::ToolResult {
+                            tool_call_id,
+                            content,
+                            ..
+                        } = p
+                        {
+                            msgs.push(json!({
+                                "role": "tool",
+                                "tool_call_id": tool_call_id,
+                                "content": content
+                            }));
+                        }
+                    }
+                }
+                Role::System | Role::User => {
+                    msgs.push(json!({
+                        "role": "user",
+                        "content": Self::content_value(&m.parts)
+                    }));
+                }
+            }
+        }
+        msgs
+    }
+
+    fn build_tools(req: &InternalRequest) -> Option<Value> {
+        if req.tools.is_empty() {
+            return None;
+        }
+        let tools: Vec<Value> = req
+            .tools
+            .iter()
+            .map(|t| {
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": t.name,
+                        "description": t.description.clone().unwrap_or_default(),
+                        "parameters": if t.parameters.is_null() { json!({"type":"object","properties":{}}) } else { t.parameters.clone() }
+                    }
+                })
+            })
+            .collect();
+        Some(Value::Array(tools))
+    }
+
+    fn build_tool_choice(req: &InternalRequest) -> Option<Value> {
+        match req.tool_choice {
+            Some(ToolChoice::None) => Some(json!("none")),
+            Some(ToolChoice::Required) => Some(json!("required")),
+            Some(ToolChoice::Specific) => Some(json!({
+                "type": "function",
+                "function": { "name": req.tool_choice_name.clone().unwrap_or_default() }
+            })),
+            Some(ToolChoice::Auto) | None => None,
+        }
+    }
+}
+
+impl Default for OpenAiAdapter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Adapter for OpenAiAdapter {
+    fn wire_format(&self) -> &'static str {
+        "openai"
+    }
+
+    fn build_url(&self, ctx: &UpstreamContext<'_>) -> Result<String, ProxyError> {
+        let base = ctx.provider.base_url.trim_end_matches('/');
+        Ok(format!("{base}/chat/completions"))
+    }
+
+    fn apply_auth(
+        &self,
+        ctx: &UpstreamContext<'_>,
+        req: reqwest::RequestBuilder,
+    ) -> reqwest::RequestBuilder {
+        use crate::types::AuthScheme;
+        match ctx.provider.auth() {
+            AuthScheme::Bearer => req.bearer_auth(&ctx.credential),
+            AuthScheme::CustomHeader => {
+                let name = ctx
+                    .provider
+                    .custom_header_name
+                    .clone()
+                    .unwrap_or_else(|| "authorization".to_string());
+                if name.eq_ignore_ascii_case("authorization") {
+                    req.header(name, format!("Bearer {}", ctx.credential))
+                } else {
+                    req.header(name, &ctx.credential)
+                }
+            }
+            AuthScheme::QueryParam => {
+                let param = ctx
+                    .provider
+                    .custom_param_name
+                    .clone()
+                    .unwrap_or_else(|| "key".to_string());
+                req.query(&[(param, &ctx.credential)])
+            }
+        }
+    }
+
+    fn build_body(&self, ctx: &UpstreamContext<'_>, req: &InternalRequest) -> Value {
+        let mut body = serde_json::Map::new();
+        body.insert("model".to_string(), json!(ctx.model.upstream_id));
+        body.insert("messages".to_string(), json!(Self::build_messages(req)));
+        body.insert("stream".to_string(), json!(true));
+
+        let params = ctx.model.params();
+        let mut insert = |key: &str, v: Option<f64>| {
+            if let Some(v) = v {
+                let spec = params.get(key);
+                if let Some(spec) = spec {
+                    if !spec.supported {
+                        return;
+                    }
+                    let mut val = v;
+                    if let Some(min) = spec.min {
+                        val = val.max(min);
+                    }
+                    if let Some(max) = spec.max {
+                        val = val.min(max);
+                    }
+                    body.insert(key.to_string(), json!(val));
+                    return;
+                }
+                body.insert(key.to_string(), json!(v));
+            }
+        };
+        insert("temperature", req.params.temperature);
+        insert("top_p", req.params.top_p);
+        if let Some(mt) = req.params.max_tokens {
+            let mut v = mt as i64;
+            if let Some(max) = ctx.model.max_output_tokens {
+                v = v.min(max);
+            }
+            body.insert("max_tokens".to_string(), json!(v));
+        }
+        if !req.params.stop.is_empty() {
+            body.insert("stop".to_string(), json!(req.params.stop));
+        }
+        if let Some(seed) = req.params.seed {
+            body.insert("seed".to_string(), json!(seed));
+        }
+        if let Some(p) = req.params.presence_penalty {
+            body.insert("presence_penalty".to_string(), json!(p));
+        }
+        if let Some(p) = req.params.frequency_penalty {
+            body.insert("frequency_penalty".to_string(), json!(p));
+        }
+        if let Some(tools) = Self::build_tools(req) {
+            body.insert("tools".to_string(), tools);
+        }
+        if let Some(tc) = Self::build_tool_choice(req) {
+            body.insert("tool_choice".to_string(), tc);
+        }
+
+        // Merge admin extra fields (FR-10.8).
+        let extra = ctx.model.extra_request_value();
+        if let Some(obj) = extra.as_object() {
+            for (k, v) in obj {
+                body.entry(k.clone()).or_insert_with(|| v.clone());
+            }
+        }
+
+        Value::Object(body)
+    }
+
+    fn classify_error(
+        &self,
+        status: u16,
+        body: &str,
+        headers: &reqwest::header::HeaderMap,
+    ) -> UpstreamFailure {
+        let parsed: Value = serde_json::from_str(body).unwrap_or(Value::Null);
+        let message = parsed
+            .pointer("/error/message")
+            .and_then(|v| v.as_str())
+            .or_else(|| parsed.get("message").and_then(|v| v.as_str()))
+            .unwrap_or("")
+            .to_string();
+        let code = parsed
+            .pointer("/error/code")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        let retry_after_secs = headers
+            .get("retry-after")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.trim().parse::<u64>().ok());
+
+        let kind = match status {
+            400 | 404 | 422 => FailureKind::BadRequest,
+            401 | 403 => FailureKind::AuthError,
+            429 => {
+                if code.contains("insufficient_quota") || message.to_lowercase().contains("quota") {
+                    FailureKind::QuotaExhausted
+                } else {
+                    FailureKind::RateLimit
+                }
+            }
+            s if s >= 500 => FailureKind::ServerError,
+            _ => FailureKind::ServerError,
+        };
+
+        UpstreamFailure {
+            kind,
+            status: Some(status),
+            retry_after_secs,
+            message: if message.is_empty() {
+                format!("upstream returned HTTP {status}")
+            } else {
+                crate::crypto::redact(&message)
+            },
+            quota_reset_at: None,
+        }
+    }
+
+    fn parse_stream_chunk(&self, data: &str) -> Result<Vec<StreamEvent>, UpstreamFailure> {
+        if data.trim() == "[DONE]" {
+            return Ok(Vec::new());
+        }
+        let v: Value = serde_json::from_str(data).map_err(|e| UpstreamFailure {
+            kind: FailureKind::ServerError,
+            status: None,
+            retry_after_secs: None,
+            message: format!("invalid upstream chunk: {e}"),
+            quota_reset_at: None,
+        })?;
+        Ok(openai_events(&v))
+    }
+
+    fn parse_full_response(&self, body: &Value) -> Result<Vec<StreamEvent>, UpstreamFailure> {
+        Ok(openai_events(body))
+    }
+
+    fn default_models_path(&self) -> &'static str {
+        "/models"
+    }
+
+    fn parse_model_list(&self, body: &Value) -> Vec<DiscoveredModel> {
+        let mut out = Vec::new();
+        if let Some(data) = body.get("data").and_then(|d| d.as_array()) {
+            for m in data {
+                if let Some(id) = m.get("id").and_then(|i| i.as_str()) {
+                    out.push(DiscoveredModel {
+                        id: id.to_string(),
+                        display_name: None,
+                        context_window: m.get("context_window").and_then(|v| v.as_i64()),
+                        max_output_tokens: m.get("max_output_tokens").and_then(|v| v.as_i64()),
+                    });
+                }
+            }
+        }
+        out
+    }
+}
+
+fn openai_events(v: &Value) -> Vec<StreamEvent> {
+    let mut events = Vec::new();
+    if let Some(choices) = v.get("choices").and_then(|c| c.as_array()) {
+        for choice in choices {
+            // Streaming delta or non-streaming message.
+            let delta = choice.get("delta").or_else(|| choice.get("message"));
+            if let Some(delta) = delta {
+                if let Some(content) = delta.get("content") {
+                    if let Some(text) = content.as_str() {
+                        if !text.is_empty() {
+                            events.push(StreamEvent::TextDelta(text.to_string()));
+                        }
+                    }
+                }
+                if let Some(reasoning) = delta
+                    .get("reasoning_content")
+                    .or_else(|| delta.get("reasoning"))
+                    .and_then(|r| r.as_str())
+                {
+                    if !reasoning.is_empty() {
+                        events.push(StreamEvent::ThinkingDelta {
+                            text: reasoning.to_string(),
+                            signature: None,
+                        });
+                    }
+                }
+                if let Some(tool_calls) = delta.get("tool_calls").and_then(|t| t.as_array()) {
+                    for tc in tool_calls {
+                        let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
+                        let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
+                        let func = tc.get("function");
+                        if let Some(name) = func
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                        {
+                            if !name.is_empty() {
+                                events.push(StreamEvent::ToolCallStart {
+                                    index,
+                                    id: id.clone(),
+                                    name: name.to_string(),
+                                    signature: None,
+                                });
+                            }
+                        }
+                        if let Some(args) = func
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|a| a.as_str())
+                        {
+                            if !args.is_empty() {
+                                events.push(StreamEvent::ToolCallArgsDelta {
+                                    index,
+                                    args: args.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            if let Some(reason) = choice.get("finish_reason").and_then(|r| r.as_str()) {
+                events.push(StreamEvent::Finish(match reason {
+                    "stop" => FinishReason::Stop,
+                    "length" => FinishReason::Length,
+                    "tool_calls" | "function_call" => FinishReason::ToolCalls,
+                    "content_filter" => FinishReason::ContentFilter,
+                    other => FinishReason::Other(other.to_string()),
+                }));
+            }
+        }
+    }
+    if let Some(usage) = v.get("usage") {
+        if !usage.is_null() {
+            events.push(StreamEvent::Usage(TokenUsage {
+                input: usage.get("prompt_tokens").and_then(|v| v.as_u64()),
+                output: usage.get("completion_tokens").and_then(|v| v.as_u64()),
+                cached: usage
+                    .pointer("/prompt_tokens_details/cached_tokens")
+                    .and_then(|v| v.as_u64()),
+                thinking: usage
+                    .pointer("/completion_tokens_details/reasoning_tokens")
+                    .and_then(|v| v.as_u64()),
+            }));
+        }
+    }
+    events
+}

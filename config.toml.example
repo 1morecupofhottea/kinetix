@@ -1,0 +1,65 @@
+# Kinetix bootstrap seed (first run only).
+#
+# Kinetix is DB-authoritative: this file is read once, when the database has no
+# providers yet, and is ignored on every subsequent start. After first run,
+# manage everything from the dashboard (/admin) or the admin API.
+#
+# Copy to `config.toml` and edit. Point the server at it with
+# KINETIX_BOOTSTRAP_FILE (see .env.example).
+
+# --- Virtual keys (client credentials) -------------------------------------
+# The key value is generated server-side and printed once at first startup.
+[[virtual_keys]]
+name = "Local Dev Key"
+owner = "Admin"
+tag = "dev"
+allowed_models = ["*"]        # "*", exact names, or prefixes like "gemini-*"
+rpm_limit = 600               # requests per minute (omit for unlimited)
+tpm_limit = 1000000           # tokens per minute
+daily_budget = 50.0           # USD
+monthly_budget = 200.0        # USD
+
+# --- Upstream providers ----------------------------------------------------
+[[providers]]
+name = "Google Gemini"
+base_url = "https://generativelanguage.googleapis.com/v1beta"
+wire_format = "gemini"        # gemini | openai | anthropic
+auth_scheme = "custom_header" # bearer | custom_header | query_param
+custom_header_name = "x-goog-api-key"
+timeout_ms = 120000
+capability_mode = "permissive" # permissive | strict
+models_path = "/models"        # for model discovery (optional)
+
+  # One or more upstream credentials ("accounts") for this provider.
+  [[providers.accounts]]
+  label = "Gemini Key 1"
+  api_key = "REPLACE_WITH_REAL_KEY"
+  priority = 1
+  quota_type = "none"         # none | daily | monthly | rolling
+
+  # Models this provider exposes. Add more as needed.
+  [[providers.models]]
+  upstream_id = "gemini-3.6-flash"   # the id sent upstream
+  display_name = "Gemini 3.6 Flash"  # shown in the dashboard / model list
+  enabled = true
+  context_window = 1048576
+  max_output_tokens = 65536
+  capabilities = ["text", "vision", "reasoning", "tool_calling"]
+  # prices = { input_per_1m = 0.10, output_per_1m = 0.40 }  # optional
+
+# --- Aliases (stable client-facing model names) ----------------------------
+[[aliases]]
+alias = "coder"
+target_type = "model"                  # model | combo
+target = "Google Gemini/gemini-3.6-flash"
+
+# --- Combos (named fallback groups across accounts/models) -----------------
+# [[combos]]
+# name = "smart"
+# description = "Primary then fallback"
+# strategy = "priority"                # priority | round-robin | weighted | least-used
+# continuity_policy = "strip"          # strip | convert | error
+# max_attempts = 3
+# [[combos.targets]]
+# model = "Google Gemini/gemini-3.6-flash"
+# priority = 1

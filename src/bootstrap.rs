@@ -1,0 +1,183 @@
+//! Bootstrap seeding: on first run (empty database) seed providers, models,
+//! credentials, virtual keys, aliases, and combos from a TOML file. The
+//! database is authoritative afterwards (FR-8.5).
+
+use anyhow::Result;
+use serde_json::json;
+
+use crate::config::BootstrapConfig;
+use crate::crypto::{self, Crypto};
+use crate::db::{self, Pool};
+use crate::types::{AuthScheme, Capabilities, Prices, WireFormat};
+
+/// Seed the database if it has no providers yet. Returns the number of
+/// virtual keys created, and any generated key values to log once.
+pub async fn seed_if_empty(
+    pool: &Pool,
+    crypto: &Crypto,
+    cfg: &BootstrapConfig,
+) -> Result<Vec<(String, String)>> {
+    let existing = db::list_providers(pool).await?;
+    if !existing.is_empty() {
+        tracing::info!("database already has providers; skipping bootstrap seed");
+        return Ok(Vec::new());
+    }
+    if cfg.providers.is_empty() && cfg.virtual_keys.is_empty() {
+        tracing::warn!("bootstrap file has no providers or keys; nothing to seed");
+        return Ok(Vec::new());
+    }
+
+    let mut provider_ids: std::collections::HashMap<String, String> = Default::default();
+    let mut model_ids: std::collections::HashMap<String, String> = Default::default();
+    let mut account_ids: std::collections::HashMap<String, String> = Default::default();
+
+    for p in &cfg.providers {
+        let wire = WireFormat::parse(&p.wire_format)
+            .ok_or_else(|| anyhow::anyhow!("invalid wire_format '{}' for provider '{}'", p.wire_format, p.name))?;
+        let auth = AuthScheme::parse(&p.auth_scheme)
+            .unwrap_or(AuthScheme::Bearer);
+
+        let id = db::insert_provider(
+            pool,
+            &db::NewProvider {
+                name: &p.name,
+                base_url: &p.base_url,
+                wire_format: wire,
+                auth_scheme: auth,
+                custom_header_name: p.custom_header_name.as_deref(),
+                custom_param_name: p.custom_param_name.as_deref(),
+                extra_headers: serde_json::to_value(&p.extra_headers).unwrap_or(json!({})),
+                timeout_ms: p.timeout_ms as i64,
+                capability_mode: &p.capability_mode,
+                models_path: p.models_path.as_deref(),
+                rate_limit_rules: json!({}),
+            },
+        )
+        .await?;
+        provider_ids.insert(p.name.clone(), id.clone());
+
+        // Accounts.
+        for a in &p.accounts {
+            let enc = crypto.encrypt(&a.api_key)?;
+            let acc_id = db::insert_account(
+                pool,
+                &id,
+                &a.label,
+                &enc,
+                &crypto::mask_secret(&a.api_key),
+                a.priority,
+                1,
+                a.soft_quota_usd,
+                &a.quota_type,
+            )
+            .await?;
+            account_ids.insert(a.label.clone(), acc_id);
+        }
+
+        // Models.
+        for m in &p.models {
+            let caps = Capabilities::from_tokens(&m.capabilities.clone().unwrap_or_default());
+            let prices = Prices {
+                input_per_1m: m.prices.as_ref().and_then(|x| x.input_per_1m),
+                output_per_1m: m.prices.as_ref().and_then(|x| x.output_per_1m),
+                cached_per_1m: m.prices.as_ref().and_then(|x| x.cached_per_1m),
+                thinking_per_1m: m.prices.as_ref().and_then(|x| x.thinking_per_1m),
+            };
+            let model_id = db::insert_model(
+                pool,
+                &db::NewModel {
+                    provider_id: &id,
+                    upstream_id: &m.upstream_id,
+                    display_name: m.display_name.as_deref().unwrap_or(&m.upstream_id),
+                    enabled: m.enabled,
+                    context_window: m.context_window,
+                    max_output_tokens: m.max_output_tokens,
+                    capabilities: serde_json::to_value(&caps).unwrap(),
+                    prices: serde_json::to_value(&prices).unwrap(),
+                    parameters: json!({}),
+                    thinking_map: json!({}),
+                    extra_request: json!({}),
+                    discovery: json!({}),
+                },
+            )
+            .await?;
+            if prices.is_configured() {
+                let _ = db::insert_price_version(pool, &model_id, &prices).await;
+            }
+            model_ids.insert(format!("{}/{}", p.name, m.upstream_id), model_id);
+        }
+    }
+
+    // Combos.
+    let mut combo_ids: std::collections::HashMap<String, String> = Default::default();
+    for c in &cfg.combos {
+        let combo_id = db::insert_combo(
+            pool,
+            &db::NewCombo {
+                name: &c.name,
+                description: &c.description,
+                strategy: if c.strategy.is_empty() { "priority" } else { &c.strategy },
+                fallback_triggers: json!({"on429": true, "onQuota": true, "on5xx": true, "onTimeout": true}),
+                continuity_policy: if c.continuity_policy.is_empty() { "strip" } else { &c.continuity_policy },
+                sticky_routing: false,
+                max_attempts: None,
+            },
+        )
+        .await?;
+        for t in &c.targets {
+            let account_id = account_ids.get(&t.account).cloned();
+            let model_id = model_ids.get(&t.model).cloned();
+            if let Some(model_id) = model_id {
+                db::insert_combo_target(pool, &combo_id, account_id.as_deref(), &model_id, t.priority, t.weight.unwrap_or(1)).await?;
+            } else {
+                tracing::warn!("combo '{}' target references unknown model '{}'", c.name, t.model);
+            }
+        }
+        combo_ids.insert(c.name.clone(), combo_id);
+    }
+
+    // Aliases.
+    for a in &cfg.aliases {
+        let target_id = match a.target_type.as_str() {
+            "combo" => combo_ids.get(&a.target).cloned(),
+            _ => model_ids.get(&a.target).cloned(),
+        };
+        if let Some(target_id) = target_id {
+            db::upsert_alias(pool, &a.alias, &a.target_type, &target_id, "Seeded from bootstrap config").await?;
+        } else {
+            tracing::warn!("alias '{}' references unknown target '{}'", a.alias, a.target);
+        }
+    }
+
+    // Virtual keys.
+    let mut generated = Vec::new();
+    for k in &cfg.virtual_keys {
+        let full = k.key.clone().unwrap_or_else(crypto::generate_virtual_key);
+        let hash = crypto::hash_virtual_key(&full);
+        let row = db::VirtualKeyRow {
+            id: format!("key_{}", uuid::Uuid::new_v4().simple()),
+            key_hash: hash,
+            name: k.name.clone(),
+            owner: k.owner.clone(),
+            tag: k.tag.clone(),
+            allowed_models: serde_json::to_string(&k.allowed_models).unwrap(),
+            allowed_providers: "[]".into(),
+            rpm_limit: k.rpm_limit.map(|v| v as i64),
+            tpm_limit: k.tpm_limit.map(|v| v as i64),
+            daily_budget: k.daily_budget,
+            monthly_budget: k.monthly_budget,
+            expires_at: None,
+            status: "active".into(),
+            allowed_ips: "[]".into(),
+            body_logging: 0,
+            created_at: db::now_iso(),
+            revoked_at: None,
+        };
+        db::insert_virtual_key(pool, &row).await?;
+        if k.key.is_none() {
+            generated.push((k.name.clone(), full));
+        }
+    }
+
+    Ok(generated)
+}

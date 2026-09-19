@@ -1,0 +1,17 @@
+# Dependencies
+/dashboard/node_modules
+/dashboard/dist
+node_modules
+
+# Rust
+/target
+
+# Local runtime state
+*.db
+*.db-shm
+*.db-wal
+.env
+config.toml
+
+# Editor / OS
+.DS_Store
