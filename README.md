@@ -105,6 +105,10 @@ Tech: Rust + Tokio, Axum 0.8, reqwest (rustls, HTTP/2), SQLite in WAL mode via s
 - `scripts/bench.sh [concurrency-list] [requests-per-level]` runs the synthetic
   benchmark matrix (passthrough / translation / tools / large) against a
   deterministic local upstream, measuring added latency and TTFT versus NFR-1.
+- `scripts/bench-rust.sh [concurrency-list] [requests-per-level]` is a
+  std-only-Rust capacity rig that reaches the NFR-1.4 reference load (200
+  concurrent streams) without the Python GIL saturating first. Measured results
+  and methodology are in [`docs/benchmarks.md`](docs/benchmarks.md).
 - `scripts/cancel_bench.py` measures client-disconnect cancellation latency
   (NFR-1.10).
 - `scripts/smoke.sh` is an end-to-end smoke test (synthetic upstream + a fresh
@@ -222,8 +226,10 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   (measured ~0ms signal latency in the cancellation benchmark).
 - A synthetic-upstream benchmark harness (`scripts/bench.sh`,
   `scripts/synthetic_upstream.py`, `scripts/bench_client.py`,
-  `scripts/cancel_bench.py`) covering passthrough, translation, tools, large
-  bodies, and client-disconnect cancellation against NFR-1.
+  `scripts/cancel_bench.py`, plus the Rust `scripts/bench-rust.sh` capacity rig)
+  covering passthrough, translation, tools, large bodies, client-disconnect
+  cancellation, and the 200-concurrent-stream capacity gate against NFR-1; see
+  [`docs/benchmarks.md`](docs/benchmarks.md).
 - TLS is mandatory except in an explicit, visibly-marked dev mode
   (`KINETIX_ALLOW_INSECURE_TLS`, NFR-3.12); plain-HTTP upstreams are refused on
   the request path, not just at config time.
