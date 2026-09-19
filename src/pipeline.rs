@@ -501,7 +501,16 @@ pub async fn run(
             let _ = db::touch_probe_at(&state.pool, &target.account.id).await;
         }
 
-        match send_upstream(state, &adapter, &ctx, &req, use_passthrough).await {
+        match send_upstream(
+            state,
+            &adapter,
+            &ctx,
+            &req,
+            use_passthrough,
+            &meta.request_id,
+        )
+        .await
+        {
             Ok(resp) => {
                 if resp.status().is_success() {
                     meta.fallback_hops = (attempts_done - 1) as i64;
@@ -650,6 +659,7 @@ async fn send_upstream(
     ctx: &UpstreamContext<'_>,
     req: &InternalRequest,
     use_passthrough: bool,
+    request_id: &str,
 ) -> Result<reqwest::Response, UpstreamFailure> {
     let url = adapter.build_url(ctx).map_err(|e| UpstreamFailure {
         kind: FailureKind::BadRequest,
@@ -692,14 +702,23 @@ async fn send_upstream(
             }
             // Connect-time DNS re-check against the SSRF policy (NFR-3.9).
             if !state.config.allow_private_upstreams && !host.parse::<std::net::IpAddr>().is_ok() {
-                if let Err(e) = check_dns(host).await {
-                    return Err(UpstreamFailure {
-                        kind: FailureKind::ConnectionError,
-                        status: None,
-                        retry_after_secs: None,
-                        message: e,
-                        quota_reset_at: None,
-                    });
+                match resolve_and_check(host).await {
+                    // Record the resolved destinations in redacted diagnostics
+                    // (NFR-3.13). These are provider hosts, never secrets.
+                    Ok(ips) => tracing::debug!(
+                        target = %host,
+                        resolved_ips = ?ips,
+                        "outbound DNS resolved"
+                    ),
+                    Err(e) => {
+                        return Err(UpstreamFailure {
+                            kind: FailureKind::ConnectionError,
+                            status: None,
+                            retry_after_secs: None,
+                            message: e,
+                            quota_reset_at: None,
+                        });
+                    }
                 }
             }
         }
@@ -727,6 +746,8 @@ async fn send_upstream(
         .post(&url)
         .header("content-type", "application/json")
         .header("accept", "text/event-stream")
+        // Propagate the request id upstream (NFR-4.1).
+        .header("x-request-id", request_id)
         .timeout(Duration::from_millis(ctx.provider.timeout_ms as u64))
         .json(&body);
 
@@ -755,10 +776,14 @@ async fn send_upstream(
 }
 
 /// Resolve a host and reject blocked ranges (connect-time rebinding guard).
-async fn check_dns(host: &str) -> Result<(), String> {
+/// Resolve a host and reject blocked destinations (NFR-3.9), returning the
+/// resolved IPs so the caller can record them in redacted diagnostics
+/// (NFR-3.13).
+async fn resolve_and_check(host: &str) -> Result<Vec<String>, String> {
     let addrs = tokio::net::lookup_host((host, 443))
         .await
         .map_err(|e| format!("DNS resolution for '{host}' failed: {e}"))?;
+    let mut ips = Vec::new();
     for addr in addrs {
         if crate::admin::is_blocked_ip(addr.ip()) {
             return Err(format!(
@@ -766,8 +791,9 @@ async fn check_dns(host: &str) -> Result<(), String> {
                 addr.ip()
             ));
         }
+        ips.push(addr.ip().to_string());
     }
-    Ok(())
+    Ok(ips)
 }
 
 fn classify_reqwest(e: &reqwest::Error) -> String {
