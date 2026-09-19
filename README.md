@@ -125,6 +125,11 @@ Client-specific behaviour, the Pi acceptance configuration, known fidelity
 notes, and the documented deviations from r4 live in
 [`docs/compatibility.md`](docs/compatibility.md) (FR-9.3).
 
+Pi (the primary target client) was exercised end to end with the real `pi`
+binary — plain streaming, a tool-calling turn, and a multi-turn session — and
+the observed wire behavior is recorded in
+[`docs/pi-compatibility.md`](docs/pi-compatibility.md) (FR-9.2/9.3, NFR-7.2).
+
 ## Deployment
 
 See `deploy/README.md` for the full runbook (systemd unit with auto-restart and

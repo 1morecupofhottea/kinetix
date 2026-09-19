@@ -26,7 +26,15 @@ fn new_request_id() -> String {
 /// conversation identity when evidence is insufficient. An absent header means
 /// "no session", and sticky routing is simply not applied.
 fn extract_session(headers: &HeaderMap) -> Option<String> {
-    for name in ["x-kinetix-session", "x-session-id", "x-conversation-id"] {
+    // `x-session-affinity` is included because Pi's OpenAI-compatible client
+    // can send it alongside `x-session-id` (observed Pi wire behavior, FR-9.3);
+    // it is a stable per-conversation identifier, not a guessed one.
+    for name in [
+        "x-kinetix-session",
+        "x-session-id",
+        "x-conversation-id",
+        "x-session-affinity",
+    ] {
         if let Some(v) = headers.get(name).and_then(|v| v.to_str().ok()) {
             let v = v.trim();
             if !v.is_empty() && v.len() <= 200 {
