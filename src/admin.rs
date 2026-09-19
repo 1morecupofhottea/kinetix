@@ -957,7 +957,7 @@ pub async fn test_provider(
         tool_choice: None,
         tool_choice_name: None,
         params: crate::types::SamplingParams {
-            max_tokens: Some(16),
+            max_tokens: Some(64),
             ..Default::default()
         },
         stream: false,
@@ -986,25 +986,102 @@ pub async fn test_provider(
     match req.send().await {
         Ok(resp) => {
             let status = resp.status().as_u16();
-            let text = resp.text().await.unwrap_or_default();
             let latency = started.elapsed().as_millis() as i64;
-            if (200..300).contains(&status) {
-                Ok(Json(json!({
-                    "ok": true, "status": status, "latency_ms": latency,
-                    "response_preview": truncate(&text, 400),
-                })))
-            } else {
+            if !(200..300).contains(&status) {
+                let text = resp.text().await.unwrap_or_default();
                 let failure = adapter.classify_error(status, &text, &axum::http::HeaderMap::new());
-                Ok(Json(json!({
+                return Ok(Json(json!({
                     "ok": false, "status": status, "latency_ms": latency,
                     "error": failure.message,
-                })))
+                })));
             }
+            // Read a bounded amount of the (possibly streaming) response so a
+            // probe never hangs on a long-lived SSE connection (FR-10.11).
+            let content_type = resp
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            let preview = read_probe_preview(resp, content_type.contains("event-stream")).await;
+            Ok(Json(json!({
+                "ok": true, "status": status, "latency_ms": latency,
+                "response_preview": truncate(&preview, 400),
+            })))
         }
         Err(e) => Ok(Json(json!({
             "ok": false, "status": 0,
             "error": crate::crypto::redact(&e.to_string()),
         }))),
+    }
+}
+
+/// Read a bounded probe response. For SSE, parse the frames and return the
+/// concatenated text deltas; otherwise return the (bounded) body text.
+async fn read_probe_preview(resp: reqwest::Response, sse: bool) -> String {
+    use futures::StreamExt;
+    let mut stream = resp.bytes_stream();
+    let mut buf: Vec<u8> = Vec::new();
+    let mut framer = crate::sse::SseFramer::new();
+    let mut text = String::new();
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let next = tokio::time::timeout_at(deadline, stream.next()).await;
+        let chunk = match next {
+            Ok(Some(Ok(c))) => c,
+            Ok(Some(Err(_))) | Ok(None) => break,
+            Err(_) => break, // bounded read; a probe must not hang
+        };
+        if !sse {
+            buf.extend_from_slice(&chunk);
+            if buf.len() > 8192 {
+                break;
+            }
+            continue;
+        }
+        for frame in framer.push(&chunk) {
+            if let Some(data) = crate::sse::extract_data(&frame) {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&data) {
+                    // OpenAI shape (text, then reasoning as a fallback label)
+                    if let Some(c) = v
+                        .pointer("/choices/0/delta/content")
+                        .and_then(|c| c.as_str())
+                    {
+                        text.push_str(c);
+                    } else if let Some(r) = v
+                        .pointer("/choices/0/delta/reasoning_content")
+                        .and_then(|c| c.as_str())
+                    {
+                        if !r.is_empty() && !text.starts_with("[reasoning] ") {
+                            text = format!("[reasoning] {text}");
+                        }
+                    }
+                    // Gemini shape
+                    if let Some(parts) = v
+                        .pointer("/candidates/0/content/parts")
+                        .and_then(|p| p.as_array())
+                    {
+                        for p in parts {
+                            if let Some(t) = p.get("text").and_then(|t| t.as_str()) {
+                                text.push_str(t);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if !text.trim_start_matches("[reasoning] ").is_empty() || buf.len() > 8192 {
+            break;
+        }
+    }
+    if sse {
+        if text.is_empty() {
+            "[streaming response: no text delta within the probe window]".to_string()
+        } else {
+            text
+        }
+    } else {
+        String::from_utf8_lossy(&buf).to_string()
     }
 }
 
