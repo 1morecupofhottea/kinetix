@@ -113,6 +113,30 @@ check "diagnostics" "$(curl -s -b "$JAR" "$BASE/admin/api/requests/$RID/diagnost
 # unit tests and by running without the dev flags.
 check "invalid URL rejected" "$(curl -s -b "$JAR" -X POST "$BASE/admin/api/providers" -H 'content-type: application/json' -d '{"name":"evil","base_url":"not-a-url","wire_format":"openai"}')" 'invalid URL'
 
+# Validate / Dry Run (FR-8.6/8.7) and the opaque route-id resolver (FR-12.15).
+check "validate/provider reports missing custom header" \
+  "$(curl -s -b "$JAR" -X POST "$BASE/admin/api/validate/provider" -H 'content-type: application/json' -d '{"name":"x","base_url":"https://api.example.com/v1","wire_format":"openai","auth_scheme":"custom_header"}')" \
+  'requires custom_header_name'
+check "validate/model warns unknown prices" \
+  "$(curl -s -b "$JAR" -X POST "$BASE/admin/api/validate/model" -H 'content-type: application/json' -d '{"upstream_id":"m","context_window":1000,"max_output_tokens":500}')" \
+  'price_state":"unknown"'
+check "route dry-run" \
+  "$(curl -s -b "$JAR" -X POST "$BASE/admin/api/routes/dry-run" -H 'content-type: application/json' -d '{"model":"syn-openai"}')" \
+  '"candidates"'
+
+# Resolve the opaque X-Kinetix-Route-Id the client received back to its trace.
+OPAQUE="$(curl -s -D - -o /dev/null "$BASE/v1/chat/completions" \
+  -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+  -d '{"model":"syn-openai","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}' \
+  | tr -d '\r' | awk 'tolower($1)=="x-kinetix-route-id:"{print $2}')"
+check "opaque route id resolves to a trace" \
+  "$(curl -s -b "$JAR" "$BASE/admin/api/route-traces/$OPAQUE")" '"opaque_route_id"'
+check "opaque route id is hidden from the response" \
+  "$(curl -s -D - -o /dev/null "$BASE/v1/chat/completions" \
+     -H "authorization: Bearer $KEY" -H 'content-type: application/json' \
+     -d '{"model":"syn-openai","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}')" \
+  'x-kinetix-route-id'
+
 echo
 if [ "$FAILURES" -eq 0 ]; then
   echo "==> smoke: all checks passed"
