@@ -1,0 +1,1055 @@
+//! Command-line interface (standalone CLI tool).
+//!
+//! Kinetix ships as a single binary that is both the server and its own
+//! administration tool. `kinetix serve` runs the proxy; every other subcommand
+//! reads or writes the SQLite control plane directly (using the master key from
+//! the config directory), so an operator never needs a `.env` file, an admin
+//! password, or the dashboard to configure the system.
+
+use anyhow::{bail, Context, Result};
+use clap::{Args, Parser, Subcommand};
+use std::sync::Arc;
+use std::time::Duration;
+
+use crate::config::{CliOverrides, Config};
+use crate::crypto::Crypto;
+use crate::db::{self, Pool};
+
+#[derive(Parser, Debug, Clone)]
+#[command(
+    name = "kinetix",
+    version,
+    about = "Kinetix — multi-protocol LLM proxy (OpenAI/Anthropic in, configurable upstreams out)",
+    long_about = None,
+)]
+pub struct Cli {
+    /// Root directory holding config/, data/, and state/ (overrides XDG).
+    #[arg(long, global = true, env = "KINETIX_HOME")]
+    pub home: Option<std::path::PathBuf>,
+
+    /// Explicit config file path.
+    #[arg(long, global = true)]
+    pub config: Option<std::path::PathBuf>,
+
+    /// Override the bind address (e.g. 127.0.0.1:8080).
+    #[arg(long, global = true)]
+    pub bind: Option<String>,
+
+    /// Override the database URL (sqlite://...).
+    #[arg(long, global = true)]
+    pub database_url: Option<String>,
+
+    #[command(subcommand)]
+    pub command: Command,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum Command {
+    /// Run the proxy server.
+    Serve(ServeArgs),
+    /// First-run setup: create directories and print generated secrets.
+    Init,
+    /// Print configuration, paths, and control-plane counts.
+    Status,
+    /// Run diagnostics against the local installation.
+    Doctor,
+    /// Show or change the dashboard admin password.
+    Password(PasswordArgs),
+    /// Manage virtual keys.
+    Key(KeyArgs),
+    /// Manage upstream providers.
+    Provider(ProviderArgs),
+    /// Manage models.
+    Model(ModelArgs),
+    /// Manage provider accounts (credential pools).
+    Account(AccountArgs),
+    /// Manage routes.
+    Route(RouteArgs),
+    /// Manage model aliases.
+    Alias(AliasArgs),
+    /// Export usage/logs to disk (JSONL + CSV).
+    Export(ExportArgs),
+    /// Run or list database backups.
+    Backup(BackupArgs),
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ServeArgs {
+    #[arg(long)]
+    pub log_json: bool,
+    #[arg(long)]
+    pub allow_private_upstreams: bool,
+    #[arg(long)]
+    pub allow_insecure_tls: bool,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct PasswordArgs {
+    #[command(subcommand)]
+    pub action: PasswordAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum PasswordAction {
+    /// Set the admin password (min 8 chars).
+    Set { password: String },
+    /// Show whether a password is configured.
+    Show,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct KeyArgs {
+    #[command(subcommand)]
+    pub action: KeyAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum KeyAction {
+    /// List virtual keys (never shows the secret).
+    List,
+    /// Create a key and print it once.
+    Create {
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "admin")]
+        owner: String,
+        #[arg(long, default_value = "")]
+        tag: String,
+        /// Allowed models/aliases/routes (comma-separated, default '*').
+        #[arg(long, default_value = "*")]
+        allowed_models: String,
+        #[arg(long)]
+        rpm: Option<i64>,
+        #[arg(long)]
+        tpm: Option<i64>,
+        #[arg(long)]
+        daily_budget: Option<f64>,
+        #[arg(long)]
+        monthly_budget: Option<f64>,
+    },
+    /// Revoke a key: hard-delete it and its usage logs.
+    Revoke { id: String },
+    /// Disable (keep) a key.
+    Disable { id: String },
+    /// Re-enable a key.
+    Enable { id: String },
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ProviderArgs {
+    #[command(subcommand)]
+    pub action: ProviderAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ProviderAction {
+    List,
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        base_url: String,
+        /// openai | anthropic | gemini
+        #[arg(long, default_value = "openai")]
+        wire_format: String,
+        /// bearer | custom_header | query_param
+        #[arg(long, default_value = "bearer")]
+        auth_scheme: String,
+        #[arg(long)]
+        custom_header_name: Option<String>,
+        #[arg(long)]
+        custom_param_name: Option<String>,
+        #[arg(long)]
+        models_path: Option<String>,
+        #[arg(long, default_value_t = 120000)]
+        timeout_ms: i64,
+        /// Create the first account with this credential.
+        #[arg(long)]
+        api_key: Option<String>,
+        #[arg(long)]
+        account_label: Option<String>,
+    },
+    Remove {
+        id: String,
+    },
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ModelArgs {
+    #[command(subcommand)]
+    pub action: ModelAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ModelAction {
+    List,
+    Add {
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        upstream_id: String,
+        #[arg(long)]
+        display_name: Option<String>,
+        #[arg(long)]
+        context_window: Option<i64>,
+        #[arg(long)]
+        max_output_tokens: Option<i64>,
+        /// Comma-separated capabilities (text,vision,reasoning,tool_calling,audio).
+        #[arg(long)]
+        capabilities: Option<String>,
+        #[arg(long)]
+        input_price: Option<f64>,
+        #[arg(long)]
+        output_price: Option<f64>,
+    },
+    Remove {
+        id: String,
+    },
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct AccountArgs {
+    #[command(subcommand)]
+    pub action: AccountAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum AccountAction {
+    List,
+    Add {
+        #[arg(long)]
+        provider: String,
+        #[arg(long)]
+        label: String,
+        #[arg(long)]
+        api_key: String,
+        #[arg(long, default_value_t = 1)]
+        priority: i64,
+        #[arg(long, default_value_t = 1)]
+        weight: i64,
+        #[arg(long)]
+        soft_quota_usd: Option<f64>,
+        /// none | daily | monthly | rolling
+        #[arg(long, default_value = "none")]
+        quota_type: String,
+    },
+    Remove {
+        id: String,
+    },
+    /// Clear cooldown/exhaustion/circuit state.
+    Reset {
+        id: String,
+    },
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct RouteArgs {
+    #[command(subcommand)]
+    pub action: RouteAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum RouteAction {
+    List,
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long, default_value = "")]
+        description: String,
+        /// priority | round-robin | weighted | least-used
+        #[arg(long, default_value = "priority")]
+        strategy: String,
+        /// reject | strip_with_warning
+        #[arg(long, default_value = "strip_with_warning")]
+        portability_policy: String,
+        #[arg(long, default_value_t = false)]
+        cache_affinity: bool,
+        #[arg(long, default_value_t = 5)]
+        max_attempts: i64,
+        /// Targets as `provider/upstream_id` (repeatable, ordered).
+        #[arg(long = "target", required = true)]
+        targets: Vec<String>,
+    },
+    Remove {
+        id: String,
+    },
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct AliasArgs {
+    #[command(subcommand)]
+    pub action: AliasAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum AliasAction {
+    List,
+    Add {
+        #[arg(long)]
+        alias: String,
+        /// model | route
+        #[arg(long, default_value = "model")]
+        target_type: String,
+        /// A model label (`provider/upstream_id`) or a route name.
+        #[arg(long)]
+        target: String,
+        #[arg(long, default_value = "")]
+        description: String,
+    },
+    Remove {
+        alias: String,
+    },
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct ExportArgs {
+    #[command(subcommand)]
+    pub action: ExportAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum ExportAction {
+    /// List exported files on disk.
+    List,
+    /// Export one day (YYYY-MM-DD, default yesterday) to JSONL + CSV.
+    Run {
+        #[arg(long)]
+        day: Option<String>,
+    },
+    /// Prune files older than the retention window.
+    Prune,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct BackupArgs {
+    #[command(subcommand)]
+    pub action: BackupAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum BackupAction {
+    /// Run a backup now.
+    Run,
+    /// List backup files on disk.
+    List,
+}
+
+fn overrides(cli: &Cli) -> CliOverrides {
+    CliOverrides {
+        bind: cli.bind.clone(),
+        database_url: cli.database_url.clone(),
+        home: cli.home.clone(),
+        config_file: cli.config.clone(),
+        ..Default::default()
+    }
+}
+
+fn config_from_cli(cli: &Cli) -> Result<Config> {
+    Config::build(overrides(cli))
+}
+
+/// Open the control-plane database and derive the master key, without starting
+/// the server. Used by every non-`serve` subcommand.
+async fn open(cli: &Cli) -> Result<(Config, Pool, Crypto)> {
+    let config = config_from_cli(cli)?;
+    let pool = db::connect(&config.database_url).await?;
+    db::migrate(&pool).await?;
+    let crypto = Crypto::new(&config.master_key);
+    Ok((config, pool, crypto))
+}
+
+pub async fn run(cli: Cli) -> Result<()> {
+    let home = cli.home.clone();
+    let config_file = cli.config.clone();
+    let bind = cli.bind.clone();
+    let database_url = cli.database_url.clone();
+    match cli.command.clone() {
+        Command::Serve(args) => {
+            serve(ServeOpts {
+                home,
+                config_file,
+                bind,
+                database_url,
+                log_json: args.log_json,
+                allow_private_upstreams: args.allow_private_upstreams,
+                allow_insecure_tls: args.allow_insecure_tls,
+            })
+            .await
+        }
+        Command::Init => cmd_init(&cli).await,
+        Command::Status => cmd_status(&cli).await,
+        Command::Doctor => cmd_doctor(&cli).await,
+        Command::Password(a) => cmd_password(&cli, a).await,
+        Command::Key(a) => cmd_key(&cli, a).await,
+        Command::Provider(a) => cmd_provider(&cli, a).await,
+        Command::Model(a) => cmd_model(&cli, a).await,
+        Command::Account(a) => cmd_account(&cli, a).await,
+        Command::Route(a) => cmd_route(&cli, a).await,
+        Command::Alias(a) => cmd_alias(&cli, a).await,
+        Command::Export(a) => cmd_export(&cli, a).await,
+        Command::Backup(a) => cmd_backup(&cli, a).await,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// serve
+// ---------------------------------------------------------------------------
+
+pub struct ServeOpts {
+    pub home: Option<std::path::PathBuf>,
+    pub config_file: Option<std::path::PathBuf>,
+    pub bind: Option<String>,
+    pub database_url: Option<String>,
+    pub log_json: bool,
+    pub allow_private_upstreams: bool,
+    pub allow_insecure_tls: bool,
+}
+
+/// Run the proxy server (the `serve` subcommand). This is the same startup
+/// sequence as the library's server module, driven by CLI flags.
+pub async fn serve(opts: ServeOpts) -> Result<()> {
+    let config = Arc::new(Config::build(CliOverrides {
+        bind: opts.bind,
+        database_url: opts.database_url,
+        home: opts.home,
+        config_file: opts.config_file,
+        log_json: Some(opts.log_json),
+        allow_private_upstreams: Some(opts.allow_private_upstreams),
+        allow_insecure_tls: Some(opts.allow_insecure_tls),
+        ..Default::default()
+    })?);
+
+    crate::server::run(config).await
+}
+
+// ---------------------------------------------------------------------------
+// simple commands
+// ---------------------------------------------------------------------------
+
+async fn cmd_init(cli: &Cli) -> Result<()> {
+    let config = config_from_cli(cli)?;
+    config.paths.ensure_dirs()?;
+    println!("Kinetix initialized.");
+    println!("  config dir : {}", config.paths.config_dir.display());
+    println!("  data dir   : {}", config.paths.data_dir.display());
+    println!("  state dir  : {}", config.paths.state_dir.display());
+    println!("  database   : {}", config.database_url);
+    if let Some(pw) = &config.generated_admin_password {
+        println!("\nGenerated admin password (shown once — store it now):\n  {pw}");
+    } else {
+        println!("\nAdmin password already configured (change with `kinetix password set`).");
+    }
+    println!("\nStart the server with `kinetix serve`.");
+    Ok(())
+}
+
+async fn cmd_status(cli: &Cli) -> Result<()> {
+    let config = config_from_cli(cli)?;
+    println!("Kinetix {}", env!("CARGO_PKG_VERSION"));
+    println!("  bind          : {}", config.bind);
+    println!("  public base   : {}", config.public_base_url);
+    println!("  database      : {}", config.database_url);
+    println!("  config dir    : {}", config.paths.config_dir.display());
+    println!("  data dir      : {}", config.paths.data_dir.display());
+    println!("  state dir     : {}", config.paths.state_dir.display());
+    println!("  exports dir   : {}", config.paths.exports_dir().display());
+    println!("  backups dir   : {}", config.paths.backups_dir().display());
+    println!("  ip rate limit : {}/min", config.ip_rate_limit_per_min);
+    println!("  session ttl   : {} min", config.session_ttl_minutes);
+    println!("  admin pw set  : {}", admin_password_set(&config));
+    if let Ok((_, pool, _)) = open(cli).await {
+        let keys: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM virtual_keys")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+        let providers: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM providers")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+        let routes: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM routes")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+        let usage: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM usage_logs")
+            .fetch_one(&pool)
+            .await
+            .unwrap_or(0);
+        println!(
+            "  control plane : {providers} provider(s), {keys} key(s), {routes} route(s), {usage} usage row(s)"
+        );
+    }
+    Ok(())
+}
+
+async fn cmd_doctor(cli: &Cli) -> Result<()> {
+    let config = config_from_cli(cli)?;
+    let mut problems = 0;
+    println!("Kinetix doctor");
+    for (label, dir) in [
+        ("config", &config.paths.config_dir),
+        ("data", &config.paths.data_dir),
+        ("state", &config.paths.state_dir),
+    ] {
+        if dir.exists() {
+            println!("  [ok]   {label} dir exists: {}", dir.display());
+        } else {
+            println!(
+                "  [warn] {label} dir missing: {} (run `kinetix init`)",
+                dir.display()
+            );
+            problems += 1;
+        }
+    }
+    match db::connect(&config.database_url).await {
+        Ok(pool) => {
+            if db::migrate(&pool).await.is_ok() {
+                println!("  [ok]   database reachable and migrated");
+            } else {
+                println!("  [fail] database migration failed");
+                problems += 1;
+            }
+        }
+        Err(e) => {
+            println!("  [fail] database unreachable: {e}");
+            problems += 1;
+        }
+    }
+    let url = format!("{}/healthz", config.public_base_url.trim_end_matches('/'));
+    match reqwest::Client::new()
+        .get(&url)
+        .timeout(Duration::from_secs(3))
+        .send()
+        .await
+    {
+        Ok(r) => println!("  [ok]   server responding at {url} ({})", r.status()),
+        Err(_) => println!("  [info] no server responding at {url} (not running?)"),
+    }
+    if problems == 0 {
+        println!("\nNo blocking problems found.");
+    } else {
+        println!("\n{problems} item(s) need attention.");
+    }
+    Ok(())
+}
+
+fn admin_password_set(config: &Config) -> bool {
+    config.paths.config_dir.join("admin_password.hash").exists()
+}
+
+async fn cmd_password(cli: &Cli, args: PasswordArgs) -> Result<()> {
+    match args.action {
+        PasswordAction::Show => {
+            let config = config_from_cli(cli)?;
+            println!(
+                "admin password {}",
+                if admin_password_set(&config) {
+                    "is configured"
+                } else {
+                    "is NOT configured (a fresh `kinetix serve` will generate one)"
+                }
+            );
+            Ok(())
+        }
+        PasswordAction::Set { password } => {
+            if password.trim().len() < 8 {
+                bail!("password must be at least 8 characters");
+            }
+            let config = config_from_cli(cli)?;
+            config.paths.ensure_dirs()?;
+            let hash = crate::crypto::hash_virtual_key(password.trim());
+            std::fs::write(config.paths.config_dir.join("admin_password.hash"), &hash)?;
+            // Also persist into the DB setting so a running server picks it up.
+            if let Ok(pool) = db::connect(&config.database_url).await {
+                let _ = db::migrate(&pool).await;
+                let _ = db::set_setting(&pool, crate::auth::ADMIN_PASSWORD_SETTING, &hash).await;
+            }
+            println!("Admin password updated. Existing dashboard sessions are invalidated.");
+            Ok(())
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// keys
+// ---------------------------------------------------------------------------
+
+async fn cmd_key(cli: &Cli, args: KeyArgs) -> Result<()> {
+    let (_, pool, _) = open(cli).await?;
+    match args.action {
+        KeyAction::List => {
+            for k in db::list_virtual_keys(&pool).await? {
+                println!(
+                    "{}\t{}\tstatus={}\tmodels={}",
+                    k.id, k.name, k.status, k.allowed_models
+                );
+            }
+            Ok(())
+        }
+        KeyAction::Create {
+            name,
+            owner,
+            tag,
+            allowed_models,
+            rpm,
+            tpm,
+            daily_budget,
+            monthly_budget,
+        } => {
+            let (full, hash) = crypto_generate_key();
+            let id = format!("key_{}", uuid::Uuid::new_v4().simple());
+            let allowed: Vec<String> = allowed_models
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty())
+                .collect();
+            let allowed = if allowed.is_empty() {
+                vec!["*".to_string()]
+            } else {
+                allowed
+            };
+            sqlx::query(
+                "INSERT INTO virtual_keys
+                 (id, key_hash, name, owner, tag, allowed_models, allowed_providers, rpm_limit, tpm_limit,
+                  daily_budget, monthly_budget, expires_at, status, allowed_ips, body_logging, created_at)
+                 VALUES (?,?,?,?,?,?,'[]',?,?,?,?,NULL,'active','[]',0,?)",
+            )
+            .bind(&id)
+            .bind(&hash)
+            .bind(&name)
+            .bind(&owner)
+            .bind(&tag)
+            .bind(serde_json::to_string(&allowed)?)
+            .bind(rpm)
+            .bind(tpm)
+            .bind(daily_budget)
+            .bind(monthly_budget)
+            .bind(db::now_iso())
+            .execute(&pool)
+            .await?;
+            println!("Virtual key created (shown once — store it now):\n  {full}");
+            println!("  id: {id}");
+            Ok(())
+        }
+        KeyAction::Revoke { id } => {
+            db::delete_virtual_key_cascade(&pool, &id).await?;
+            println!("revoked and removed key {id}");
+            Ok(())
+        }
+        KeyAction::Disable { id } => {
+            db::set_virtual_key_status(&pool, &id, "disabled").await?;
+            println!("disabled key {id}");
+            Ok(())
+        }
+        KeyAction::Enable { id } => {
+            db::set_virtual_key_status(&pool, &id, "active").await?;
+            println!("enabled key {id}");
+            Ok(())
+        }
+    }
+}
+
+/// Generate a virtual key (`sk-kinetix-...`) and its stored hash.
+fn crypto_generate_key() -> (String, String) {
+    let full = crate::crypto::generate_virtual_key();
+    let hash = crate::crypto::hash_virtual_key(&full);
+    (full, hash)
+}
+
+// ---------------------------------------------------------------------------
+// providers / models / accounts / routes / aliases
+// ---------------------------------------------------------------------------
+
+async fn cmd_provider(cli: &Cli, args: ProviderArgs) -> Result<()> {
+    let (_, pool, crypto) = open(cli).await?;
+    match args.action {
+        ProviderAction::List => {
+            for p in db::list_providers(&pool).await? {
+                println!(
+                    "{}\t{}\t{}\t{}\t{}",
+                    p.id, p.name, p.wire_format, p.auth_scheme, p.base_url
+                );
+            }
+            Ok(())
+        }
+        ProviderAction::Add {
+            name,
+            base_url,
+            wire_format,
+            auth_scheme,
+            custom_header_name,
+            custom_param_name,
+            models_path,
+            timeout_ms,
+            api_key,
+            account_label,
+        } => {
+            let id = format!("prov_{}", uuid::Uuid::new_v4().simple());
+            sqlx::query(
+                "INSERT INTO providers
+                 (id, name, base_url, wire_format, auth_scheme, custom_header_name, custom_param_name,
+                  extra_headers, timeout_ms, capability_mode, models_path, rate_limit_rules, enabled,
+                  follow_redirects, credential_hosts, allow_insecure_tls, created_at)
+                 VALUES (?,?,?,?,?,?,?,'{}',?,'permissive',?,'{}',1,0,'',0,?)",
+            )
+            .bind(&id)
+            .bind(&name)
+            .bind(&base_url)
+            .bind(&wire_format)
+            .bind(&auth_scheme)
+            .bind(&custom_header_name)
+            .bind(&custom_param_name)
+            .bind(timeout_ms)
+            .bind(&models_path)
+            .bind(db::now_iso())
+            .execute(&pool)
+            .await?;
+            println!("provider created: {id}");
+            if let Some(key) = api_key {
+                let label = account_label.unwrap_or_else(|| "Primary key".to_string());
+                let acc_id =
+                    insert_account_row(&pool, &crypto, &id, &label, &key, 1, 1, None, "none")
+                        .await?;
+                println!("account created: {acc_id}");
+            }
+            Ok(())
+        }
+        ProviderAction::Remove { id } => {
+            db::delete_provider(&pool, &id).await?;
+            println!("removed provider {id}");
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_model(cli: &Cli, args: ModelArgs) -> Result<()> {
+    let (_, pool, _) = open(cli).await?;
+    match args.action {
+        ModelAction::List => {
+            for m in db::list_models(&pool).await? {
+                println!(
+                    "{}\t{}\t{}\tenabled={}",
+                    m.id, m.upstream_id, m.display_name, m.enabled
+                );
+            }
+            Ok(())
+        }
+        ModelAction::Add {
+            provider,
+            upstream_id,
+            display_name,
+            context_window,
+            max_output_tokens,
+            capabilities,
+            input_price,
+            output_price,
+        } => {
+            let provider_id = resolve_provider(&pool, &provider).await?;
+            let id = format!("model_{}", uuid::Uuid::new_v4().simple());
+            let caps = match capabilities {
+                Some(c) => {
+                    let mut obj = serde_json::Map::new();
+                    for cap in c.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()) {
+                        obj.insert(cap.to_string(), serde_json::json!(true));
+                    }
+                    serde_json::Value::Object(obj).to_string()
+                }
+                None => "{}".to_string(),
+            };
+            let prices = serde_json::json!({
+                "input_per_1m": input_price,
+                "output_per_1m": output_price,
+            })
+            .to_string();
+            let display = display_name.unwrap_or_else(|| upstream_id.clone());
+            sqlx::query(
+                "INSERT INTO models
+                 (id, provider_id, upstream_id, display_name, enabled, context_window, max_output_tokens,
+                  capabilities, prices, parameters, thinking_map, extra_request, discovery, created_at)
+                 VALUES (?,?,?,?,1,?,?,?,?,'{}','{}','{}','{}',?)",
+            )
+            .bind(&id)
+            .bind(&provider_id)
+            .bind(&upstream_id)
+            .bind(&display)
+            .bind(context_window)
+            .bind(max_output_tokens)
+            .bind(&caps)
+            .bind(&prices)
+            .bind(db::now_iso())
+            .execute(&pool)
+            .await?;
+            println!("model created: {id}");
+            Ok(())
+        }
+        ModelAction::Remove { id } => {
+            db::delete_model(&pool, &id).await?;
+            println!("removed model {id}");
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_account(cli: &Cli, args: AccountArgs) -> Result<()> {
+    let (_, pool, crypto) = open(cli).await?;
+    match args.action {
+        AccountAction::List => {
+            for a in db::list_accounts(&pool).await? {
+                println!(
+                    "{}\t{}\t{}\tstatus={}",
+                    a.id, a.label, a.provider_id, a.status
+                );
+            }
+            Ok(())
+        }
+        AccountAction::Add {
+            provider,
+            label,
+            api_key,
+            priority,
+            weight,
+            soft_quota_usd,
+            quota_type,
+        } => {
+            let provider_id = resolve_provider(&pool, &provider).await?;
+            let id = insert_account_row(
+                &pool,
+                &crypto,
+                &provider_id,
+                &label,
+                &api_key,
+                priority,
+                weight,
+                soft_quota_usd,
+                &quota_type,
+            )
+            .await?;
+            println!("account created: {id}");
+            Ok(())
+        }
+        AccountAction::Remove { id } => {
+            db::delete_account(&pool, &id).await?;
+            println!("removed account {id}");
+            Ok(())
+        }
+        AccountAction::Reset { id } => {
+            db::set_account_status(&pool, &id, "healthy", None, None, None).await?;
+            println!("reset account {id}");
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_route(cli: &Cli, args: RouteArgs) -> Result<()> {
+    let (_, pool, _) = open(cli).await?;
+    match args.action {
+        RouteAction::List => {
+            for r in db::list_routes(&pool).await? {
+                let targets = db::route_targets(&pool, &r.id).await?;
+                println!(
+                    "{}\t{}\t{}\t{} target(s)",
+                    r.id,
+                    r.name,
+                    r.strategy,
+                    targets.len()
+                );
+            }
+            Ok(())
+        }
+        RouteAction::Add {
+            name,
+            description,
+            strategy,
+            portability_policy,
+            cache_affinity,
+            max_attempts,
+            targets,
+        } => {
+            let id = format!("route_{}", uuid::Uuid::new_v4().simple());
+            sqlx::query(
+                "INSERT INTO routes (id, name, description, strategy, fallback_triggers, continuity_policy, portability_policy, sticky_routing, cache_affinity, max_attempts, enabled, created_at)
+                 VALUES (?,?,?,?,'{\"on429\":true,\"onQuota\":true,\"on5xx\":true,\"onTimeout\":true}','strip',?,0,?,?,1,?)",
+            )
+            .bind(&id)
+            .bind(&name)
+            .bind(&description)
+            .bind(&strategy)
+            .bind(&portability_policy)
+            .bind(cache_affinity as i64)
+            .bind(max_attempts)
+            .bind(db::now_iso())
+            .execute(&pool)
+            .await?;
+            for (i, spec) in targets.iter().enumerate() {
+                let (prov, upstream) = spec
+                    .split_once('/')
+                    .with_context(|| format!("target '{spec}' must be provider/upstream_id"))?;
+                let provider_id = resolve_provider(&pool, prov).await?;
+                let model = db::find_model_by_upstream(&pool, &provider_id, upstream)
+                    .await?
+                    .with_context(|| format!("no model {upstream} on provider {prov}"))?;
+                db::insert_route_target(&pool, &id, None, &model.id, (i as i64) + 1, 1, "{}", "{}")
+                    .await?;
+            }
+            println!("route created: {id}");
+            Ok(())
+        }
+        RouteAction::Remove { id } => {
+            db::delete_route(&pool, &id).await?;
+            println!("removed route {id}");
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_alias(cli: &Cli, args: AliasArgs) -> Result<()> {
+    let (_, pool, _) = open(cli).await?;
+    match args.action {
+        AliasAction::List => {
+            for a in db::list_aliases(&pool).await? {
+                println!("{}\t{} -> {}", a.alias, a.target_type, a.target_id);
+            }
+            Ok(())
+        }
+        AliasAction::Add {
+            alias,
+            target_type,
+            target,
+            description,
+        } => {
+            let target_id = match target_type.as_str() {
+                "route" => db::get_route_by_name(&pool, &target)
+                    .await?
+                    .map(|r| r.id)
+                    .with_context(|| format!("no route named {target}"))?,
+                _ => {
+                    let (prov, upstream) = target.split_once('/').with_context(|| {
+                        format!("model target '{target}' must be provider/upstream_id")
+                    })?;
+                    let provider_id = resolve_provider(&pool, prov).await?;
+                    db::find_model_by_upstream(&pool, &provider_id, upstream)
+                        .await?
+                        .with_context(|| format!("no model {upstream} on provider {prov}"))?
+                        .id
+                }
+            };
+            db::upsert_alias(&pool, &alias, &target_type, &target_id, &description).await?;
+            println!("alias '{alias}' set");
+            Ok(())
+        }
+        AliasAction::Remove { alias } => {
+            if let Some(a) = db::get_alias(&pool, &alias).await? {
+                db::delete_alias(&pool, &a.id).await?;
+                println!("removed alias '{alias}'");
+            } else {
+                println!("no alias '{alias}'");
+            }
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_export(cli: &Cli, args: ExportArgs) -> Result<()> {
+    let (config, pool, _) = open(cli).await?;
+    let dir = config.paths.exports_dir();
+    match args.action {
+        ExportAction::List => {
+            for f in crate::export::list_files(&dir) {
+                println!("{}\t{}\t{} bytes", f.day, f.name, f.bytes);
+            }
+            Ok(())
+        }
+        ExportAction::Run { day } => {
+            let day = day.unwrap_or_else(|| {
+                (chrono::Utc::now().date_naive() - chrono::Duration::days(1))
+                    .format("%Y-%m-%d")
+                    .to_string()
+            });
+            let (jsonl, csv) = crate::export::export_day(&pool, &dir, &day).await?;
+            println!(
+                "exported {day}:\n  {}\n  {}",
+                jsonl.display(),
+                csv.display()
+            );
+            Ok(())
+        }
+        ExportAction::Prune => {
+            let n = crate::export::prune(&dir, config.export_retention_days as i64)?;
+            println!(
+                "pruned {n} file(s) older than {} days",
+                config.export_retention_days
+            );
+            Ok(())
+        }
+    }
+}
+
+async fn cmd_backup(cli: &Cli, args: BackupArgs) -> Result<()> {
+    let (config, pool, _) = open(cli).await?;
+    match args.action {
+        BackupAction::Run => {
+            match db::scheduled_backup(&pool, &config.database_url, &config.data_dir, 14)
+                .await
+                .map_err(anyhow::Error::msg)?
+            {
+                Some(path) => println!("backup written: {}", path.display()),
+                None => println!("nothing to back up (in-memory database)"),
+            }
+            Ok(())
+        }
+        BackupAction::List => {
+            let dir = config.paths.backups_dir();
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for e in entries.flatten() {
+                    println!("{}", e.file_name().to_string_lossy());
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Insert an account row with an encrypted credential.
+#[allow(clippy::too_many_arguments)]
+async fn insert_account_row(
+    pool: &Pool,
+    crypto: &Crypto,
+    provider_id: &str,
+    label: &str,
+    api_key: &str,
+    priority: i64,
+    weight: i64,
+    soft_quota_usd: Option<f64>,
+    quota_type: &str,
+) -> Result<String> {
+    let id = format!("acc_{}", uuid::Uuid::new_v4().simple());
+    let secret_enc = crypto.encrypt(api_key)?;
+    let mask = crate::crypto::mask_secret(api_key);
+    sqlx::query(
+        "INSERT INTO accounts
+         (id, provider_id, label, secret_enc, key_mask, status, quota_type, soft_quota_usd, priority, weight, created_at)
+         VALUES (?,?,?,?,?,'healthy',?,?,?,?,?)",
+    )
+    .bind(&id)
+    .bind(provider_id)
+    .bind(label)
+    .bind(secret_enc)
+    .bind(mask)
+    .bind(quota_type)
+    .bind(soft_quota_usd)
+    .bind(priority)
+    .bind(weight)
+    .bind(db::now_iso())
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+/// Resolve a provider by id or name.
+async fn resolve_provider(pool: &Pool, id_or_name: &str) -> Result<String> {
+    for p in db::list_providers(pool).await? {
+        if p.id == id_or_name || p.name == id_or_name {
+            return Ok(p.id);
+        }
+    }
+    bail!("no provider matching '{id_or_name}'")
+}

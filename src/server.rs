@@ -1,0 +1,264 @@
+//! Server startup: database, migrations, registry, HTTP clients, background
+//! tasks, and the axum listener. Kept separate from `main.rs` so the CLI can
+//! reuse it for the `serve` subcommand.
+
+use std::sync::Arc;
+use std::time::Duration;
+
+use anyhow::{Context, Result};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+use crate::app::AppState;
+use crate::config::Config;
+use crate::crypto::Crypto;
+use crate::logqueue::UsageLogQueue;
+use crate::registry::Registry;
+use crate::{alerts, bootstrap, db, export, router};
+
+pub fn init_tracing(json: bool) {
+    let filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::new("kinetix=info,tower_http=warn,sqlx=warn"));
+    let registry = tracing_subscriber::registry().with(filter);
+    if json {
+        registry
+            .with(tracing_subscriber::fmt::layer().json())
+            .init();
+    } else {
+        registry
+            .with(tracing_subscriber::fmt::layer().compact())
+            .init();
+    }
+}
+
+/// Run the full server with the given configuration.
+pub async fn run(config: Arc<Config>) -> Result<()> {
+    init_tracing(config.log_json);
+    tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting Kinetix");
+
+    // A freshly generated admin password is only known once, at config build
+    // time; surface it now that logging is initialized.
+    if let Some(pw) = &config.generated_admin_password {
+        tracing::warn!(admin_password = %pw, "generated admin password (shown once)");
+        eprintln!("Generated admin password (shown once — store it now):\n  {pw}");
+    }
+
+    // Database + migrations (with a pre-migration backup, NFR-2.4).
+    let pool = db::connect(&config.database_url).await?;
+    db::backup_before_migration(&config.database_url, &config.data_dir);
+    db::migrate(&pool).await?;
+
+    let crypto = Arc::new(Crypto::new(&config.master_key));
+
+    // Optional bootstrap seed (first run only).
+    if let Some(path) = &config.bootstrap_file {
+        if path.exists() {
+            let boot = crate::config::load_bootstrap(path)?;
+            match bootstrap::seed_if_empty(&pool, &crypto, &boot).await {
+                Ok(generated) => {
+                    for (name, key) in generated {
+                        tracing::warn!(key_name = %name, virtual_key = %key, "generated bootstrap virtual key (shown once)");
+                    }
+                }
+                Err(e) => tracing::error!(error = %e, "bootstrap seeding failed"),
+            }
+        } else {
+            tracing::warn!(path = %path.display(), "bootstrap file does not exist; skipping");
+        }
+    }
+
+    // Registry + usage log queue. A reload failure at startup must not take
+    // down serving (NFR-2.6/2.7).
+    let registry = Arc::new(Registry::new());
+    if let Err(e) = registry.reload(&pool).await {
+        tracing::error!(
+            error = %e,
+            "initial registry reload failed; starting with an empty snapshot and retrying in the background"
+        );
+    }
+    let log_queue = UsageLogQueue::new(pool.clone(), 4096);
+    warn_on_unroutable_routes(&registry);
+
+    // HTTP client for upstreams: pooled, HTTP/2, bounded connect timeout, and
+    // zero redirects by default (NFR-3.10).
+    let http = reqwest::Client::builder()
+        .pool_max_idle_per_host(64)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .connect_timeout(Duration::from_secs(10))
+        .http2_adaptive_window(true)
+        .redirect(reqwest::redirect::Policy::none())
+        .user_agent(concat!("kinetix/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("building HTTP client")?;
+
+    // A separate client that follows redirects, used only for providers that
+    // explicitly opt in (NFR-3.10).
+    let http_redirect = reqwest::Client::builder()
+        .pool_max_idle_per_host(16)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .connect_timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent(concat!("kinetix/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("building redirect HTTP client")?;
+
+    let state = AppState::new(
+        config.clone(),
+        pool.clone(),
+        registry.clone(),
+        crypto,
+        http,
+        http_redirect,
+        log_queue,
+        config.ip_rate_limit_per_min,
+    );
+
+    spawn_background_tasks(state.clone());
+
+    let app = router::build(state.clone());
+    let listener = tokio::net::TcpListener::bind(&config.bind)
+        .await
+        .with_context(|| format!("binding {}", config.bind))?;
+
+    tracing::info!(addr = %config.bind, "Kinetix is listening");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(config.shutdown_grace_secs))
+        .await
+        .context("server error")?;
+
+    tracing::info!("Kinetix shut down cleanly");
+    Ok(())
+}
+
+pub fn spawn_background_tasks(state: AppState) {
+    // Frequent registry reload (NFR-2.8: health-state changes visible within 1s;
+    // NFR-2.10: reload only swaps an immutable snapshot).
+    let st = state.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_millis(1000));
+        loop {
+            tick.tick().await;
+            if let Err(e) = st.registry.reload(&st.pool).await {
+                tracing::warn!(error = %e, "registry reload failed; continuing on last snapshot");
+            }
+            st.sticky_sweep(Duration::from_secs(30 * 60));
+        }
+    });
+
+    // Scheduled consistent backup with retention (NFR-2.4).
+    {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(6 * 3600));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            tick.tick().await; // skip the immediate first tick
+            loop {
+                tick.tick().await;
+                match db::scheduled_backup(
+                    &st.pool,
+                    &st.config.database_url,
+                    &st.config.data_dir,
+                    14,
+                )
+                .await
+                {
+                    Ok(Some(_)) => {
+                        *st.last_backup_at.lock() = Some(db::now_iso());
+                        st.last_backup_failed
+                            .store(false, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::error!(error = %e, "scheduled backup failed");
+                        st.last_backup_failed
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
+            }
+        });
+    }
+
+    // Webhook alerting (FR-6.6/FR-12.17).
+    {
+        let st = state.clone();
+        let alerts = std::sync::Arc::new(alerts::AlertState::new());
+        tokio::spawn(async move {
+            alerts::run(st, alerts).await;
+        });
+    }
+
+    // Purge expired body logs (FR-6.5 retention) and old route traces.
+    let st = state.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            tick.tick().await;
+            if let Ok(n) = db::purge_expired_body_logs(&st.pool).await {
+                if n > 0 {
+                    tracing::info!(purged = n, "purged expired body logs");
+                }
+            }
+            if let Ok(n) = db::purge_old_route_traces(&st.pool, 30).await {
+                if n > 0 {
+                    tracing::info!(purged = n, "purged old route traces");
+                }
+            }
+        }
+    });
+
+    // Per-day usage/log export to disk (JSONL logs + CSV summaries) with
+    // retention pruning. Runs hourly; failures never touch the data plane.
+    let st = state.clone();
+    tokio::spawn(async move {
+        let dir = st.config.paths.exports_dir();
+        let retention = st.config.export_retention_days as i64;
+        let mut tick = tokio::time::interval(Duration::from_secs(3600));
+        loop {
+            tick.tick().await;
+            match export::run_export(&st.pool, &dir, 40, retention).await {
+                Ok(n) if n > 0 => tracing::info!(files = n, "exported closed usage days"),
+                Ok(_) => {}
+                Err(e) => tracing::warn!(error = %e, "usage export failed"),
+            }
+        }
+    });
+}
+
+/// Startup diagnostic: warn about enabled Routes with no eligible target so an
+/// operator notices a misconfiguration at boot (NFR-2.7 / Monitoring).
+fn warn_on_unroutable_routes(registry: &Registry) {
+    let names = registry.routes_with_no_targets();
+    if !names.is_empty() {
+        tracing::warn!(
+            routes = ?names,
+            "enabled route(s) have no eligible target at startup; requests to them will fail until configured"
+        );
+    }
+}
+
+async fn shutdown_signal(grace_secs: u64) {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+    tracing::info!(
+        grace_secs,
+        "shutdown signal received; draining in-flight requests (bounded)"
+    );
+}

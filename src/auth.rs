@@ -9,6 +9,9 @@ use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use axum::http::HeaderMap;
 use axum_extra::extract::cookie::CookieJar;
+use parking_lot::Mutex;
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
 use crate::app::AppState;
 use crate::crypto;
@@ -16,6 +19,110 @@ use crate::db::{self, VirtualKeyRow};
 use crate::types::ProxyError;
 
 pub const SESSION_COOKIE: &str = "kinetix_admin";
+
+/// Setting key under which the admin password hash is stored in the database.
+pub const ADMIN_PASSWORD_SETTING: &str = "admin_password_hash";
+
+/// In-memory admin sessions. Sessions are deliberately **not** persisted: a
+/// process restart drops them all, so a browser must log in again (a restart
+/// must never silently preserve access). Each session is a random opaque token
+/// with a TTL; `revoke_all` is used when the password changes.
+pub struct Sessions {
+    inner: Mutex<HashMap<String, Instant>>,
+    ttl: Duration,
+}
+
+impl Sessions {
+    pub fn new(ttl_minutes: u64) -> Self {
+        Sessions {
+            inner: Mutex::new(HashMap::new()),
+            ttl: Duration::from_secs(ttl_minutes.max(1) * 60),
+        }
+    }
+
+    /// Create a new session token, sweeping expired ones first.
+    pub fn create(&self) -> String {
+        use rand::RngCore;
+        let mut bytes = [0u8; 32];
+        rand::thread_rng().fill_bytes(&mut bytes);
+        let token = hex::encode(bytes);
+        let mut map = self.inner.lock();
+        let now = Instant::now();
+        map.retain(|_, exp| *exp > now);
+        map.insert(token.clone(), now + self.ttl);
+        token
+    }
+
+    /// Whether a token names a live, unexpired session.
+    pub fn valid(&self, token: &str) -> bool {
+        if token.is_empty() {
+            return false;
+        }
+        let now = Instant::now();
+        let mut map = self.inner.lock();
+        match map.get(token) {
+            Some(exp) if *exp > now => true,
+            Some(_) => {
+                map.remove(token);
+                false
+            }
+            None => false,
+        }
+    }
+
+    pub fn revoke(&self, token: &str) {
+        self.inner.lock().remove(token);
+    }
+
+    /// Invalidate every session (used when the admin password changes).
+    pub fn revoke_all(&self) {
+        self.inner.lock().clear();
+    }
+}
+
+/// The stored admin password hash, if any. When absent the configured token is
+/// still accepted, which covers a pre-existing install that has not changed its
+/// password yet.
+pub async fn stored_admin_hash(state: &AppState) -> Option<String> {
+    if let Ok(Some(h)) = db::get_setting(&state.pool, ADMIN_PASSWORD_SETTING).await {
+        return Some(h);
+    }
+    // Fall back to the file written by `kinetix init`/`kinetix password set`
+    // (the DB may be fresh or the setting not yet seeded).
+    std::fs::read_to_string(state.config.paths.config_dir.join("admin_password.hash"))
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+}
+
+/// Verify a plaintext admin password against the stored hash (or, failing that,
+/// the configured token). Constant-time.
+pub async fn verify_admin_password(state: &AppState, password: &str) -> bool {
+    let presented = crypto::hash_virtual_key(password);
+    match stored_admin_hash(state).await {
+        Some(stored) => crypto::constant_time_eq(&presented, &stored),
+        None => crypto::constant_time_eq(
+            &presented,
+            &crypto::hash_virtual_key(&state.config.admin_token),
+        ),
+    }
+}
+
+/// Set (or change) the admin password, persist its hash, and invalidate every
+/// existing session so the change takes effect immediately.
+pub async fn set_admin_password(state: &AppState, password: &str) -> anyhow::Result<()> {
+    if password.trim().len() < 8 {
+        anyhow::bail!("admin password must be at least 8 characters");
+    }
+    db::set_setting(
+        &state.pool,
+        ADMIN_PASSWORD_SETTING,
+        &crypto::hash_virtual_key(password.trim()),
+    )
+    .await?;
+    state.sessions.revoke_all();
+    Ok(())
+}
 
 /// Extract the presented virtual key from either auth style.
 pub fn extract_virtual_key(headers: &HeaderMap) -> Option<String> {
@@ -114,18 +221,18 @@ impl FromRequestParts<AppState> for AdminAuth {
             .and_then(|h| h.to_str().ok())
             .map(String::from);
 
-        // Cookie must carry the derived session token (a raw admin token in a
-        // cookie is rejected, NFR-3.14). The header may carry either the session
-        // token or the raw admin token.
+        // The cookie must carry a live session token (sessions are in-memory,
+        // so a restart invalidates them). The header may additionally carry the
+        // raw admin password for CLI/curl use (NFR-3.14).
         if let Some(t) = cookie_token {
-            if is_session_cookie_token(state, &t) {
+            if state.sessions.valid(&t) {
                 return Ok(AdminAuth {
                     actor: "admin".to_string(),
                 });
             }
         }
         if let Some(t) = header_token {
-            if verify_session(state, &t) {
+            if state.sessions.valid(&t) || verify_admin_password(state, &t).await {
                 return Ok(AdminAuth {
                     actor: "admin".to_string(),
                 });
@@ -133,45 +240,6 @@ impl FromRequestParts<AppState> for AdminAuth {
         }
         Err(ProxyError::unauthorized("admin authentication required"))
     }
-}
-
-/// Verify a session token: it must be an HMAC of "admin" with the master key.
-pub fn verify_session(state: &AppState, token: &str) -> bool {
-    // The session cookie carries the derived session token. The header form may
-    // also present the raw admin token; both are compared in constant time.
-    // The raw token is never accepted from the cookie (NFR-3.14: credentials
-    // stay write-only and are not stored in a readable cookie).
-    let expected = session_token(state);
-    if crypto::constant_time_eq(token, &expected) {
-        return true;
-    }
-    crypto::constant_time_eq(token, &state.config.admin_token)
-}
-
-/// Whether the presented token is the derived session token (safe to place in a
-/// cookie). A raw admin token is accepted only via the header, never a cookie.
-pub fn is_session_cookie_token(state: &AppState, token: &str) -> bool {
-    crypto::constant_time_eq(token, &session_token(state))
-}
-
-/// Build the (deterministic) session token for the configured admin token.
-/// Rotating the admin token invalidates all sessions.
-pub fn session_token(state: &AppState) -> String {
-    use hmac::{Hmac, Mac};
-    use sha2::Sha256;
-    let mut mac = Hmac::<Sha256>::new_from_slice(&state.config.master_key)
-        .expect("hmac accepts any key length");
-    mac.update(b"kinetix-admin-session:");
-    mac.update(state.config.admin_token.as_bytes());
-    hex::encode(mac.finalize().into_bytes())
-}
-
-/// Verify a raw admin token submitted at login.
-pub fn verify_admin_password(state: &AppState, password: &str) -> bool {
-    crypto::constant_time_eq(
-        &crypto::hash_virtual_key(password),
-        &crypto::hash_virtual_key(&state.config.admin_token),
-    )
 }
 
 fn validate_cf_access(state: &AppState, token: &str, aud: &str) -> Result<(), String> {

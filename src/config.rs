@@ -7,7 +7,7 @@
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -52,28 +52,126 @@ pub struct Config {
     pub alert_p95_latency_ms: u64,
     /// Per-IP requests/minute for the abuse limiter (NFR-3.6); 0 disables it.
     pub ip_rate_limit_per_min: u64,
+    /// How long an admin dashboard session stays valid (minutes). Sessions are
+    /// in-memory, so a server restart always requires a fresh login.
+    pub session_ttl_minutes: u64,
+    /// Usage/log export retention in days (files older than this may be pruned).
+    pub export_retention_days: u64,
+    /// Resolved filesystem layout (config/data/state directories).
+    pub paths: crate::paths::Paths,
+    /// Set only when a fresh install generated the admin password; the caller
+    /// prints it exactly once after logging is initialized.
+    pub generated_admin_password: Option<String>,
+}
+
+/// Explicit overrides supplied by the CLI (`kinetix serve --bind ...`). Any
+/// field left `None` falls back to the env var or built-in default, so the
+/// binary works both as a standalone CLI tool and via env/.env for development.
+#[derive(Clone, Debug, Default)]
+pub struct CliOverrides {
+    pub bind: Option<String>,
+    pub public_base_url: Option<String>,
+    pub database_url: Option<String>,
+    pub master_key: Option<String>,
+    pub admin_token: Option<String>,
+    pub log_json: Option<bool>,
+    pub allow_private_upstreams: Option<bool>,
+    pub allow_insecure_tls: Option<bool>,
+    pub shutdown_grace_secs: Option<u64>,
+    pub ip_rate_limit_per_min: Option<u64>,
+    pub session_ttl_minutes: Option<u64>,
+    pub export_retention_days: Option<u64>,
+    /// `--home <dir>`: put config/data/state under one root.
+    pub home: Option<PathBuf>,
+    /// Explicit config-file path (used by `kinetix serve --config`).
+    pub config_file: Option<PathBuf>,
 }
 
 impl Config {
     pub fn from_env() -> Result<Self> {
-        let _ = dotenvy::dotenv();
+        Self::build(CliOverrides::default())
+    }
 
-        let bind = env_or("KINETIX_BIND", "127.0.0.1:8080");
-        let public_base_url = env_or("KINETIX_PUBLIC_BASE_URL", "http://127.0.0.1:8080");
-        let database_url = env_or("KINETIX_DATABASE_URL", "sqlite://kinetix.db?mode=rwc");
-
-        let master_key = load_master_key()?;
-        let admin_token = std::env::var("KINETIX_ADMIN_TOKEN").unwrap_or_default();
-        if admin_token.trim().len() < 8 {
-            bail!(
-                "KINETIX_ADMIN_TOKEN must be set to at least 8 characters. \
-                 Generate one with `openssl rand -hex 24`."
-            );
+    /// Build the effective configuration from CLI overrides, the environment,
+    /// an optional `.env`/config file, and built-in defaults — in that order of
+    /// precedence. Also ensures the directory tree exists and, on a first run,
+    /// generates a master key and an admin password, persisting both.
+    pub fn build(ov: CliOverrides) -> Result<Self> {
+        // `--home`/KINETIX_HOME means "an isolated instance": do not auto-load a
+        // project `.env`, so the resolved directories and their derived database
+        // URL are authoritative rather than being shadowed by a stray env file.
+        if ov.home.is_none() {
+            let _ = dotenvy::dotenv();
         }
+        let paths = crate::paths::Paths::resolve(ov.home.as_deref());
+        paths
+            .ensure_dirs()
+            .context("creating Kinetix directories")?;
 
-        let log_json = env_or("KINETIX_LOG_JSON", "false") == "true";
-        let allow_private_upstreams = env_or("KINETIX_ALLOW_PRIVATE_UPSTREAMS", "false") == "true";
-        let allow_insecure_tls = env_or("KINETIX_ALLOW_INSECURE_TLS", "false") == "true";
+        // Load the TOML config file (if present) as a *fallback* source for the
+        // runtime settings. Env vars and CLI flags always win over the file.
+        let file = load_file_config(ov.config_file.as_deref().unwrap_or(&paths.config_file()));
+
+        let pick =
+            |cli: Option<String>, env: &str, file: Option<String>, default: &str| -> String {
+                cli.or_else(|| std::env::var(env).ok())
+                    .or(file)
+                    .unwrap_or_else(|| default.to_string())
+            };
+        let pick_bool = |cli: Option<bool>, env: &str, file: Option<bool>, default: bool| -> bool {
+            cli.or_else(|| std::env::var(env).ok().map(|v| v == "true"))
+                .or(file)
+                .unwrap_or(default)
+        };
+        let pick_u64 = |cli: Option<u64>, env: &str, file: Option<u64>, default: u64| -> u64 {
+            cli.or_else(|| std::env::var(env).ok().and_then(|v| v.parse().ok()))
+                .or(file)
+                .unwrap_or(default)
+        };
+
+        let bind = pick(
+            ov.bind,
+            "KINETIX_BIND",
+            file.as_ref().and_then(|f| f.bind.clone()),
+            "127.0.0.1:8080",
+        );
+        let public_base_url = pick(
+            ov.public_base_url,
+            "KINETIX_PUBLIC_BASE_URL",
+            file.as_ref().and_then(|f| f.public_base_url.clone()),
+            &format!("http://{bind}"),
+        );
+        let database_url = pick(
+            ov.database_url,
+            "KINETIX_DATABASE_URL",
+            file.as_ref().and_then(|f| f.database_url.clone()),
+            &paths.database_url(),
+        );
+
+        // Master key: CLI/env/file, else a persisted key, else generate + persist.
+        let master_key = resolve_master_key(ov.master_key, &paths)?;
+
+        // Admin password: CLI/env/file, else the persisted hash (checked at
+        // login time), else a freshly generated one shown once.
+        let (admin_token, generated_admin_password) = resolve_admin_token(
+            ov.admin_token,
+            file.as_ref().and_then(|f| f.admin_password.clone()),
+            &paths,
+        )?;
+
+        let log_json = pick_bool(ov.log_json, "KINETIX_LOG_JSON", None, false);
+        let allow_private_upstreams = pick_bool(
+            ov.allow_private_upstreams,
+            "KINETIX_ALLOW_PRIVATE_UPSTREAMS",
+            None,
+            false,
+        );
+        let allow_insecure_tls = pick_bool(
+            ov.allow_insecure_tls,
+            "KINETIX_ALLOW_INSECURE_TLS",
+            None,
+            false,
+        );
         if allow_insecure_tls {
             tracing::warn!(
                 "KINETIX_ALLOW_INSECURE_TLS=true: plain-HTTP upstreams are permitted. \
@@ -86,13 +184,16 @@ impl Config {
             .filter(|s| !s.trim().is_empty())
             .map(PathBuf::from);
 
-        let data_dir = PathBuf::from(env_or("KINETIX_DATA_DIR", "."));
-        let shutdown_grace_secs = env_or("KINETIX_SHUTDOWN_GRACE_SECS", "30")
-            .parse::<u64>()
-            .unwrap_or(30);
+        let shutdown_grace_secs = pick_u64(
+            ov.shutdown_grace_secs,
+            "KINETIX_SHUTDOWN_GRACE_SECS",
+            file.as_ref().and_then(|f| f.shutdown_grace_secs),
+            30,
+        );
         let alert_webhook_url = std::env::var("KINETIX_ALERT_WEBHOOK_URL")
             .ok()
-            .filter(|u| !u.trim().is_empty());
+            .filter(|u| !u.trim().is_empty())
+            .or_else(|| file.as_ref().and_then(|f| f.alert_webhook_url.clone()));
         let alert_fallback_rate = env_or("KINETIX_ALERT_FALLBACK_RATE", "0.25")
             .parse::<f64>()
             .unwrap_or(0.25);
@@ -108,9 +209,24 @@ impl Config {
         let alert_p95_latency_ms = env_or("KINETIX_ALERT_P95_LATENCY_MS", "100")
             .parse::<u64>()
             .unwrap_or(100);
-        let ip_rate_limit_per_min = env_or("KINETIX_IP_RATE_LIMIT_PER_MIN", "600")
-            .parse::<u64>()
-            .unwrap_or(600);
+        let ip_rate_limit_per_min = pick_u64(
+            ov.ip_rate_limit_per_min,
+            "KINETIX_IP_RATE_LIMIT_PER_MIN",
+            file.as_ref().and_then(|f| f.ip_rate_limit_per_min),
+            600,
+        );
+        let session_ttl_minutes = pick_u64(
+            ov.session_ttl_minutes,
+            "KINETIX_SESSION_TTL_MINUTES",
+            file.as_ref().and_then(|f| f.session_ttl_minutes),
+            720,
+        );
+        let export_retention_days = pick_u64(
+            ov.export_retention_days,
+            "KINETIX_EXPORT_RETENTION_DAYS",
+            file.as_ref().and_then(|f| f.export_retention_days),
+            30,
+        );
 
         Ok(Config {
             bind,
@@ -128,7 +244,7 @@ impl Config {
             bootstrap_file,
             allow_private_upstreams,
             allow_insecure_tls,
-            data_dir,
+            data_dir: paths.data_dir.clone(),
             shutdown_grace_secs,
             alert_webhook_url,
             alert_fallback_rate,
@@ -137,6 +253,10 @@ impl Config {
             alert_interval_secs,
             alert_p95_latency_ms,
             ip_rate_limit_per_min,
+            session_ttl_minutes,
+            export_retention_days,
+            paths,
+            generated_admin_password,
         })
     }
 }
@@ -145,30 +265,15 @@ fn env_or(key: &str, default: &str) -> String {
     std::env::var(key).unwrap_or_else(|_| default.to_string())
 }
 
-/// Load the 32-byte master key. Accepts `KINETIX_MASTER_KEY` (64 hex chars or
-/// base64) or `KINETIX_MASTER_KEY_FILE` pointing to a file with the same.
-fn load_master_key() -> Result<[u8; 32]> {
-    let raw = if let Ok(v) = std::env::var("KINETIX_MASTER_KEY") {
-        v
-    } else if let Ok(path) = std::env::var("KINETIX_MASTER_KEY_FILE") {
-        std::fs::read_to_string(&path)
-            .with_context(|| format!("reading KINETIX_MASTER_KEY_FILE at {path}"))?
-    } else {
-        bail!(
-            "KINETIX_MASTER_KEY (or KINETIX_MASTER_KEY_FILE) must be set. \
-             Generate with `openssl rand -hex 32`."
-        );
-    };
+/// Parse a 32-byte key from hex, base64, or (last resort) a passphrase.
+pub fn parse_master_key(raw: &str) -> Result<[u8; 32]> {
     let raw = raw.trim();
-
-    // Try hex first (64 chars), then base64.
     if raw.len() == 64 && raw.chars().all(|c| c.is_ascii_hexdigit()) {
         let bytes = hex::decode(raw).context("master key is not valid hex")?;
         let mut out = [0u8; 32];
         out.copy_from_slice(&bytes);
         return Ok(out);
     }
-
     use base64::Engine;
     if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(raw) {
         if bytes.len() == 32 {
@@ -177,19 +282,145 @@ fn load_master_key() -> Result<[u8; 32]> {
             return Ok(out);
         }
     }
-
-    // Last resort: derive from a passphrase with SHA-256 so a human-readable
-    // secret still works (with a warning).
     if raw.len() >= 16 {
         use sha2::{Digest, Sha256};
-        tracing::warn!("KINETIX_MASTER_KEY is not 32 bytes of hex/base64; deriving via SHA-256");
+        tracing::warn!("master key is not 32 bytes of hex/base64; deriving via SHA-256");
         let digest = Sha256::digest(raw.as_bytes());
         let mut out = [0u8; 32];
         out.copy_from_slice(&digest);
         return Ok(out);
     }
+    bail!("master key must be 64 hex chars, base64 of 32 bytes, or >=16 chars")
+}
 
-    bail!("KINETIX_MASTER_KEY must be 64 hex chars, base64 of 32 bytes, or >=16 chars")
+/// Resolve the master key: CLI override, then env (`KINETIX_MASTER_KEY` or
+/// `KINETIX_MASTER_KEY_FILE`), then the persisted key file, else generate a new
+/// one and persist it (0600) so the next start reuses it.
+fn resolve_master_key(cli: Option<String>, paths: &crate::paths::Paths) -> Result<[u8; 32]> {
+    if let Some(v) = cli {
+        return parse_master_key(&v);
+    }
+    if let Ok(v) = std::env::var("KINETIX_MASTER_KEY") {
+        return parse_master_key(&v);
+    }
+    if let Ok(path) = std::env::var("KINETIX_MASTER_KEY_FILE") {
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("reading KINETIX_MASTER_KEY_FILE at {path}"))?;
+        return parse_master_key(&raw);
+    }
+    let key_file = paths.master_key_file();
+    if let Ok(raw) = std::fs::read_to_string(&key_file) {
+        return parse_master_key(&raw);
+    }
+    // First run: generate and persist.
+    use rand::RngCore;
+    let mut bytes = [0u8; 32];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    write_secret_file(&key_file, &hex::encode(bytes))?;
+    tracing::info!(path = %key_file.display(), "generated a new master key");
+    Ok(bytes)
+}
+
+/// Resolve the admin password. The *effective* password for a fresh install is
+/// generated and printed once; thereafter the stored hash is authoritative
+/// (validated at login), so this value is only used when no hash exists yet.
+fn resolve_admin_token(
+    cli: Option<String>,
+    file: Option<String>,
+    paths: &crate::paths::Paths,
+) -> Result<(String, Option<String>)> {
+    let provided = cli
+        .or_else(|| std::env::var("KINETIX_ADMIN_TOKEN").ok())
+        .or(file)
+        .filter(|s| !s.trim().is_empty());
+
+    let hash_file = paths.config_dir.join("admin_password.hash");
+    let has_hash = hash_file.exists();
+
+    if let Some(pw) = provided {
+        if pw.trim().len() < 8 {
+            bail!("admin password must be at least 8 characters");
+        }
+        if !has_hash {
+            // Persist the initial hash so the value is authoritative from now on.
+            write_secret_file(&hash_file, &crate::crypto::hash_virtual_key(pw.trim()))?;
+        }
+        return Ok((pw, None));
+    }
+
+    if has_hash {
+        // No plaintext available; login validates against the stored hash. This
+        // placeholder can never match a real password.
+        return Ok(("\u{0}no-plaintext-password\u{0}".to_string(), None));
+    }
+
+    // Fresh install with no password supplied: generate, persist the hash, and
+    // return the plaintext so the caller can print it exactly once.
+    use rand::RngCore;
+    let mut bytes = [0u8; 18];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    let pw = hex::encode(bytes);
+    write_secret_file(&hash_file, &crate::crypto::hash_virtual_key(&pw))?;
+    Ok((pw.clone(), Some(pw)))
+}
+
+/// Write a file with owner-only (0600) permissions.
+fn write_secret_file(path: &Path, contents: &str) -> Result<()> {
+    use std::io::Write;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(path)?;
+    f.write_all(contents.as_bytes())?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// File configuration (config.toml) — a fallback source for runtime settings
+// ---------------------------------------------------------------------------
+
+/// Runtime settings read from `config.toml` when the corresponding env var or
+/// CLI flag is absent. This makes the binary usable with a plain file and no
+/// environment at all, while env/CLI still take precedence.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct FileConfig {
+    #[serde(default)]
+    pub bind: Option<String>,
+    #[serde(default)]
+    pub public_base_url: Option<String>,
+    #[serde(default)]
+    pub database_url: Option<String>,
+    /// Plaintext admin password (stored here only if the operator chose to).
+    #[serde(default)]
+    pub admin_password: Option<String>,
+    #[serde(default)]
+    pub shutdown_grace_secs: Option<u64>,
+    #[serde(default)]
+    pub ip_rate_limit_per_min: Option<u64>,
+    #[serde(default)]
+    pub session_ttl_minutes: Option<u64>,
+    #[serde(default)]
+    pub export_retention_days: Option<u64>,
+    #[serde(default)]
+    pub alert_webhook_url: Option<String>,
+}
+
+fn load_file_config(path: &Path) -> Option<FileConfig> {
+    let text = std::fs::read_to_string(path).ok()?;
+    match toml::from_str::<FileConfig>(&text) {
+        Ok(c) => Some(c),
+        Err(e) => {
+            tracing::warn!(path = %path.display(), error = %e, "config file ignored (parse error)");
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------

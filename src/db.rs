@@ -1241,6 +1241,38 @@ pub async fn recent_usage(pool: &Pool, limit: i64) -> Result<Vec<UsageLogRow>> {
     )
 }
 
+/// All usage rows whose `ts` falls in the half-open interval `[from, to)`,
+/// oldest first. Used by the per-day export job and the manual export endpoint.
+pub async fn usage_between(pool: &Pool, from_iso: &str, to_iso: &str) -> Result<Vec<UsageLogRow>> {
+    Ok(sqlx::query_as::<_, UsageLogRow>(
+        "SELECT * FROM usage_logs WHERE ts >= ? AND ts < ? ORDER BY ts ASC",
+    )
+    .bind(from_iso)
+    .bind(to_iso)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// One row per UTC calendar day (`YYYY-MM-DD`) that has usage, with request and
+/// token totals. Drives the usage retention/export view (today/24h/7d/30d).
+pub async fn usage_days(pool: &Pool) -> Result<Vec<(String, i64, i64)>> {
+    let rows = sqlx::query(
+        "SELECT substr(ts,1,10) AS day,\n                COUNT(*) AS requests,\n                COALESCE(SUM(COALESCE(input_tokens,0) + COALESCE(output_tokens,0)),0) AS tokens\n         FROM usage_logs GROUP BY day ORDER BY day DESC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.get::<String, _>("day"),
+                r.get::<i64, _>("requests"),
+                r.get::<i64, _>("tokens"),
+            )
+        })
+        .collect())
+}
+
 pub async fn usage_summary(pool: &Pool) -> Result<Value> {
     let row = sqlx::query(
         "SELECT
@@ -1501,6 +1533,23 @@ pub async fn get_setting(pool: &Pool, key: &str) -> Result<Option<String>> {
         .fetch_optional(pool)
         .await?;
     Ok(row.map(|r| r.get::<String, _>("value")))
+}
+
+/// Delete a virtual key and everything that points at it, in one transaction,
+/// so a revoked/removed key leaves no dangling references (usage rows are
+/// retained for accounting but their `key_id` is nulled).
+pub async fn delete_virtual_key_cascade(pool: &Pool, id: &str) -> Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("UPDATE usage_logs SET key_id = NULL WHERE key_id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM virtual_keys WHERE id = ?")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
 }
 
 pub async fn set_setting(pool: &Pool, key: &str, value: &str) -> Result<()> {

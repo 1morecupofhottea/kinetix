@@ -67,7 +67,7 @@ pub async fn login(
             "admin authentication unavailable: control plane degraded".into(),
         ));
     }
-    if !auth::verify_admin_password(&state, &body.password) {
+    if !auth::verify_admin_password(&state, &body.password).await {
         let _ = db::insert_audit(
             &state.pool,
             "unknown",
@@ -83,7 +83,9 @@ pub async fn login(
             "invalid admin password".into(),
         ));
     }
-    let token = auth::session_token(&state);
+    // Sessions are in-memory with a TTL: a restart drops them all, so a browser
+    // must log in again rather than staying signed in forever.
+    let token = state.sessions.create();
     let cookie = Cookie::build((SESSION_COOKIE, token))
         .path("/")
         .http_only(true)
@@ -114,8 +116,65 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> (CookieJar
         "Administrator session ended.",
     )
     .await;
+    if let Some(c) = jar.get(SESSION_COOKIE) {
+        state.sessions.revoke(c.value());
+    }
     let cookie = Cookie::build((SESSION_COOKIE, "")).path("/").build();
     (jar.add(cookie), Json(json!({ "ok": true })))
+}
+
+/// `POST /admin/api/password` — change the dashboard password. Requires the
+/// current password (so a hijacked session cannot silently rotate it), stores a
+/// hash, and revokes every session including the caller's.
+#[derive(serde::Deserialize)]
+pub struct PasswordBody {
+    current_password: String,
+    new_password: String,
+}
+
+pub async fn change_password(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Json(body): Json<PasswordBody>,
+) -> Result<Json<Value>, ApiError> {
+    if !auth::verify_admin_password(&state, &body.current_password).await {
+        let _ = db::insert_audit(
+            &state.pool,
+            "admin",
+            "admin_password_change_failed",
+            "system",
+            "",
+            "Admin Console",
+            "Rejected a password change: current password incorrect.",
+        )
+        .await;
+        return Err(ApiError(
+            StatusCode::UNAUTHORIZED,
+            "current password is incorrect".into(),
+        ));
+    }
+    if body.new_password.trim().len() < 8 {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "new password must be at least 8 characters".into(),
+        ));
+    }
+    auth::set_admin_password(&state, &body.new_password)
+        .await
+        .map_err(ApiError::internal)?;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "admin_password_changed",
+        "system",
+        "",
+        "Admin Console",
+        "Administrator password changed; all sessions invalidated.",
+    )
+    .await;
+    Ok(Json(
+        json!({ "ok": true, "note": "all sessions invalidated; please log in again" }),
+    ))
 }
 
 pub async fn me(_auth: AdminAuth) -> Json<Value> {
@@ -503,7 +562,7 @@ pub async fn delete_key(
     _auth: AdminAuth,
     Path(id): Path<String>,
 ) -> ApiResult {
-    db::delete_virtual_key(&state.pool, &id)
+    db::delete_virtual_key_cascade(&state.pool, &id)
         .await
         .map_err(ApiError::internal)?;
     let _ = db::insert_audit(
@@ -2245,6 +2304,88 @@ fn route_trace_json(t: &db::RouteTraceRow) -> Value {
         "steps": serde_json::from_str::<Value>(&t.steps).unwrap_or(json!([])),
         "warnings": serde_json::from_str::<Value>(&t.warnings).unwrap_or(json!([])),
     })
+}
+
+/// `GET /admin/api/exports` — list exported usage/log files on disk, plus the
+/// per-day usage available for export.
+pub async fn list_exports(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
+    let dir = state.config.paths.exports_dir();
+    let files = crate::export::list_files(&dir);
+    let days = db::usage_days(&state.pool)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .map(
+            |(day, requests, tokens)| json!({ "day": day, "requests": requests, "tokens": tokens }),
+        )
+        .collect::<Vec<_>>();
+    Ok(Json(json!({
+        "dir": dir.display().to_string(),
+        "retention_days": state.config.export_retention_days,
+        "files": files,
+        "days": days,
+    })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct ExportDayBody {
+    /// `YYYY-MM-DD`; defaults to yesterday (UTC) when omitted.
+    #[serde(default)]
+    day: Option<String>,
+}
+
+/// `POST /admin/api/exports` — write one day's usage to disk on demand.
+pub async fn export_usage_day(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Json(body): Json<ExportDayBody>,
+) -> ApiResult {
+    let day = body.day.unwrap_or_else(|| {
+        (chrono::Utc::now().date_naive() - chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string()
+    });
+    let dir = state.config.paths.exports_dir();
+    let (jsonl, csv) = crate::export::export_day(&state.pool, &dir, &day)
+        .await
+        .map_err(ApiError::internal)?;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "usage_exported",
+        "system",
+        &day,
+        "Usage Export",
+        &format!("Exported usage for {day} to disk."),
+    )
+    .await;
+    Ok(Json(json!({
+        "ok": true,
+        "day": day,
+        "jsonl": jsonl.display().to_string(),
+        "csv": csv.display().to_string(),
+    })))
+}
+
+/// `DELETE /admin/api/exports/{name}` — remove one exported file from disk.
+pub async fn delete_export(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(name): Path<String>,
+) -> ApiResult {
+    let dir = state.config.paths.exports_dir();
+    let removed = crate::export::delete_file(&dir, &name).map_err(ApiError::internal)?;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "export_deleted",
+        "system",
+        &name,
+        "Usage Export",
+        "Deleted an exported usage file.",
+    )
+    .await;
+    Ok(Json(json!({ "ok": true, "removed": removed })))
 }
 
 pub async fn audit(

@@ -54,6 +54,8 @@ pub struct AppState {
     pub last_backup_failed: Arc<std::sync::atomic::AtomicBool>,
     /// Per-IP abuse limiter (NFR-3.6), applied before virtual-key auth.
     pub ip_limiter: crate::ratelimit::IpLimiter,
+    /// In-memory admin sessions (dropped on restart; TTL-bounded).
+    pub sessions: Arc<crate::auth::Sessions>,
 }
 
 #[derive(Clone)]
@@ -75,6 +77,7 @@ impl AppState {
         config_ip_limit: u64,
     ) -> Self {
         let credentials = Arc::new(StaticKeyStrategy::new(crypto.clone()));
+        let sessions = Arc::new(crate::auth::Sessions::new(config.session_ttl_minutes));
         AppState {
             config,
             pool,
@@ -100,6 +103,7 @@ impl AppState {
             last_backup_at: Arc::new(parking_lot::Mutex::new(None)),
             last_backup_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ip_limiter: crate::ratelimit::IpLimiter::new(config_ip_limit),
+            sessions,
         }
     }
 

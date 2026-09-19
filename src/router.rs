@@ -40,6 +40,7 @@ pub fn build(state: AppState) -> Router {
         .route("/login", post(admin::login))
         .route("/logout", post(admin::logout))
         .route("/me", get(admin::me))
+        .route("/password", post(admin::change_password))
         .route("/overview", get(admin::overview))
         .route("/test-stream", post(admin::test_stream))
         // keys
@@ -115,6 +116,12 @@ pub fn build(state: AppState) -> Router {
             get(admin::route_trace_by_opaque),
         )
         .route("/audit", get(admin::audit))
+        // usage/log export to disk (today/24h/7d/30d retention + cleanup)
+        .route(
+            "/exports",
+            get(admin::list_exports).post(admin::export_usage_day),
+        )
+        .route("/exports/{name}", delete(admin::delete_export))
         .route("/metrics", get(admin::metrics))
         // Admin mutations fail closed while the control-plane store is degraded
         // (NFR-2.7). Reads stay available.
