@@ -376,3 +376,72 @@ fn long_silent_thinking_with_keepalives() {
         assert_eq!(text, "done", "size {size}");
     }
 }
+
+/// FR-9.4: an upstream 429 received before the commit point is a key-level
+/// failure, so a Route must fall over to the next target rather than surfacing
+/// the error. This exercises the classification that drives fallback.
+#[test]
+fn rate_limit_before_commit_is_key_level() {
+    let adapter = crate::adapters::openai::OpenAiAdapter;
+    let body = r#"{"error":{"message":"Rate limit reached for gpt-x","type":"rate_limit_error"}}"#;
+    let f = adapter.classify_error(429, body, &reqwest::header::HeaderMap::new());
+    assert_eq!(f.kind, crate::types::FailureKind::RateLimit);
+    assert!(
+        f.kind.is_key_level(),
+        "a 429 must be key-level so Route fallback applies"
+    );
+}
+
+/// FR-9.4: a retryable 5xx before commit is key-level (fallback applies).
+#[test]
+fn server_error_before_commit_is_key_level() {
+    let adapter = crate::adapters::openai::OpenAiAdapter;
+    let f = adapter.classify_error(
+        503,
+        "upstream unavailable",
+        &reqwest::header::HeaderMap::new(),
+    );
+    assert_eq!(f.kind, crate::types::FailureKind::ServerError);
+    assert!(f.kind.is_key_level());
+}
+
+/// FR-9.4: a timeout/connection failure is key-level and retryable.
+#[test]
+fn connection_failure_is_key_level() {
+    assert!(crate::types::FailureKind::Timeout.is_key_level());
+    assert!(crate::types::FailureKind::ConnectionError.is_key_level());
+}
+
+/// FR-9.4/FR-4.8: a request-level 400 (invalid request) is NOT key-level, so it
+/// must not trigger fallback — it is returned to the client as-is.
+#[test]
+fn bad_request_does_not_trigger_fallback() {
+    let adapter = crate::adapters::openai::OpenAiAdapter;
+    let f = adapter.classify_error(400, "invalid request", &reqwest::header::HeaderMap::new());
+    assert_eq!(f.kind, crate::types::FailureKind::BadRequest);
+    assert!(!f.kind.is_key_level(), "400 must not fall back");
+}
+
+/// FR-9.4/FR-12.7: a 429 carrying a short retry hint is a rate limit (short
+/// cooldown), whereas an explicit quota message is exhaustion (benched until
+/// reset) — the two must be distinguishable.
+#[test]
+fn rate_limit_and_quota_are_distinguished() {
+    let adapter = crate::adapters::gemini::GeminiAdapter;
+    let mut h = reqwest::header::HeaderMap::new();
+    h.insert("retry-after", "3".parse().unwrap());
+    let rl = adapter.classify_error(
+        429,
+        r#"{"error":{"message":"Quota exceeded for metric","details":[{"retryDelay":"3s"}]}}"#,
+        &h,
+    );
+    assert_eq!(rl.kind, crate::types::FailureKind::RateLimit);
+    let mut h2 = reqwest::header::HeaderMap::new();
+    h2.insert("retry-after", "86400".parse().unwrap());
+    let q = adapter.classify_error(
+        429,
+        r#"{"error":{"message":"Quota exceeded for quota metric: free_tier per_day"}}"#,
+        &h2,
+    );
+    assert_eq!(q.kind, crate::types::FailureKind::QuotaExhausted);
+}
