@@ -505,7 +505,9 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
                         Would select:{' '}
                         <strong>
                           {dryRunResult.would_select
-                            ? `${dryRunResult.would_select.model} @ ${dryRunResult.would_select.account}`
+                            ? typeof dryRunResult.would_select === 'string'
+                              ? dryRunResult.would_select
+                              : `${dryRunResult.would_select.model} @ ${dryRunResult.would_select.account}`
                             : '(no eligible target)'}
                         </strong>
                       </div>

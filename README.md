@@ -127,6 +127,16 @@ See `deploy/README.md` for the full runbook (systemd unit with auto-restart and
 graceful drain, Cloudflare Tunnel + Access setup, backup/restore, upgrades).
 `deploy/kinetix.service` is a ready systemd unit (NFR-2.2/2.3).
 
+## Admin authentication
+
+- The dashboard logs in with the configured admin token and receives an
+  httpOnly session cookie carrying a derived session token (rotating the admin
+  token invalidates all sessions).
+- CLI/tooling may instead send `x-kinetix-admin-token`: this accepts either the
+  derived session token or the **raw** admin token. A raw token is never
+  accepted from the cookie (NFR-3.14 — credentials stay write-only and are not
+  placed in a readable cookie).
+
 ## Status
 
 Milestone 1 (walking skeleton) and Milestone 2 (dashboard, Routes, limits, cost,
