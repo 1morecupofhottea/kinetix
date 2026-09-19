@@ -1,5 +1,22 @@
 import React from 'react';
-import { ShieldCheck, Activity, DollarSign, Play, Key, Shuffle, Server, Users, BarChart3, Radio, Compass, History, LogOut, RefreshCw } from 'lucide-react';
+import {
+  ShieldCheck,
+  Activity,
+  DollarSign,
+  Play,
+  Key,
+  Shuffle,
+  Server,
+  Users,
+  BarChart3,
+  Radio,
+  Compass,
+  History,
+  LogOut,
+  RefreshCw,
+  Menu,
+  X,
+} from 'lucide-react';
 import { ProxyMetrics } from '../types';
 import { formatCurrency } from '../lib/designSystem';
 import { SketchButton, SketchBadge } from './HandDrawnElements';
@@ -17,102 +34,299 @@ export const TAB_ROUTES: Record<NavTab, string> = {
   audit: '/admin/audit',
 };
 
-interface NavbarProps {
+interface NavItem {
+  id: NavTab;
+  label: string;
+  icon: React.ReactNode;
+  badge?: string;
+}
+
+/**
+ * The navigation is grouped by intent — what a new operator does first (hand out
+ * a key, route it), then how the gateway is wired (upstreams, accounts, names),
+ * then how to observe it — so the sidebar reads top-to-bottom as a workflow
+ * rather than an undifferentiated row of tabs.
+ */
+export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  {
+    label: 'Gateway',
+    items: [
+      { id: 'keys', label: 'Virtual Keys', icon: <Key className="w-5 h-5" /> },
+      { id: 'routes', label: 'Routes & Fallback', icon: <Shuffle className="w-5 h-5" />, badge: 'Active' },
+    ],
+  },
+  {
+    label: 'Configuration',
+    items: [
+      { id: 'providers', label: 'Upstream Providers', icon: <Server className="w-5 h-5" /> },
+      { id: 'accounts', label: 'Accounts & Pools', icon: <Users className="w-5 h-5" /> },
+      { id: 'aliases', label: 'Model Aliases', icon: <Compass className="w-5 h-5" /> },
+    ],
+  },
+  {
+    label: 'Observability',
+    items: [
+      { id: 'usage', label: 'Usage & Spend', icon: <BarChart3 className="w-5 h-5" /> },
+      { id: 'requests', label: 'Request Inspector', icon: <Radio className="w-5 h-5" />, badge: 'Live' },
+      { id: 'audit', label: 'Audit Log', icon: <History className="w-5 h-5" /> },
+    ],
+  },
+];
+
+export function tabLabel(tab: NavTab): string {
+  for (const g of NAV_GROUPS) {
+    const found = g.items.find((i) => i.id === tab);
+    if (found) return found.label;
+  }
+  return 'Kinetix';
+}
+
+function Brand({ compact = false }: { compact?: boolean }) {
+  return (
+    <div className="flex items-center gap-3">
+      <div
+        className="w-11 h-11 bg-[#ff4d4d] text-white flex items-center justify-center font-heading font-bold text-2xl border-2 border-[#2d2d2d] sketch-shadow -rotate-2 select-none shrink-0"
+        style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
+      >
+        K
+      </div>
+      <div className="min-w-0">
+        <div className="flex items-center gap-2">
+          <h1 className="text-2xl font-heading font-bold tracking-tight text-[#2d2d2d]">Kinetix</h1>
+          <SketchBadge variant="yellow" rotation="1deg" className="text-xs font-heading">
+            v0.1
+          </SketchBadge>
+        </div>
+        {!compact && (
+          <p className="text-xs text-[#2d2d2d]/70 font-body leading-tight">
+            Multi-Protocol LLM Proxy
+          </p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+interface SidebarProps {
   activeTab: NavTab;
   onSelectTab: (tab: NavTab) => void;
-  metrics: ProxyMetrics;
-  onOpenTester: () => void;
   currentUser?: string;
   onLogout?: () => void;
+  /** Mobile drawer open state (ignored on lg+ where the rail is always shown). */
+  mobileOpen: boolean;
+  onCloseMobile: () => void;
+}
+
+export const Sidebar: React.FC<SidebarProps> = ({
+  activeTab,
+  onSelectTab,
+  currentUser,
+  onLogout,
+  mobileOpen,
+  onCloseMobile,
+}) => {
+  const nav = (
+    <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
+      {NAV_GROUPS.map((group) => (
+        <div key={group.label}>
+          <div className="px-2 mb-1.5 text-[0.7rem] font-heading font-bold uppercase tracking-[0.15em] text-[#2d2d2d]/45">
+            {group.label}
+          </div>
+          <div className="space-y-1">
+            {group.items.map((item) => {
+              const isActive = activeTab === item.id;
+              return (
+                <a
+                  key={item.id}
+                  id={`tab-${item.id}`}
+                  href={TAB_ROUTES[item.id]}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    onSelectTab(item.id);
+                    onCloseMobile();
+                  }}
+                  className={`group relative flex items-center gap-3 pl-3 pr-2 py-2 border-2 transition-all select-none no-underline cursor-pointer ${
+                    isActive
+                      ? 'bg-white border-[#2d2d2d] sketch-shadow-sm font-bold -translate-y-0.5'
+                      : 'bg-transparent border-transparent hover:bg-[#e5e0d8]/60 hover:border-[#2d2d2d]/30'
+                  }`}
+                  style={{ borderRadius: '14px 10px 16px 10px / 10px 16px 10px 14px' }}
+                >
+                  {/* active marker bar */}
+                  <span
+                    className={`absolute left-0 top-1.5 bottom-1.5 w-1.5 rounded-full ${
+                      isActive ? 'bg-[#ff4d4d]' : 'bg-transparent'
+                    }`}
+                  />
+                  <span className={isActive ? 'text-[#ff4d4d]' : 'text-[#2d2d2d]/60 group-hover:text-[#2d2d2d]'}>
+                    {item.icon}
+                  </span>
+                  <span className="flex-1 text-base font-heading text-[#2d2d2d]">{item.label}</span>
+                  {item.badge && (
+                    <span
+                      className={`text-[0.65rem] px-1.5 py-0.5 rounded-full border border-[#2d2d2d] font-heading ${
+                        item.badge === 'Live' ? 'bg-[#ff4d4d] text-white animate-pulse' : 'bg-[#fff9c4] text-[#2d2d2d]'
+                      }`}
+                    >
+                      {item.badge}
+                    </span>
+                  )}
+                </a>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </nav>
+  );
+
+  const footer = currentUser && (
+    <div className="px-3 pb-4 pt-2 border-t-2 border-dashed border-[#2d2d2d]/20">
+      <div className="flex items-center gap-2 mb-2 px-1">
+        <div className="w-2 h-2 rounded-full bg-[#2e7d32] shrink-0" />
+        <span className="text-xs font-mono text-[#2d2d2d]/80 truncate font-bold" title={`Session: ${currentUser}`}>
+          {currentUser}
+        </span>
+      </div>
+      {onLogout && (
+        <button
+          id="btn-logout"
+          onClick={onLogout}
+          className="w-full px-3 py-2 bg-white hover:bg-[#ffebee] text-[#2d2d2d] hover:text-[#ff4d4d] border-2 border-[#2d2d2d] cursor-pointer transition-colors flex items-center justify-center gap-2 text-sm font-heading font-bold sketch-shadow-sm"
+          style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
+          title="Sign Out / Lock Gateway"
+        >
+          <LogOut className="w-4 h-4" />
+          Sign Out
+        </button>
+      )}
+    </div>
+  );
+
+  return (
+    <>
+      {/* Desktop rail */}
+      <aside className="hidden lg:flex flex-col w-64 shrink-0 h-screen sticky top-0 bg-[#fdfbf7] border-r-2 border-[#2d2d2d]">
+        <div className="px-4 pt-4 pb-3 border-b-2 border-dashed border-[#2d2d2d]/20">
+          <Brand />
+        </div>
+        {nav}
+        {footer}
+      </aside>
+
+      {/* Mobile drawer */}
+      <div
+        className={`lg:hidden fixed inset-0 z-50 ${mobileOpen ? '' : 'pointer-events-none'}`}
+        aria-hidden={!mobileOpen}
+      >
+        <div
+          className={`absolute inset-0 bg-black/40 transition-opacity ${mobileOpen ? 'opacity-100' : 'opacity-0'}`}
+          onClick={onCloseMobile}
+        />
+        <aside
+          className={`absolute left-0 top-0 bottom-0 w-72 max-w-[85vw] flex flex-col bg-[#fdfbf7] border-r-2 border-[#2d2d2d] transition-transform duration-200 ${
+            mobileOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
+          <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b-2 border-dashed border-[#2d2d2d]/20">
+            <Brand compact />
+            <button
+              onClick={onCloseMobile}
+              className="p-1.5 border-2 border-[#2d2d2d] bg-white sketch-shadow-sm cursor-pointer"
+              style={{ borderRadius: '10px 14px 10px 14px / 14px 10px 14px 10px' }}
+              aria-label="Close navigation"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+          {nav}
+          {footer}
+        </aside>
+      </div>
+    </>
+  );
+};
+
+interface TopBarProps {
+  activeTab: NavTab;
+  metrics: ProxyMetrics;
+  onOpenTester: () => void;
+  onOpenNav: () => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({
+/**
+ * A slim, low-noise top bar: it holds only the current page title, at-a-glance
+ * health, and the primary action — the navigation and the account control now
+ * live in the sidebar, so the header no longer competes for attention.
+ */
+export const TopBar: React.FC<TopBarProps> = ({
   activeTab,
-  onSelectTab,
   metrics,
   onOpenTester,
-  currentUser,
-  onLogout,
+  onOpenNav,
   onRefresh,
   isRefreshing,
 }) => {
-  const tabs: { id: NavTab; label: string; icon: React.ReactNode; badge?: string; path: string }[] = [
-    { id: 'keys', label: 'Virtual Keys', icon: <Key className="w-5 h-5" />, path: TAB_ROUTES.keys },
-    { id: 'routes', label: 'Routes & Fallback', icon: <Shuffle className="w-5 h-5" />, badge: 'Active', path: TAB_ROUTES.routes },
-    { id: 'providers', label: 'Upstream Providers', icon: <Server className="w-5 h-5" />, path: TAB_ROUTES.providers },
-    { id: 'accounts', label: 'Accounts & Pools', icon: <Users className="w-5 h-5" />, path: TAB_ROUTES.accounts },
-    { id: 'usage', label: 'Usage & Spend', icon: <BarChart3 className="w-5 h-5" />, path: TAB_ROUTES.usage },
-    { id: 'requests', label: 'Request Inspector', icon: <Radio className="w-5 h-5" />, badge: 'Live', path: TAB_ROUTES.requests },
-    { id: 'aliases', label: 'Model Aliases', icon: <Compass className="w-5 h-5" />, path: TAB_ROUTES.aliases },
-    { id: 'audit', label: 'Audit Log', icon: <History className="w-5 h-5" />, path: TAB_ROUTES.audit },
-  ];
-
   return (
-    <header className="w-full bg-[#fdfbf7] border-b-2 border-[#2d2d2d] pb-2 pt-3 px-4 md:px-8 relative">
-      {/* Top row: Brand & Status Widgets */}
-      <div className="max-w-7xl mx-auto flex flex-col md:flex-row items-start md:items-center justify-between gap-4 pb-3">
-        <div className="flex items-center gap-3">
-          {/* Hand-drawn Logo */}
-          <div
-            className="w-11 h-11 bg-[#ff4d4d] text-white flex items-center justify-center font-heading font-bold text-2xl border-2 border-[#2d2d2d] sketch-shadow -rotate-2 select-none"
-            style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
-          >
-            K
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="text-3xl font-heading font-bold tracking-tight text-[#2d2d2d]">
-                Kinetix
-              </h1>
-              <SketchBadge variant="yellow" rotation="1deg" className="text-xs font-heading">
-                v0.1 Proxy
-              </SketchBadge>
-            </div>
-            <p className="text-sm text-[#2d2d2d]/80 font-body -mt-1">
-              Multi-Protocol LLM Proxy for <span className="font-bold underline decoration-wavy decoration-[#ff4d4d]">Pi</span> & Team Tools
-            </p>
-          </div>
+    <header className="sticky top-0 z-30 w-full bg-[#fdfbf7]/95 backdrop-blur-sm border-b-2 border-[#2d2d2d]">
+      <div className="w-full px-4 md:px-8 py-2.5 flex items-center gap-3">
+        {/* Mobile nav trigger */}
+        <button
+          onClick={onOpenNav}
+          className="lg:hidden p-2 border-2 border-[#2d2d2d] bg-white sketch-shadow-sm cursor-pointer shrink-0"
+          style={{ borderRadius: '12px 16px 12px 16px / 16px 12px 16px 12px' }}
+          aria-label="Open navigation"
+        >
+          <Menu className="w-5 h-5" />
+        </button>
+
+        {/* Current page */}
+        <div className="min-w-0">
+          <h2 className="text-xl md:text-2xl font-heading font-bold text-[#2d2d2d] truncate leading-tight">
+            {tabLabel(activeTab)}
+          </h2>
         </div>
 
-        {/* Live Proxy Indicators & Test Button */}
-        <div className="flex flex-wrap items-center gap-3 w-full md:w-auto justify-end">
-          {/* Cloudflare Tunnel Status */}
+        <div className="flex-1" />
+
+        {/* At-a-glance status — grouped, quiet, wraps on small screens */}
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <div
-            className="flex items-center gap-2 bg-white px-3 py-1.5 border-2 border-[#2d2d2d] sketch-shadow-sm text-sm"
+            className="hidden sm:flex items-center gap-1.5 bg-white px-2.5 py-1 border-2 border-[#2d2d2d] sketch-shadow-sm text-xs"
             style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
+            title="Cloudflare Tunnel status"
           >
-            <div className="w-2.5 h-2.5 rounded-full bg-[#2e7d32] animate-pulse border border-[#2d2d2d]" />
+            <span className="w-2 h-2 rounded-full bg-[#2e7d32] animate-pulse border border-[#2d2d2d]" />
+            <ShieldCheck className="w-3.5 h-3.5 text-[#2d5da1]" />
             <span className="font-body text-[#2d2d2d]">
-              <ShieldCheck className="w-4 h-4 inline-block mr-1 text-[#2d5da1]" />
-              Tunnel: <strong className="font-heading">Online</strong> (Cloudflare)
+              Tunnel <strong className="font-heading">Online</strong>
             </span>
           </div>
 
-          {/* Active Streams */}
           <div
-            className="flex items-center gap-1.5 bg-white px-3 py-1.5 border-2 border-[#2d2d2d] sketch-shadow-sm text-sm"
+            className="flex items-center gap-1.5 bg-white px-2.5 py-1 border-2 border-[#2d2d2d] sketch-shadow-sm text-xs"
             style={{ borderRadius: '255px 25px 225px 25px / 25px 225px 25px 255px' }}
+            title="Active upstream streams"
           >
-            <Activity className="w-4 h-4 text-[#ff4d4d]" />
-            <span className="font-body">
-              Active Streams: <strong className="font-heading text-base">{metrics.activeStreams}</strong>
+            <Activity className="w-3.5 h-3.5 text-[#ff4d4d]" />
+            <span className="font-body text-[#2d2d2d]">
+              <strong className="font-heading text-sm">{metrics.activeStreams}</strong> streams
             </span>
           </div>
 
-          {/* Daily Spend */}
           <div
-            className="flex items-center gap-1.5 bg-[#fff9c4] px-3 py-1.5 border-2 border-[#2d2d2d] sketch-shadow-sm text-sm"
+            className="flex items-center gap-1.5 bg-[#fff9c4] px-2.5 py-1 border-2 border-[#2d2d2d] sketch-shadow-sm text-xs"
             style={{ borderRadius: '20px 300px 20px 280px / 280px 20px 300px 20px' }}
+            title="Total recorded spend"
           >
-            <DollarSign className="w-4 h-4 text-[#2d5da1]" />
-            <span className="font-body">
-              Spend: <strong className="font-heading text-base">{formatCurrency(metrics.totalSpendUsd)}</strong>
+            <DollarSign className="w-3.5 h-3.5 text-[#2d5da1]" />
+            <span className="font-body text-[#2d2d2d]">
+              <strong className="font-heading text-sm">{formatCurrency(metrics.totalSpendUsd)}</strong>
             </span>
           </div>
 
-          {/* Refresh */}
           {onRefresh && (
             <button
               onClick={onRefresh}
@@ -122,11 +336,10 @@ export const Navbar: React.FC<NavbarProps> = ({
               title="Reload all data from the admin API"
             >
               <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Refresh</span>
+              <span className="hidden md:inline">Refresh</span>
             </button>
           )}
 
-          {/* Test Proxy Simulator Trigger */}
           <SketchButton
             id="btn-test-proxy"
             variant="danger"
@@ -135,82 +348,10 @@ export const Navbar: React.FC<NavbarProps> = ({
             className="gap-1.5 font-heading font-bold"
           >
             <Play className="w-4 h-4 fill-white" />
-            Live Proxy Test
+            <span className="hidden sm:inline">Live Proxy Test</span>
+            <span className="sm:hidden">Test</span>
           </SketchButton>
-
-          {/* User Session & Logout */}
-          {currentUser && (
-            <div className="flex items-center gap-1.5 pl-1 border-l-2 border-[#2d2d2d]/30">
-              <div
-                className="hidden sm:flex items-center gap-1.5 bg-white px-2.5 py-1 border-2 border-[#2d2d2d] sketch-shadow-sm text-xs font-mono"
-                style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
-                title={`Active Gateway Session: ${currentUser}`}
-              >
-                <div className="w-2 h-2 rounded-full bg-[#2e7d32]" />
-                <span className="text-[#2d2d2d] truncate max-w-[110px] font-bold">
-                  {currentUser}
-                </span>
-              </div>
-
-              {onLogout && (
-                <button
-                  id="btn-logout"
-                  onClick={onLogout}
-                  className="px-2.5 py-1.5 bg-white hover:bg-[#ffebee] text-[#2d2d2d] hover:text-[#ff4d4d] border-2 border-[#2d2d2d] rounded sketch-shadow-sm cursor-pointer transition-colors flex items-center gap-1 text-xs font-heading font-bold"
-                  title="Sign Out / Lock Gateway"
-                >
-                  <LogOut className="w-3.5 h-3.5" />
-                  <span className="hidden md:inline">Sign Out</span>
-                </button>
-              )}
-            </div>
-          )}
         </div>
-      </div>
-
-      {/* Tabs navigation row styled like hand-drawn file folder tabs */}
-      <div className="max-w-7xl mx-auto overflow-x-auto pt-2 pb-1 scrollbar-none">
-        <nav className="flex items-center gap-2 min-w-max">
-          {tabs.map((tab, idx) => {
-            const isActive = activeTab === tab.id;
-            const tilt = idx % 2 === 0 ? '-rotate-0.5' : 'rotate-0.5';
-
-            return (
-              <a
-                key={tab.id}
-                id={`tab-${tab.id}`}
-                href={tab.path}
-                onClick={(e) => {
-                  e.preventDefault();
-                  onSelectTab(tab.id);
-                }}
-                className={`group relative flex items-center gap-2 px-3.5 py-1.5 font-heading text-base md:text-lg border-2 border-[#2d2d2d] transition-all select-none no-underline cursor-pointer ${tilt} ${
-                  isActive
-                    ? 'bg-white text-[#2d2d2d] border-b-0 -translate-y-1 shadow-[3px_3px_0px_0px_#2d2d2d] font-bold'
-                    : 'bg-[#e5e0d8]/80 text-[#2d2d2d]/80 hover:bg-white hover:text-[#2d2d2d] shadow-[2px_2px_0px_0px_#2d2d2d]'
-                }`}
-                style={{
-                  borderRadius: '16px 16px 0 0',
-                }}
-              >
-                <span className={isActive ? 'text-[#ff4d4d]' : 'text-[#2d2d2d]/70'}>{tab.icon}</span>
-                <span>{tab.label}</span>
-                {tab.badge && (
-                  <span
-                    className={`text-xs px-1.5 py-0.2 rounded-full border border-[#2d2d2d] ${
-                      tab.badge === 'Live' ? 'bg-[#ff4d4d] text-white animate-pulse' : 'bg-[#fff9c4] text-[#2d2d2d]'
-                    }`}
-                  >
-                    {tab.badge}
-                  </span>
-                )}
-                {isActive && (
-                  <div className="absolute -bottom-1.5 left-0 right-0 h-2 bg-white z-20 border-l-2 border-r-2 border-white" />
-                )}
-              </a>
-            );
-          })}
-        </nav>
       </div>
     </header>
   );

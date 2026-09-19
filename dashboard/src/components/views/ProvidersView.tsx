@@ -8,7 +8,7 @@ import { Kinetix, DiscoveredModel } from '../../lib/resources';
 interface ProvidersViewProps {
   providers: Provider[];
   models: ModelConfig[];
-  onAddProvider: (provider: Provider) => void;
+  onAddProvider: (provider: Provider) => Promise<void> | void;
   onUpdateProvider: (providerId: string, provider: Provider) => Promise<void>;
   onAddModel: (model: ModelConfig) => void;
   onDeleteModel: (modelId: string) => void;
@@ -49,6 +49,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   const [allowInsecureTls, setAllowInsecureTls] = useState(false);
   const [timeoutMs, setTimeoutMs] = useState(120000);
   const [capabilityMode, setCapabilityMode] = useState<'permissive' | 'strict'>('permissive');
+  const [apiKey, setApiKey] = useState('');
+  const [accountLabel, setAccountLabel] = useState('');
   const [validation, setValidation] = useState<{ valid: boolean; problems: string[]; warnings: string[] } | null>(null);
   const [validating, setValidating] = useState(false);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
@@ -172,6 +174,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     setAllowInsecureTls(false);
     setTimeoutMs(120000);
     setCapabilityMode('permissive');
+    setApiKey('');
+    setAccountLabel('');
     setValidation(null);
   };
 
@@ -190,11 +194,14 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     setAllowInsecureTls(!!p.allowInsecureTls);
     setTimeoutMs(p.timeoutMs || 120000);
     setCapabilityMode(p.capabilityMode || 'permissive');
+    // Credentials are never returned by the API; leave the key field blank.
+    setApiKey('');
+    setAccountLabel('');
     setValidation(null);
     setShowAddProviderModal(true);
   };
 
-  const providerBody = () => ({
+  const providerBody = (includeKey = false) => ({
     name: name.trim(),
     base_url: baseUrl.trim(),
     wire_format: wireFormat,
@@ -208,13 +215,17 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     credential_hosts: credentialHosts.trim(),
     follow_redirects: followRedirects,
     allow_insecure_tls: allowInsecureTls,
+    // Only sent when the admin actually typed a credential.
+    ...(includeKey && apiKey.trim()
+      ? { api_key: apiKey.trim(), account_label: accountLabel.trim() || null }
+      : {}),
   });
 
   const handleValidateProvider = async () => {
     if (!name.trim() || !baseUrl.trim()) return;
     setValidating(true);
     try {
-      const r = await Kinetix.validateProvider(providerBody());
+      const r = await Kinetix.validateProvider(providerBody(false));
       setValidation({ valid: r.valid, problems: r.problems || [], warnings: r.warnings || [] });
     } catch (e) {
       setValidation({ valid: false, problems: [(e as Error).message], warnings: [] });
@@ -251,9 +262,10 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     setIsSaving(true);
     try {
       if (editingProviderId) {
-        await onUpdateProvider(editingProviderId, prov);
+        // api_key is omitted unless a new one was typed (rotating the pool key).
+        await onUpdateProvider(editingProviderId, { ...prov, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) });
       } else {
-        onAddProvider(prov);
+        await onAddProvider({ ...prov, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) });
         setSelectedProviderId(prov.id);
       }
       setShowAddProviderModal(false);
@@ -850,12 +862,50 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                   </div>
                 </div>
 
+                {/* Credential — needed for authenticated model discovery, and to
+                    create the provider's first account (FR-10.11). */}
+                <div
+                  className="p-3 bg-[#fff9c4]/60 border-2 border-dashed border-[#2d2d2d]/40"
+                  style={{ borderRadius: DESIGN_TOKENS.radii.wobbly }}
+                >
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                        API Key {editingProviderId ? '(leave blank to keep)' : '(optional)'}
+                      </label>
+                      <input
+                        type="password"
+                        autoComplete="off"
+                        placeholder={editingProviderId ? '•••••• (unchanged)' : 'sk-... or provider key'}
+                        value={apiKey}
+                        onChange={(e) => setApiKey(e.target.value)}
+                        className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                        Account Label
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Primary key"
+                        value={accountLabel}
+                        onChange={(e) => setAccountLabel(e.target.value)}
+                        className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  <p className="text-xs font-body text-[#2d2d2d]/70 mt-2">
+                    Stored encrypted at rest. Required to fetch an authenticated upstream model list
+                    and to create the first account for this provider.
+                  </p>
+                </div>
+
                 <details className="text-sm font-body">
                   <summary className="cursor-pointer font-heading font-bold text-[#2d5da1]">
                     Advanced (security & timeout)
                   </summary>
-                  <div className="grid grid-cols-2 gap-3 mt-3">
-                    <div>
+                  <div className="grid grid-cols-2 gap-3 mt-3">                    <div>
                       <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
                         Timeout (ms)
                       </label>

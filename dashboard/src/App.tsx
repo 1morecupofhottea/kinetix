@@ -8,7 +8,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { Navbar, NavTab, TAB_ROUTES } from './components/Navbar';
+import { Sidebar, TopBar, NavTab, TAB_ROUTES } from './components/Navbar';
 import { LiveTesterModal } from './components/LiveTesterModal';
 import { LoginScreen } from './components/LoginScreen';
 import { KeysView } from './components/views/KeysView';
@@ -35,7 +35,7 @@ import {
   RequestLog,
   ProxyMetrics,
 } from './types';
-import { Play, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Play, AlertTriangle } from 'lucide-react';
 
 type AuthState = 'checking' | 'signed-out' | 'signed-in';
 
@@ -57,6 +57,7 @@ export default function App() {
     typeof window !== 'undefined' ? getTabFromPath(window.location.pathname) : 'keys',
   );
   const [isTesterOpen, setIsTesterOpen] = useState(false);
+  const [navOpen, setNavOpen] = useState(false);
 
   // Reactive data, all sourced from the admin API.
   const [keys, setKeys] = useState<VirtualKey[]>([]);
@@ -192,6 +193,18 @@ export default function App() {
     }
   };
 
+  // Like withRefresh, but rethrows so a caller (e.g. a modal that stays open on
+  // failure) can keep the form on screen instead of silently swallowing the error.
+  const withRefreshOrThrow = async (fn: () => Promise<unknown>) => {
+    try {
+      await fn();
+      await refresh();
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+      throw e;
+    }
+  };
+
   const handleAddKey = async (
     newKey: VirtualKey,
   ): Promise<{ key: VirtualKey; fullKey: string } | null> => {
@@ -263,7 +276,7 @@ export default function App() {
   const handleDeleteRoute = (routeId: string) => withRefresh(() => Kinetix.deleteRoute(routeId));
 
   const handleAddProvider = (prov: Provider) =>
-    withRefresh(() =>
+    withRefreshOrThrow(() =>
       Kinetix.createProvider({
         name: prov.name,
         base_url: prov.baseUrl,
@@ -278,11 +291,13 @@ export default function App() {
         credential_hosts: prov.credentialHosts || '',
         follow_redirects: !!prov.followRedirects,
         allow_insecure_tls: !!prov.allowInsecureTls,
+        api_key: prov.apiKey || null,
+        account_label: prov.accountLabel || null,
       }),
     );
 
   const handleUpdateProvider = (providerId: string, prov: Provider) =>
-    withRefresh(() =>
+    withRefreshOrThrow(() =>
       Kinetix.updateProvider(providerId, {
         name: prov.name,
         base_url: prov.baseUrl,
@@ -297,6 +312,8 @@ export default function App() {
         credential_hosts: prov.credentialHosts || '',
         follow_redirects: !!prov.followRedirects,
         allow_insecure_tls: !!prov.allowInsecureTls,
+        api_key: prov.apiKey || null,
+        account_label: prov.accountLabel || null,
       }),
     );
 
@@ -368,19 +385,27 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#fdfbf7] text-[#2d2d2d] flex flex-col selection:bg-[#fff9c4] selection:text-[#2d2d2d]">
-      <Navbar
+    <div className="min-h-screen bg-[#fdfbf7] text-[#2d2d2d] flex selection:bg-[#fff9c4] selection:text-[#2d2d2d]">
+      <Sidebar
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
-        metrics={metrics}
-        onOpenTester={() => setIsTesterOpen(true)}
         currentUser={currentUser}
         onLogout={handleLogout}
-        onRefresh={refresh}
-        isRefreshing={isRefreshing}
+        mobileOpen={navOpen}
+        onCloseMobile={() => setNavOpen(false)}
       />
 
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 md:p-8">
+      <div className="flex-1 min-w-0 flex flex-col">
+        <TopBar
+          activeTab={activeTab}
+          metrics={metrics}
+          onOpenTester={() => setIsTesterOpen(true)}
+          onOpenNav={() => setNavOpen(true)}
+          onRefresh={refresh}
+          isRefreshing={isRefreshing}
+        />
+
+        <main className="flex-1 w-full p-4 md:p-8">
         {loadError && (
           <div className="mb-4 p-3 bg-[#ffebee] border-2 border-[#ff4d4d] rounded-lg text-sm font-mono text-[#b71c1c] flex items-center gap-2">
             <AlertTriangle className="w-4 h-4" />
@@ -452,24 +477,25 @@ export default function App() {
         )}
 
         {activeTab === 'audit' && <AuditView logs={auditLogs} />}
-      </main>
+        </main>
 
-      <div className="max-w-7xl mx-auto w-full px-4">
-        <SquiggleDivider />
+        <div className="w-full px-4 md:px-8">
+          <SquiggleDivider />
+        </div>
+
+        <footer className="w-full py-6 px-4 text-center font-body text-sm text-[#2d2d2d]/70">
+          <p className="flex items-center justify-center gap-2 flex-wrap">
+            <strong className="font-heading text-base text-[#2d2d2d]">Kinetix</strong>
+            <span>•</span>
+            <span>Zero-downtime LLM Multi-Protocol Proxy</span>
+            <span>•</span>
+            <span className="underline decoration-wavy decoration-[#ff4d4d]">Hand-Drawn Design System</span>
+          </p>
+          <p className="text-xs text-[#2d2d2d]/50 font-mono mt-1">
+            OpenAI &amp; Anthropic streaming in • Gemini, OpenAI, &amp; Anthropic upstream out • SQLite WAL at rest
+          </p>
+        </footer>
       </div>
-
-      <footer className="w-full py-6 px-4 text-center font-body text-sm text-[#2d2d2d]/70">
-        <p className="flex items-center justify-center gap-2 flex-wrap">
-          <strong className="font-heading text-base text-[#2d2d2d]">Kinetix</strong>
-          <span>•</span>
-          <span>Zero-downtime LLM Multi-Protocol Proxy</span>
-          <span>•</span>
-          <span className="underline decoration-wavy decoration-[#ff4d4d]">Hand-Drawn Design System</span>
-        </p>
-        <p className="text-xs text-[#2d2d2d]/50 font-mono mt-1">
-          OpenAI &amp; Anthropic streaming in • Gemini, OpenAI, &amp; Anthropic upstream out • SQLite WAL at rest
-        </p>
-      </footer>
 
       <div className="fixed bottom-6 right-6 z-40">
         <SketchButton
