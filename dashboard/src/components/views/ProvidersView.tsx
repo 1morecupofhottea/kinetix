@@ -320,7 +320,9 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
       providerName: activeProvider.name,
       upstreamModelId: modelUpstreamId.trim(),
       displayName: modelDisplayName.trim() || modelUpstreamId.trim(),
-      enabled: true,
+      enabled: editingModelId
+        ? (models.find((m) => m.id === editingModelId)?.enabled ?? true)
+        : true,
       contextWindow: Number(modelContextWindow) || 128000,
       maxOutputTokens: Number(modelMaxOutput) || 8192,
       capabilities: {
