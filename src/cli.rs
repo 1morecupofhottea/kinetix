@@ -408,14 +408,19 @@ pub struct ServeOpts {
 /// Run the proxy server (the `serve` subcommand). This is the same startup
 /// sequence as the library's server module, driven by CLI flags.
 pub async fn serve(opts: ServeOpts) -> Result<()> {
+    // A boolean CLI flag can only force the value ON; leaving it off must not
+    // shadow an environment variable or config file that enables the same
+    // option (precedence is CLI > env > file > default, but an absent flag is
+    // not an override).
+    let on = |v: bool| if v { Some(true) } else { None };
     let config = Arc::new(Config::build(CliOverrides {
         bind: opts.bind,
         database_url: opts.database_url,
         home: opts.home,
         config_file: opts.config_file,
-        log_json: Some(opts.log_json),
-        allow_private_upstreams: Some(opts.allow_private_upstreams),
-        allow_insecure_tls: Some(opts.allow_insecure_tls),
+        log_json: on(opts.log_json),
+        allow_private_upstreams: on(opts.allow_private_upstreams),
+        allow_insecure_tls: on(opts.allow_insecure_tls),
         ..Default::default()
     })?);
 

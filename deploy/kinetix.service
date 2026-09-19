@@ -9,7 +9,7 @@ Type=simple
 # Secrets/config come from an EnvironmentFile so they never live in the unit.
 # See .env.example for the full set of variables.
 EnvironmentFile=/etc/kinetix/kinetix.env
-ExecStart=/usr/local/bin/kinetix
+ExecStart=/usr/local/bin/kinetix serve
 WorkingDirectory=/var/lib/kinetix
 User=kinetix
 Group=kinetix

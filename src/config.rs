@@ -341,9 +341,14 @@ fn resolve_admin_token(
         if pw.trim().len() < 8 {
             bail!("admin password must be at least 8 characters");
         }
-        if !has_hash {
-            // Persist the initial hash so the value is authoritative from now on.
-            write_secret_file(&hash_file, &crate::crypto::hash_virtual_key(pw.trim()))?;
+        // A supplied credential (CLI flag, env, or config file) is authoritative:
+        // (re)seed the stored hash so login validates against it. Without this an
+        // explicitly-provided password would be silently ignored once a hash file
+        // existed, contradicting the documented CLI > env > file precedence.
+        let want = crate::crypto::hash_virtual_key(pw.trim());
+        let current = std::fs::read_to_string(&hash_file).ok().map(|s| s.trim().to_string());
+        if current.as_deref() != Some(want.as_str()) {
+            write_secret_file(&hash_file, &want)?;
         }
         return Ok((pw, None));
     }

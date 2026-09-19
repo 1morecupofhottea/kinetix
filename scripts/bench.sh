@@ -36,7 +36,7 @@ KINETIX_ADMIN_TOKEN="bench-admin-token-1234" \
 KINETIX_BOOTSTRAP_FILE="$ROOT/scripts/bench-bootstrap.toml" \
 KINETIX_ALLOW_PRIVATE_UPSTREAMS=true \
 KINETIX_ALLOW_INSECURE_TLS=true \
-  "$ROOT/target/release/kinetix" > "$BENCH_DIR/kinetix.log" 2>&1 &
+  "$ROOT/target/release/kinetix" serve > "$BENCH_DIR/kinetix.log" 2>&1 &
 KX_PID=$!
 trap 'kill $KX_PID $UP_PID 2>/dev/null || true' EXIT
 

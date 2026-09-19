@@ -59,7 +59,8 @@ KINETIX_DATA_DIR="$WORK" \
 KINETIX_ALLOW_PRIVATE_UPSTREAMS=true \
 KINETIX_ALLOW_INSECURE_TLS=true \
 KINETIX_BOOTSTRAP_FILE="$ROOT/scripts/smoke-bootstrap.toml" \
-  ./target/release/kinetix >"$LOG" 2>&1 &
+KINETIX_HOME="$WORK" \
+  ./target/release/kinetix serve >"$LOG" 2>&1 &
 KPID=$!
 
 for _ in $(seq 1 60); do

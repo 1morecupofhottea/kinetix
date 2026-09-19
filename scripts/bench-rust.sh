@@ -49,9 +49,9 @@ export KINETIX_ALLOW_INSECURE_TLS=true
 UPPID=$!
 sleep 0.5
 if [ -n "$CPUSET" ]; then
-  taskset -c "$CPUSET" ./target/release/kinetix >/tmp/bench-rust-kinetix.log 2>&1 &
+  taskset -c "$CPUSET" ./target/release/kinetix serve >/tmp/bench-rust-kinetix.log 2>&1 &
 else
-  ./target/release/kinetix >/tmp/bench-rust-kinetix.log 2>&1 &
+  ./target/release/kinetix serve >/tmp/bench-rust-kinetix.log 2>&1 &
 fi
 KPID=$!
 for _ in $(seq 1 40); do
