@@ -7,10 +7,12 @@
 all-features = true
 
 [advisories]
-# Fail CI on vulnerabilities. Unmaintained/yanked crates are warnings so a
-# transitive dependency cannot silently block a release without review.
+# Fail CI on vulnerabilities. `unmaintained` is a scope (not a level) in current
+# cargo-deny: "workspace" flags unmaintained crates only when they are direct
+# dependencies, so an unmaintained transitive dependency cannot silently block a
+# release without review. `yanked`/`notice` are still warn-level.
 vulnerability = "deny"
-unmaintained = "warn"
+unmaintained = "workspace"
 yanked = "warn"
 notice = "warn"
 
