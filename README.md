@@ -111,6 +111,12 @@ Tech: Rust + Tokio, Axum 0.8, reqwest (rustls, HTTP/2), SQLite in WAL mode via s
   tool calls, and automatic fallback. CI will run the fixture suite from the
   requirements (FR-9).
 
+## Compatibility notes
+
+Client-specific behaviour, the Pi acceptance configuration, known fidelity
+notes, and the documented deviations from r4 live in
+[`docs/compatibility.md`](docs/compatibility.md) (FR-9.3).
+
 ## Deployment
 
 See `deploy/README.md` for the full runbook (systemd unit with auto-restart and
