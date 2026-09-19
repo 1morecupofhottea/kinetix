@@ -82,6 +82,62 @@ pub fn backup_before_migration(database_url: &str, data_dir: &std::path::Path) -
     }
 }
 
+/// A consistent, WAL-safe scheduled backup using `VACUUM INTO` (NFR-2.4).
+///
+/// Unlike a raw file copy, `VACUUM INTO` produces a transactionally consistent
+/// snapshot even while the database is live. Returns the written path, or None
+/// for in-memory / unavailable databases.
+pub async fn scheduled_backup(
+    pool: &Pool,
+    database_url: &str,
+    data_dir: &std::path::Path,
+    retain: usize,
+) -> Option<PathBuf> {
+    let path = database_url
+        .strip_prefix("sqlite://")
+        .or_else(|| database_url.strip_prefix("sqlite:"))?
+        .split('?')
+        .next()
+        .unwrap_or("");
+    if path.is_empty() || path == ":memory:" {
+        return None;
+    }
+    let backup_dir = data_dir.join("backups");
+    if std::fs::create_dir_all(&backup_dir).is_err() {
+        return None;
+    }
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    let dst = backup_dir.join(format!("kinetix-{stamp}.db"));
+    let sql = format!(
+        "VACUUM INTO '{}'",
+        dst.display().to_string().replace('\'', "''")
+    );
+    if let Err(e) = sqlx::query(&sql).execute(pool).await {
+        tracing::warn!(error = %e, "scheduled backup failed");
+        return None;
+    }
+    tracing::info!(backup = %dst.display(), "wrote scheduled backup");
+    // Retention: keep the newest `retain` kinetix-*.db files.
+    if let Ok(entries) = std::fs::read_dir(&backup_dir) {
+        let mut files: Vec<PathBuf> = entries
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| {
+                p.file_name()
+                    .and_then(|n| n.to_str())
+                    .map(|n| n.starts_with("kinetix-") && n.ends_with(".db"))
+                    .unwrap_or(false)
+            })
+            .collect();
+        files.sort();
+        while files.len() > retain.max(1) {
+            let old = files.remove(0);
+            let _ = std::fs::remove_file(&old);
+        }
+    }
+    Some(dst)
+}
+
 // ===========================================================================
 // Virtual keys
 // ===========================================================================

@@ -173,6 +173,27 @@ fn spawn_background_tasks(state: AppState) {
         }
     });
 
+    // Scheduled consistent backup with retention (NFR-2.4). Best-effort; a
+    // backup failure alerts via the log and never touches the data plane.
+    {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(6 * 3600));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            tick.tick().await; // skip the immediate first tick
+            loop {
+                tick.tick().await;
+                let _ = db::scheduled_backup(
+                    &st.pool,
+                    &st.config.database_url,
+                    &st.config.data_dir,
+                    14,
+                )
+                .await;
+            }
+        });
+    }
+
     // Webhook alerting (FR-6.6/FR-12.17): evaluates accounting and account
     // health on an interval and fires edge-triggered alerts. No-op when
     // KINETIX_ALERT_WEBHOOK_URL is unset.

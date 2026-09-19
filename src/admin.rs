@@ -2027,6 +2027,30 @@ pub async fn db_healthy(state: &AppState) -> bool {
     sqlx::query("SELECT 1").fetch_one(&state.pool).await.is_ok()
 }
 
+/// Admin-router middleware: every state-changing request (anything that is not
+/// GET/HEAD) must fail closed when the control-plane store is unavailable
+/// (NFR-2.7: "admin mutations fail closed"). Reads are allowed so an operator
+/// can still inspect what is cached in memory while the store is degraded.
+pub async fn require_control_plane(
+    State(state): State<AppState>,
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let method = req.method().clone();
+    if method != axum::http::Method::GET && method != axum::http::Method::HEAD {
+        if !db_healthy(&state).await {
+            return (
+                axum::http::StatusCode::SERVICE_UNAVAILABLE,
+                Json(
+                    json!({"error": "admin mutation unavailable: control-plane store is degraded"}),
+                ),
+            )
+                .into_response();
+        }
+    }
+    next.run(req).await
+}
+
 pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Response {
     // Serve whatever is available from memory even when the store is down; the
     // control plane degrades, the data plane does not (NFR-2.6/2.7).

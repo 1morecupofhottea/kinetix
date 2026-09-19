@@ -49,11 +49,20 @@ pub async fn enforce(
         ));
     }
 
-    // RPM / TPM over the last 60 seconds.
+    // RPM / TPM over the last 60 seconds. These accounting reads are the only
+    // DB access on the request path. A control-plane outage must not fail an
+    // otherwise serviceable request (NFR-2.6/2.7), so on a DB error we log and
+    // FAIL OPEN (serve) rather than reject — status/expiry/allowed-model checks
+    // above are already in-memory from the key row, and RPM/TPM/budget are the
+    // only limits that would be temporarily unenforced.
     let since = (Utc::now() - chrono::Duration::seconds(60)).to_rfc3339();
-    let (count, tokens) = db::key_usage_since(pool, &key.id, &since)
-        .await
-        .map_err(|e| ProxyError::internal(e.to_string()))?;
+    let (count, tokens) = match db::key_usage_since(pool, &key.id, &since).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(error = %e, "usage counter unavailable; serving without RPM/TPM enforcement (control-plane degraded)");
+            return Ok(());
+        }
+    };
 
     if let Some(rpm) = key.rpm_limit {
         if rpm > 0 && count >= rpm {
@@ -75,9 +84,14 @@ pub async fn enforce(
     // Daily budget.
     if let Some(daily) = key.daily_budget {
         if daily > 0.0 {
-            let spent = db::key_spend_since(pool, &key.id, &window_start("daily", None))
-                .await
-                .map_err(|e| ProxyError::internal(e.to_string()))?;
+            let spent = match db::key_spend_since(pool, &key.id, &window_start("daily", None)).await
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "spend unavailable; serving without daily-budget enforcement (control-plane degraded)");
+                    return Ok(());
+                }
+            };
             if spent >= daily {
                 return Err(ProxyError::budget_exceeded(format!(
                     "daily budget exceeded (${spent:.2} of ${daily:.2}); resets at 00:00 UTC"
@@ -89,9 +103,15 @@ pub async fn enforce(
     // Monthly budget.
     if let Some(monthly) = key.monthly_budget {
         if monthly > 0.0 {
-            let spent = db::key_spend_since(pool, &key.id, &window_start("monthly", None))
+            let spent = match db::key_spend_since(pool, &key.id, &window_start("monthly", None))
                 .await
-                .map_err(|e| ProxyError::internal(e.to_string()))?;
+            {
+                Ok(v) => v,
+                Err(e) => {
+                    tracing::warn!(error = %e, "spend unavailable; serving without monthly-budget enforcement (control-plane degraded)");
+                    return Ok(());
+                }
+            };
             if spent >= monthly {
                 return Err(ProxyError::budget_exceeded(format!(
                     "monthly budget exceeded (${spent:.2} of ${monthly:.2}); resets on the 1st"

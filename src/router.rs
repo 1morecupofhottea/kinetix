@@ -105,7 +105,13 @@ pub fn build(state: AppState) -> Router {
             get(admin::request_diagnostics),
         )
         .route("/audit", get(admin::audit))
-        .route("/metrics", get(admin::metrics));
+        .route("/metrics", get(admin::metrics))
+        // Admin mutations fail closed while the control-plane store is degraded
+        // (NFR-2.7). Reads stay available.
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            admin::require_control_plane,
+        ));
 
     let dashboard = Router::new()
         .route("/", get(assets::serve))

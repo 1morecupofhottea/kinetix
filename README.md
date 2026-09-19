@@ -154,6 +154,14 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   /admin/api/providers/:id/discover` records a per-model `discovery` observation
   and returns a `disappeared` list flagging models no longer advertised
   upstream, instead of silently deleting them.
+- Scheduled consistent backups (NFR-2.4): `VACUUM INTO` snapshots every 6h with
+  14-file retention in `$KINETIX_DATA_DIR/backups`, alongside the pre-migration
+  backup. Best-effort and off the data path.
+- Admin mutations fail closed when the control-plane store is degraded
+  (NFR-2.7): a middleware rejects non-GET admin requests with 503 while reads
+  and inference keep working; the request-path RPM/TPM/budget counters also fail
+  open (log + serve) on a DB error so a brief outage cannot fail a serviceable
+  request.
 - Immutable per-request config snapshots (NFR-2.10/FR-10.13): every request
   captures one `Arc<Snapshot>` for its whole lifetime, so config edits never
   affect in-flight work; the snapshot is reloaded every second so time-based
