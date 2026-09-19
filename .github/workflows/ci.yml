@@ -40,6 +40,11 @@ jobs:
       - name: End-to-end smoke
         run: scripts/smoke.sh 127.0.0.1:8180
 
+      # Capacity/overhead matrix against NFR-1 targets (NFR-1.4/1.8/1.9).
+      # Reports the numbers; run with a short matrix to keep CI fast.
+      - name: Benchmark matrix (NFR-1)
+        run: scripts/bench-rust.sh "1 10 100" 500
+
       # Dependency vulnerability + license + ban checks (NFR-3.7).
       - name: cargo-deny
         uses: EmbarkStudios/cargo-deny-action@v2

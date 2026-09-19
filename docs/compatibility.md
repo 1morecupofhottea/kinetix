@@ -39,10 +39,11 @@ Verified acceptance behaviour (Milestone 1 / FR-9.2):
 
 Kinetix does not guess a conversation identity (FR-7.5). To use cache-aware
 sticky routing (FR-7.3), the client must send an explicit session header:
-`X-Kinetix-Session`, `X-Session-Id`, `X-Conversation-Id`, or
-`X-Session-Affinity`. Without one, each request is routed independently. Pi
-sends `X-Session-Id` when configured with `sendSessionAffinityHeaders` (see
-`docs/pi-compatibility.md`).
+`X-Kinetix-Session`, `X-Session-Id`, `Session-Id` (underscore spelling),
+`X-Conversation-Id`, or `X-Session-Affinity`. Without one, each request is
+routed independently. Pi sends `X-Session-Id` when configured with
+`sendSessionAffinityHeaders` and `sessionAffinityFormat: "openrouter"`, or
+`Session-Id` with the `"openai"` format (see `docs/pi-compatibility.md`).
 
 ## Anthropic-format clients
 

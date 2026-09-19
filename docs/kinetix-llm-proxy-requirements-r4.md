@@ -563,48 +563,9 @@ Hard-to-reverse choices: Rust, the canonical/portable/opaque state model, commit
 
 ## Open issues
 
-**Issue: Sticky-session identity**
-- *What's unresolved:* How Kinetix identifies a conversation for mandatory cache-aware sticky routing.
-- *Options:* explicit configurable client/session header; derived conversation hash; both with precedence rules.
-- *Constraint:* Kinetix must not invent identity when evidence is insufficient.
-- *Next step:* Observe Pi's actual stable request metadata across multi-turn sessions and select the least surprising interoperable mechanism before Milestone 2 is complete.
-
-**Issue: Default non-portable-state policy**
-- *What's unresolved:* Routes support both `reject` and `strip_with_warning`, but no global/default behavior has been selected.
-- *Options:* fail-safe `reject`; convenience-oriented `strip_with_warning`; require an explicit choice for every cross-provider Route.
-- *Constraint:* silent stripping is forbidden.
-- *Next step:* Force Pi sessions across provider-format fallbacks and evaluate which behavior produces safer client recovery.
-
-**Issue: Canonical thinking-level scale**
-- *What's unresolved:* Vendors expose reasoning control as effort strings, token budgets, levels, or provider-specific fields.
-- *Options:* fixed Kinetix enum plus optional numeric budget/mapping; narrower portable abstraction plus opaque passthrough.
-- *Next step:* Capture exact Pi fields in both inbound formats and verify that mappings avoid information loss.
-
-**Issue: Model-discovery response mapping**
-- *What's unresolved:* Model-list endpoints vary in path, pagination, shape, and identifier formatting.
-- *Options:* wire-format defaults plus admin-overridable mapping; support only known list shapes with manual fallback.
-- *Next step:* Implement/test Gemini first, then OpenAI-compatible and Anthropic paths required by Milestone 3.
-
-**Issue: Source of truth for configuration**
-- *What's unresolved:* Database-authoritative configuration versus file-authoritative bootstrap/sync semantics.
-- *Options:* database authoritative after bootstrap with export/import; file authoritative; explicit dual-source synchronization.
-- *Constraint:* runtime uses immutable validated snapshots and must not merge conflicting sources implicitly.
-- *Next step:* choose before Milestone 2 dashboard mutations become authoritative.
-
-**Issue: Rate/quota classification and reset evidence**
-- *What's unresolved:* Providers encode rate limit versus quota exhaustion differently and may omit reset times.
-- *Options:* admin-editable classifiers, response-header/body hints, configured schedules, soft quotas, bounded recovery probing.
-- *Next step:* capture real Gemini rate/quota responses and encode generic configurable rules rather than provider-name conditionals.
-
-**Issue: Mid-stream error encoding by frontend**
-- *What's unresolved:* After commit, each frontend/client may react differently to a native error event versus abrupt close.
-- *Constraint:* Kinetix never retries/splices after commit.
-- *Next step:* test Pi and official SDK behavior and fixture the least ambiguous protocol-correct termination for each frontend.
-
-**Issue: Route predicate fact vocabulary**
-- *What's unresolved:* The typed predicate engine is committed, but the smallest stable set of request/config facts exposed to it should be finalized from real routing use cases.
-- *Constraint:* no arbitrary code; unknown facts remain unknown; every predicate is explainable.
-- *Next step:* implement tools/images/frontend/key-tag and known-size/capability facts first in Milestone 2, then add only evidence-backed facts before freezing the persisted schema.
+All open issues raised in this revision were resolved during the M1–M4
+implementation; the decisions and the evidence behind them are recorded under
+**Resolved issues** below.
 
 ## Resolved issues
 - **Product name:** Prism → **Kinetix**, including virtual-key and client-header branding.
@@ -629,6 +590,14 @@ Hard-to-reverse choices: Rust, the canonical/portable/opaque state model, commit
 - **Onboarding:** existing under-5-minute target retained; no 60-second requirement or dedicated Connect screen committed.
 - **Configuration safety:** Validate/Dry Run required.
 - **Roadmap:** revised around correctness harness → executable routing/operations → Anthropic/cross-provider fidelity → operational polish; no plugin milestone or response-cache milestone.
+- **Sticky-session identity:** explicit configurable client/session header. Kinetix reads `X-Kinetix-Session`, `X-Session-Id`, or `X-Conversation-Id` and never derives a conversation identity. Evidence: Pi's OpenAI-completions client sends `x-session-id` (openrouter affinity format) and, by default, sends no `prompt_cache_key`, so the header is the interoperable mechanism.
+- **Default non-portable-state policy:** `strip_with_warning` is the default (recorded in the Route Trace and surfaced via `X-Kinetix-Warning`); `reject` is available per Route. Silent stripping is forbidden in both.
+- **Canonical thinking-level scale:** fixed Kinetix enum `off | low | medium | high`, mapped per model via `thinking_map` (with a `budget_field` for numeric-budget providers); exact inbound fields (OpenAI `reasoning_effort`, Anthropic `thinking.budget_tokens`) are decoded and Gemini's thought signatures are preserved as opaque state.
+- **Model-discovery response mapping:** wire-format default `models_path` plus an admin override, with per-model discovery observations that never overwrite admin edits; Gemini implemented first, then OpenAI-compatible.
+- **Source of truth for configuration:** database-authoritative after a first-run bootstrap file, with user-authored export/import; the runtime serves from immutable validated snapshots and never merges sources implicitly.
+- **Rate/quota classification and reset evidence:** generic, evidence-based classification — a 429 with a short retry hint is a rate limit (brief cooldown honoring `Retry-After`), a 429 with a long/absent hint or quota wording is quota exhaustion (benched until reset) — not provider-name conditionals.
+- **Mid-stream error encoding:** OpenAI emits an error object, an explicit `finish_reason: "error"` chunk, then `[DONE]`; Anthropic emits a single terminal `error` event with no `message_stop`. Kinetix never retries or splices after commit; locked by golden fixtures.
+- **Route predicate fact vocabulary:** the implemented set is `has_tools`, `has_images`, `has_reasoning`, `frontend`, `requested_alias`/`requested_model`, `requested_route`, `key_tag`, `input_tokens`, `target_model(_id)`, `target_provider(_id)`, `target_capability`, `target_context_window`, `target_max_output_tokens`; unknown facts remain unknown and every predicate is explainable.
 
 ## Alternatives considered
 - **LiteLLM or similar broad gateway:** mature/provider-rich, but Kinetix intentionally optimizes for a smaller single-binary coding-agent gateway with explicit protocol and routing correctness.

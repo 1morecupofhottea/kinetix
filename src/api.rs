@@ -32,6 +32,8 @@ fn extract_session(headers: &HeaderMap) -> Option<String> {
     for name in [
         "x-kinetix-session",
         "x-session-id",
+        // Pi's `sessionAffinityFormat: "openai"` uses the underscore spelling.
+        "session_id",
         "x-conversation-id",
         "x-session-affinity",
     ] {
