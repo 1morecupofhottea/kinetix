@@ -237,6 +237,16 @@ pub fn aggregate(
                 FinishReason::ToolCalls => "tool_use",
                 _ => "end_turn",
             };
+            // FR-6.2/6.8: input/output are the required fields (0 when the
+            // upstream omitted them); cached tokens are omitted when unknown
+            // rather than coerced to zero.
+            let mut usage_obj = serde_json::json!({
+                "input_tokens": usage.input.unwrap_or(0),
+                "output_tokens": usage.output.unwrap_or(0),
+            });
+            if let Some(c) = usage.cached {
+                usage_obj["cache_read_input_tokens"] = serde_json::json!(c);
+            }
             serde_json::json!({
                 "id": format!("msg_{}", request_id.replace(['-','_'], "")),
                 "type": "message",
@@ -245,11 +255,7 @@ pub fn aggregate(
                 "content": blocks,
                 "stop_reason": stop_reason,
                 "stop_sequence": Value::Null,
-                "usage": {
-                    "input_tokens": usage.input.unwrap_or(0),
-                    "output_tokens": usage.output.unwrap_or(0),
-                    "cache_read_input_tokens": usage.cached.unwrap_or(0)
-                }
+                "usage": usage_obj
             })
         }
     }

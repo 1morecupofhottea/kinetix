@@ -2338,6 +2338,28 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
         "kinetix_cached_tokens_total {}\n",
         summary["cached_tokens"].as_i64().unwrap_or(0)
     ));
+    // Accounting confidence (FR-6.8, NFR-4.2): usage rows whose tokens were not
+    // provider-reported. Unknown/estimated rows must never be read as exact.
+    body.push_str("# HELP kinetix_usage_unknown_total Requests whose token usage is unknown\n");
+    body.push_str("# TYPE kinetix_usage_unknown_total counter\n");
+    body.push_str(&format!(
+        "kinetix_usage_unknown_total {}\n",
+        summary["unknown_usage_requests"].as_i64().unwrap_or(0)
+    ));
+    body.push_str("# HELP kinetix_usage_estimated_total Requests whose token usage is estimated\n");
+    body.push_str("# TYPE kinetix_usage_estimated_total counter\n");
+    body.push_str(&format!(
+        "kinetix_usage_estimated_total {}\n",
+        summary["estimated_usage_requests"].as_i64().unwrap_or(0)
+    ));
+    body.push_str(
+        "# HELP kinetix_usage_unknown_cost_total Requests whose cost is unknown (no prices)\n",
+    );
+    body.push_str("# TYPE kinetix_usage_unknown_cost_total counter\n");
+    body.push_str(&format!(
+        "kinetix_usage_unknown_cost_total {}\n",
+        summary["unknown_cost_requests"].as_i64().unwrap_or(0)
+    ));
     body.push_str("# HELP kinetix_fallback_hops_total Total fallback hops across requests\n");
     body.push_str("# TYPE kinetix_fallback_hops_total counter\n");
     body.push_str(&format!(

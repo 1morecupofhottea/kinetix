@@ -1235,6 +1235,8 @@ pub async fn usage_summary(pool: &Pool) -> Result<Value> {
             COALESCE(SUM(thinking_tokens),0) as thinking_tokens,
             COALESCE(SUM(CASE WHEN cost_known != 0 THEN cost_usd ELSE 0.0 END),0.0) as cost_usd,
             COALESCE(SUM(CASE WHEN cost_known = 0 THEN 1 ELSE 0 END),0) as unknown_cost_rows,
+            COALESCE(SUM(CASE WHEN usage_confidence = 'unknown' THEN 1 ELSE 0 END),0) as unknown_usage_rows,
+            COALESCE(SUM(CASE WHEN usage_confidence = 'estimated' THEN 1 ELSE 0 END),0) as estimated_usage_rows,
             COALESCE(SUM(fallback_hops),0) as fallback_hops,
             COALESCE(AVG(latency_ms),0.0) as avg_latency
          FROM usage_logs",
@@ -1252,6 +1254,10 @@ pub async fn usage_summary(pool: &Pool) -> Result<Value> {
         // are counted separately so a total is never read as complete
         // (FR-6.3/6.9).
         "unknown_cost_requests": row.get::<i64, _>("unknown_cost_rows"),
+        // Accounting confidence (FR-6.8): provider-reported vs estimated vs
+        // unknown. Estimated/unknown rows must never be read as exact.
+        "unknown_usage_requests": row.get::<i64, _>("unknown_usage_rows"),
+        "estimated_usage_requests": row.get::<i64, _>("estimated_usage_rows"),
         "fallback_hops": row.get::<i64, _>("fallback_hops"),
         "avg_latency_ms": row.get::<f64, _>("avg_latency"),
     }))
