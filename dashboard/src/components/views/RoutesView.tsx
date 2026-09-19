@@ -65,6 +65,8 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
       },
       targets: newTargets,
       continuityPolicy: 'strip',
+      portabilityPolicy: 'strip_with_warning',
+      cacheAffinity: true,
       stickyRouting: sticky,
       totalHops: 0,
       status: 'active',
@@ -409,6 +411,40 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
                         <option value="error">Error on non-portable conversation turn</option>
                       </select>
                     </div>
+
+                    <div className="pt-1">
+                      <span className="text-xs font-mono text-[#2d2d2d]/70 block mb-1">
+                        Opaque-State Portability Policy (FR-2.11):
+                      </span>
+                      <select
+                        value={activeRoute.portabilityPolicy}
+                        onChange={(e) =>
+                          onUpdateRoute({
+                            ...activeRoute,
+                            portabilityPolicy: e.target.value as any,
+                          })
+                        }
+                        className="bg-white border border-[#2d2d2d] px-2 py-1 text-xs font-mono rounded w-full"
+                      >
+                        <option value="strip_with_warning">Strip + warn client (recommended)</option>
+                        <option value="reject">Reject the fallback attempt</option>
+                      </select>
+                    </div>
+
+                    <label className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={activeRoute.cacheAffinity}
+                        onChange={(e) =>
+                          onUpdateRoute({
+                            ...activeRoute,
+                            cacheAffinity: e.target.checked,
+                          })
+                        }
+                        className="accent-[#2d5da1]"
+                      />
+                      <span>Cache affinity (keep a session on the same target, FR-7.3)</span>
+                    </label>
                   </div>
                 </div>
               </div>

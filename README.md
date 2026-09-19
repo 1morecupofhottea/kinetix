@@ -156,6 +156,10 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   the body rather than dropping out of rotation); admin login fails closed when
   the store is down, while inference keeps serving from the in-memory snapshot
   and `/metrics` reports `kinetix_control_plane_degraded`.
+- Dashboard request inspector renders the Route Trace (candidate/skip/attempt/
+  commit/result steps with timings) and the flight-recorder diagnostics inline
+  (NFR-4.3/4.4); the Routes editor exposes the opaque-state portability policy
+  (FR-2.11) and cache-affinity toggle (FR-7.3).
 - Discovery never overwrites admin edits (FR-10.5): `POST
   /admin/api/providers/:id/discover` records a per-model `discovery` observation
   and returns a `disappeared` list flagging models no longer advertised

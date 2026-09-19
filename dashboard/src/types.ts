@@ -118,6 +118,8 @@ export interface Route {
   };
   targets: RouteTarget[];
   continuityPolicy: 'strip' | 'convert' | 'error';
+  portabilityPolicy: 'reject' | 'strip_with_warning';
+  cacheAffinity: boolean;
   stickyRouting: boolean;
   totalHops: number;
   status: 'active' | 'degraded' | 'all_exhausted';

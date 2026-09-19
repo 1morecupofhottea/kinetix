@@ -225,6 +225,8 @@ export default function App() {
         strategy: newRoute.selectionStrategy,
         fallback_triggers: newRoute.fallbackTriggers,
         continuity_policy: newRoute.continuityPolicy,
+        portability_policy: newRoute.portabilityPolicy,
+        cache_affinity: newRoute.cacheAffinity,
         sticky_routing: newRoute.stickyRouting,
         targets: newRoute.targets.map((t) => ({
           account_id: t.accountId || null,
@@ -243,6 +245,8 @@ export default function App() {
         strategy: updated.selectionStrategy,
         fallback_triggers: updated.fallbackTriggers,
         continuity_policy: updated.continuityPolicy,
+        portability_policy: updated.portabilityPolicy,
+        cache_affinity: updated.cacheAffinity,
         sticky_routing: updated.stickyRouting,
         targets: updated.targets.map((t) => ({
           account_id: t.accountId || null,

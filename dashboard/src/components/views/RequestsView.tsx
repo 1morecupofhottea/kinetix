@@ -13,6 +13,29 @@ export const RequestsView: React.FC<RequestsViewProps> = ({ requests, liveReques
   const [filterText, setFilterText] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'fallback_recovered' | 'rate_limited'>('all');
   const [selectedRequest, setSelectedRequest] = useState<RequestLog | null>(null);
+  const [trace, setTrace] = useState<any | null>(null);
+  const [diagnostics, setDiagnostics] = useState<any | null>(null);
+  const [panel, setPanel] = useState<'trace' | 'diagnostics' | null>(null);
+  const [panelError, setPanelError] = useState<string | null>(null);
+
+  const loadTrace = () => {
+    if (!selectedRequest) return;
+    setPanelError(null);
+    setPanel('trace');
+    fetch(`/admin/api/requests/${selectedRequest.requestId}/route-trace`, { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then(setTrace)
+      .catch((e) => setPanelError(`Route trace unavailable (${e}).`));
+  };
+  const loadDiagnostics = () => {
+    if (!selectedRequest) return;
+    setPanelError(null);
+    setPanel('diagnostics');
+    fetch(`/admin/api/requests/${selectedRequest.requestId}/diagnostics`, { credentials: 'same-origin' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+      .then(setDiagnostics)
+      .catch((e) => setPanelError(`Diagnostics unavailable (${e}).`));
+  };
 
   const filtered = requests.filter((r) => {
     if (statusFilter !== 'all' && r.status !== statusFilter) return false;
@@ -362,34 +385,74 @@ export const RequestsView: React.FC<RequestsViewProps> = ({ requests, liveReques
                 </div>
               </div>
 
-              <div className="pt-4 flex justify-between items-center gap-2">
+              <div className="pt-4 flex flex-wrap justify-between items-center gap-2">
+                <div className="flex gap-2">
+                  <SketchButton variant="secondary" onClick={loadTrace}>
+                    Route Trace
+                  </SketchButton>
+                  <SketchButton variant="secondary" onClick={loadDiagnostics}>
+                    Diagnostics
+                  </SketchButton>
+                </div>
                 <SketchButton
                   variant="secondary"
                   onClick={() => {
-                    fetch(`/admin/api/requests/${selectedRequest.requestId}/route-trace`, {
-                      credentials: 'same-origin',
-                    })
-                      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-                      .then((trace) => {
-                        const steps = (trace.steps || [])
-                          .map((s: any) => `${s.stage}${s.target ? ` [${s.target}]` : ''}: ${s.detail || ''}`)
-                          .join('\n');
-                        window.alert(
-                          `Route Trace for ${selectedRequest.requestId}\n\n${steps}\n\nWarnings:\n${(trace.warnings || []).join('\n') || '(none)'}`,
-                        );
-                      })
-                      .catch((e) => window.alert(`Route trace unavailable (${e}).`));
+                    setSelectedRequest(null);
+                    setPanel(null);
+                    setTrace(null);
+                    setDiagnostics(null);
                   }}
-                >
-                  View Route Trace
-                </SketchButton>
-                <SketchButton
-                  variant="secondary"
-                  onClick={() => setSelectedRequest(null)}
                 >
                   Close Inspector
                 </SketchButton>
               </div>
+
+              {panelError && (
+                <div className="mt-3 text-sm text-[#ff4d4d] font-mono">{panelError}</div>
+              )}
+
+              {panel === 'trace' && trace && (
+                <div className="mt-4 border-t-2 border-dashed border-[#2d2d2d]/20 pt-4">
+                  <div className="text-sm font-bold text-[#2d5da1] mb-2">
+                    Route Trace · outcome: {trace.outcome} · commit: {trace.commit_state}
+                  </div>
+                  <div className="font-mono text-xs space-y-1">
+                    {(trace.steps || []).map((s: any, i: number) => (
+                      <div key={i} className="flex gap-2">
+                        <span className="text-[#2d2d2d]/50 w-20 shrink-0">{s.elapsed_ms}ms</span>
+                        <SketchBadge variant={s.stage === 'skip' ? 'red' : s.stage === 'commit' ? 'green' : 'blue'}>
+                          {s.stage}
+                        </SketchBadge>
+                        <span className="flex-1">
+                          {s.target ? <b>{s.target}</b> : null} {s.detail}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  {(trace.warnings || []).length > 0 && (
+                    <div className="mt-3 text-xs text-[#d97706]">
+                      ⚠ {(trace.warnings || []).join('; ')}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {panel === 'diagnostics' && diagnostics && (
+                <div className="mt-4 border-t-2 border-dashed border-[#2d2d2d]/20 pt-4">
+                  <div className="text-sm font-bold text-[#2d5da1] mb-2">
+                    Flight Recorder · {diagnostics.flight_events?.length || 0} events
+                  </div>
+                  <div className="font-mono text-xs space-y-1">
+                    {(diagnostics.flight_events || []).map((e: any, i: number) => (
+                      <div key={i} className="flex gap-2">
+                        <span className="text-[#2d2d2d]/50 w-16 shrink-0">{e.elapsed_ms}ms</span>
+                        <span className="text-[#2e7d32] w-44 shrink-0">{e.event}</span>
+                        <span className="flex-1">{e.detail}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </WobblyCard>
           </div>
         </div>

@@ -151,6 +151,8 @@ export function mapRoute(j: any): Route {
       weight: num(x.weight, 1),
     })),
     continuityPolicy: (j.continuity_policy as Route['continuityPolicy']) || 'strip',
+    portabilityPolicy: (j.portability_policy as Route['portabilityPolicy']) || 'strip_with_warning',
+    cacheAffinity: !!j.cache_affinity,
     stickyRouting: !!j.sticky_routing,
     totalHops: 0,
     status: allExhausted ? 'all_exhausted' : j.enabled === false ? 'degraded' : 'active',
