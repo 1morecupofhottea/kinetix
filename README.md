@@ -179,7 +179,12 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
 - Flight-recorder coverage (FR-13.1) extended to `upstream_first_frame`,
   `reasoning_event`, `tool_call_event`, and `cancellation_issued`.
 
+- Per-key IP allowlist (FR-3.4): exact addresses or CIDR ranges evaluated
+  against trusted ingress headers (`CF-Connecting-IP`, then the first
+  `X-Forwarded-For` hop, then `X-Real-IP`); fails closed when an allowlist is set
+  but no client IP can be determined.
+
 **Deferred** (documented, not silently dropped): local response caching (removed
 from v1, FR-7.6), budget reservation (FR-6.9), and the M4 polish items
-(config export/import FR-10.12, per-key IP allowlist FR-3.4, webhook alerts
-FR-6.6/12.17). See the r4 requirements document for the full delta.
+(config export/import FR-10.12, webhook alerts FR-6.6/12.17). See the r4
+requirements document for the full delta.

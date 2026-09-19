@@ -69,7 +69,10 @@ async fn handle(
     // Keep the raw body for same-format passthrough (FR-2.7, FR-2.10).
     req.raw_body = Some(raw_body);
 
-    // 3. Enforce per-key limits and budgets.
+    // 3. Enforce per-key IP allowlist (FR-3.4) and limits/budgets.
+    if let Err(e) = limits::enforce_ip(&key, limits::client_ip(&headers)) {
+        return error_response(format, &request_id, e);
+    }
     if let Err(e) = limits::enforce(&state.pool, &key, &req.requested_model).await {
         return error_response(format, &request_id, e);
     }
@@ -153,6 +156,9 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> R
         Ok(k) => k,
         Err(e) => return error_response(format, &new_request_id(), e),
     };
+    if let Err(e) = limits::enforce_ip(&key, limits::client_ip(&headers)) {
+        return error_response(format, &new_request_id(), e);
+    }
 
     let body = frontends::models::models_body(format, &state.registry, &key.allowed_models());
     Json(body).into_response()
