@@ -1,31 +1,58 @@
 #!/usr/bin/env bash
-# Kinetix CI gate (NFR-1.8, NFR-3.7, NFR-5.5).
+# Kinetix local CI gate — a faithful mirror of .github/workflows/ci.yml.
 #
-# Runs the checks that must pass before merge: formatting, lints, the unit +
-# protocol-torture/fuzz suite, and (when installed) dependency/license auditing.
-# The synthetic benchmark is separate (scripts/bench.sh) because it is slower.
+# Run this BEFORE every commit/push so the remote CI is green on the first try:
+#
+#     scripts/ci.sh            # full gate (fmt, clippy, tests, release, smoke, bench, deny, dashboard)
+#     scripts/ci.sh --fast     # everything except the release build, smoke, bench and dashboard
+#
+# NFR-1.8, NFR-3.7, NFR-5.5, NFR-7.1.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-echo "==> cargo fmt --check"
+FAST=0
+[ "${1:-}" = "--fast" ] && FAST=1
+
+step() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
+
+step "cargo fmt --check"
 cargo fmt --all -- --check
 
-echo "==> cargo clippy (deny warnings on the data path is aspirational; report only)"
+step "cargo clippy --all-targets"
 cargo clippy --all-targets 2>&1 | tail -1
 
-echo "==> cargo test (unit + torture/fuzz)"
+step "cargo test (unit + protocol torture/fuzz)"
 cargo test --quiet
 
-echo "==> cargo build --release"
-cargo build --release 2>&1 | tail -1
-
-if command -v cargo-deny >/dev/null 2>&1; then
-  echo "==> cargo deny check (licenses, advisories, bans)"
-  cargo deny check
-else
-  echo "==> cargo-deny not installed; skipping license/advisory check"
-  echo "    install with: cargo install cargo-deny"
+if [ "$FAST" = "1" ]; then
+  step "cargo-deny check"
+  if command -v cargo-deny >/dev/null 2>&1; then cargo deny check; else echo "cargo-deny not installed; skipping"; fi
+  printf '\n\033[1;32m==> fast CI checks passed\033[0m\n'
+  exit 0
 fi
 
-echo "==> CI checks passed"
+step "cargo build --release (NFR-7.1)"
+cargo build --release 2>&1 | tail -1
+
+# The dashboard bundle is embedded into the binary via rust-embed; CI builds it
+# before any cargo step. Rebuild + re-embed it here so the check is faithful.
+step "dashboard: npm ci + tsc + build (embedded assets)"
+( cd dashboard && npm ci --silent && npx tsc --noEmit && npm run build >/dev/null )
+touch src/assets.rs
+cargo build 2>&1 | tail -1
+
+step "end-to-end smoke (FR-9.2, FR-9.4)"
+scripts/smoke.sh 127.0.0.1:8180 2>&1 | tail -3
+
+step "benchmark matrix (NFR-1)"
+scripts/bench-rust.sh "1 10 100" 500 2>&1 | tail -5
+
+step "cargo-deny check (advisories, licenses, bans, sources)"
+if command -v cargo-deny >/dev/null 2>&1; then
+  cargo deny check 2>&1 | tail -1
+else
+  echo "cargo-deny not installed; skipping (install: cargo install cargo-deny)"
+fi
+
+printf '\n\033[1;32m==> local CI checks passed\033[0m\n'
