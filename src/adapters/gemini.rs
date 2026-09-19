@@ -281,14 +281,11 @@ impl Adapter for GeminiAdapter {
 
     fn build_url(&self, ctx: &UpstreamContext<'_>) -> Result<String, ProxyError> {
         let base = ctx.provider.base_url.trim_end_matches('/');
-        let method = if ctx.model.enabled == 0 {
-            "generateContent"
-        } else {
-            "streamGenerateContent"
-        };
+        // Streaming-first: Kinetix always consumes an upstream stream (the
+        // non-streaming path aggregates it), so always use the streaming method.
         Ok(format!(
-            "{base}/models/{}:{}?alt=sse",
-            ctx.model.upstream_id, method
+            "{base}/models/{}:streamGenerateContent?alt=sse",
+            ctx.model.upstream_id
         ))
     }
 
