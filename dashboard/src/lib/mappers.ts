@@ -26,6 +26,7 @@ export function mapKey(j: any): VirtualKey {
     owner: str(j.owner),
     tag: str(j.tag),
     allowedModels: Array.isArray(j.allowed_models) ? j.allowed_models : ['*'],
+    allowedProviders: Array.isArray(j.allowed_providers) ? j.allowed_providers : [],
     rpmLimit: num(j.rpm_limit, 0),
     tpmLimit: num(j.tpm_limit, 0),
     dailyBudget: num(j.daily_budget, 0),

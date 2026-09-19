@@ -1942,6 +1942,16 @@ pub struct DryRunRequest {
     pub has_reasoning: bool,
     #[serde(default)]
     pub input_tokens: Option<u64>,
+    /// Providers the calling key is restricted to (FR-12.19); empty = no
+    /// restriction. The dashboard passes the selected key's allowlist so the
+    /// dry run reflects access restrictions, not just predicate/capability.
+    #[serde(default)]
+    pub allowed_providers: Vec<String>,
+    /// Whether the descriptor's key/account soft quota is already reached
+    /// (FR-12.8). When true, candidates are marked ineligible for the same
+    /// reason the data path would skip them.
+    #[serde(default)]
+    pub soft_quota_reached: bool,
 }
 
 pub async fn dry_run(
@@ -2034,9 +2044,34 @@ pub async fn dry_run(
             .context_window
             .map(|c| c <= 0 || request_facts.input_tokens <= c as u64)
             .unwrap_or(true);
-        let would_select = elig.eligible && healthy && caps_ok && ctx_ok;
+        let provider_allowed = descriptor.allowed_providers.is_empty()
+            || descriptor.allowed_providers.contains(&t.provider.id);
+        let quota_ok = !descriptor.soft_quota_reached;
+        let would_select =
+            elig.eligible && healthy && caps_ok && ctx_ok && provider_allowed && quota_ok;
         if would_select && selected.is_none() {
             selected = Some(format!("{} @ {}", t.model.display_name, t.account.label));
+        }
+        // Enumerate the reasons a candidate is not selected so the dry run is
+        // explainable (FR-8.7), not just a boolean.
+        let mut reasons: Vec<&str> = Vec::new();
+        if !elig.eligible {
+            reasons.push("predicate");
+        }
+        if !healthy {
+            reasons.push("account_state");
+        }
+        if !caps_ok {
+            reasons.push("capabilities");
+        }
+        if !ctx_ok {
+            reasons.push("context_window");
+        }
+        if !provider_allowed {
+            reasons.push("provider_not_permitted");
+        }
+        if !quota_ok {
+            reasons.push("soft_quota");
         }
         candidates.push(serde_json::json!({
             "target": format!("{} @ {}", t.model.display_name, t.account.label),
@@ -2054,7 +2089,10 @@ pub async fn dry_run(
             "predicate_eligible": elig.eligible,
             "capability_eligible": caps_ok,
             "context_eligible": ctx_ok,
+            "provider_permitted": provider_allowed,
+            "quota_available": quota_ok,
             "eligible": would_select,
+            "not_selected_reasons": reasons,
         }));
     }
 

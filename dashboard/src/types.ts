@@ -7,6 +7,7 @@ export interface VirtualKey {
   owner: string;
   tag: string;
   allowedModels: string[]; // ['*'] or list of model IDs / aliases / routes
+  allowedProviders: string[]; // [] = no provider restriction (FR-12.19)
   rpmLimit: number;
   tpmLimit: number;
   dailyBudget: number; // USD

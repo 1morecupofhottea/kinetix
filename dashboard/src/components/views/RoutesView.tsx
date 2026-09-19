@@ -9,6 +9,9 @@ interface RoutesViewProps {
   routes: Route[];
   accounts: Account[];
   models: ModelConfig[];
+  /** Providers the selected virtual key is restricted to (FR-12.19); empty =
+   *  no restriction. Used by the Dry Run to reflect access restrictions. */
+  allowedProviders?: string[];
   onAddRoute: (newRoute: Route) => void;
   onUpdateRoute: (updated: Route) => void;
   onDeleteRoute: (routeId: string) => void;
@@ -18,6 +21,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
   routes,
   accounts,
   models,
+  allowedProviders,
   onAddRoute,
   onUpdateRoute,
   onDeleteRoute,
@@ -50,6 +54,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
         has_images: false,
         has_reasoning: false,
         input_tokens: 1000,
+        allowed_providers: allowedProviders ?? [],
       });
       setDryRunResult(r);
     } catch (e) {

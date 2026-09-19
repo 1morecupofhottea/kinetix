@@ -48,6 +48,7 @@ export const KeysView: React.FC<KeysViewProps> = ({ keys, onAddKey, onUpdateKeyS
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean),
+      allowedProviders: [],
       rpmLimit: Number(rpmLimit) || 0,
       tpmLimit: Number(tpmLimit) || 0,
       dailyBudget: Number(dailyBudget) || 0,

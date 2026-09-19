@@ -376,6 +376,7 @@ export default function App() {
             routes={routes}
             accounts={accounts}
             models={models}
+            allowedProviders={keys[0]?.allowedProviders ?? []}
             onAddRoute={handleAddRoute}
             onUpdateRoute={handleUpdateRoute}
             onDeleteRoute={handleDeleteRoute}

@@ -1815,11 +1815,35 @@ pub async fn validate_provider(
                 .into(),
         );
     }
+    // Credential-host binding (NFR-3.11): the credential is bound to the
+    // provider's base host plus any explicitly authorized hosts. Flag malformed
+    // entries (a scheme/path/port is not a host) so a misconfigured binding is
+    // caught before Apply.
+    let mut binding: Vec<String> = Vec::new();
+    if let Ok(parsed) = url::Url::parse(&body.base_url) {
+        if let Some(h) = parsed.host_str() {
+            binding.push(h.to_string());
+        }
+    }
+    for entry in body.credential_hosts.split(',') {
+        let host = entry.trim();
+        if host.is_empty() {
+            continue;
+        }
+        if host.contains('/') || host.contains(' ') || host.contains("://") {
+            problems.push(format!(
+                "credential_hosts entry '{host}' is not a bare host (drop the scheme/path)"
+            ));
+        } else {
+            binding.push(host.to_string());
+        }
+    }
     Ok(Json(json!({
         "valid": problems.is_empty(),
         "problems": problems,
         "warnings": warnings,
         "outbound_security": security,
+        "credential_host_binding": binding,
         "note": "Validate only: no provider was created and no upstream call was made (FR-8.6).",
     })))
 }
