@@ -1,0 +1,34 @@
+[Unit]
+Description=Kinetix — multi-protocol LLM proxy
+Documentation=https://github.com/PrightCord/kinetix
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Secrets/config come from an EnvironmentFile so they never live in the unit.
+# See .env.example for the full set of variables.
+EnvironmentFile=/etc/kinetix/kinetix.env
+ExecStart=/usr/local/bin/kinetix
+WorkingDirectory=/var/lib/kinetix
+User=kinetix
+Group=kinetix
+
+# NFR-2.2: supervisor auto-restart with recovery <= 10s.
+Restart=always
+RestartSec=2
+# NFR-2.3: allow in-flight streams to drain on SIGTERM (Kinetix honours
+# KINETIX_SHUTDOWN_GRACE_SECS, default 30s) before the supervisor escalates.
+TimeoutStopSec=45
+
+# Hardening: the process only needs its data directory and outbound network.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/kinetix
+# Kinetix listens on localhost only; cloudflared is the sole ingress (NFR-3.1).
+# No ambient capabilities are required.
+
+[Install]
+WantedBy=multi-user.target

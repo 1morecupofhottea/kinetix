@@ -111,6 +111,12 @@ Tech: Rust + Tokio, Axum 0.8, reqwest (rustls, HTTP/2), SQLite in WAL mode via s
   tool calls, and automatic fallback. CI will run the fixture suite from the
   requirements (FR-9).
 
+## Deployment
+
+See `deploy/README.md` for the full runbook (systemd unit with auto-restart and
+graceful drain, Cloudflare Tunnel + Access setup, backup/restore, upgrades).
+`deploy/kinetix.service` is a ready systemd unit (NFR-2.2/2.3).
+
 ## Status
 
 Milestone 1 (walking skeleton) and Milestone 2 (dashboard, Routes, limits, cost,
