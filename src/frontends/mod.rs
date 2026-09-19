@@ -264,3 +264,46 @@ fn openai_finish_str(f: &FinishReason) -> &str {
         FinishReason::Other(s) => s.as_str(),
     }
 }
+
+/// Reject behaviorally significant client fields that the translation path
+/// cannot faithfully carry (FR-2.8: never silently drop behaviorally significant
+/// client fields). Same-format passthrough preserves these verbatim, so this is
+/// only consulted when translation is required.
+///
+/// Cosmetic/unknown fields are ignored rather than rejected.
+pub fn translation_unsupported(
+    extra: &serde_json::Map<String, serde_json::Value>,
+) -> Option<String> {
+    // Fields that materially change the meaning of a completion and have no
+    // faithful translation into the other supported wire formats.
+    if let Some(n) = extra.get("n").and_then(|v| v.as_u64()) {
+        if n > 1 {
+            return Some(
+                "'n' (multiple completions) is not supported on a translating path; \
+                 remove it or route to a same-format provider"
+                    .to_string(),
+            );
+        }
+    }
+    if extra.contains_key("logprobs") || extra.contains_key("top_logprobs") {
+        return Some("'logprobs'/'top_logprobs' are not supported on a translating path".into());
+    }
+    if let Some(rf) = extra.get("response_format") {
+        // A plain text/json_object hint is safe to drop; a json_schema constraint
+        // is not enforceable through the other formats.
+        let has_schema = rf.get("json_schema").map(|v| !v.is_null()).unwrap_or(false)
+            || rf.get("type").and_then(|v| v.as_str()) == Some("json_schema");
+        if has_schema {
+            return Some(
+                "'response_format.json_schema' is not enforceable on a translating path".into(),
+            );
+        }
+    }
+    if extra.contains_key("modalities") || extra.contains_key("audio") {
+        return Some("'modalities'/'audio' output are not supported on a translating path".into());
+    }
+    if extra.contains_key("prediction") {
+        return Some("'prediction' is not supported on a translating path".into());
+    }
+    None
+}

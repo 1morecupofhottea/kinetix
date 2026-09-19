@@ -468,6 +468,22 @@ pub async fn run(
         let use_passthrough =
             req.raw_body.is_some() && passthrough::is_passthrough(format, target.provider.wire());
 
+        // Never silently drop behaviorally significant client fields on a
+        // translating path (FR-2.8). A request-level failure; never retried.
+        if !use_passthrough {
+            if let Some(msg) = crate::frontends::translation_unsupported(&req.extra) {
+                trace.finish("rejected");
+                state
+                    .live
+                    .finish(&meta.request_id, "rejected", 0, None, None);
+                let _ = db::insert_route_trace(&state.pool, &trace).await;
+                return Err(ProxyError::new(
+                    crate::types::ErrorKind::Unsupported,
+                    format!("request uses a feature that cannot be translated: {msg}"),
+                ));
+            }
+        }
+
         // Bounded exponential backoff between attempts (FR-4.4). Never applied
         // before the first attempt, and capped so a healthy pool is not slowed.
         if attempts_done > 0 {

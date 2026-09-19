@@ -6,6 +6,7 @@ use axum::http::StatusCode;
 use axum::response::Response;
 use serde_json::{json, Value};
 
+use crate::db::ModelRow;
 use crate::frontends::FrontendFormat;
 use crate::registry::Registry;
 use crate::types::{ErrorKind, ProxyError};
@@ -42,38 +43,39 @@ pub fn models_body(format: FrontendFormat, registry: &Registry, key_allowed: &[S
     let created = chrono::Utc::now().timestamp();
 
     // Client-facing names: aliases and routes first, then bare upstream model IDs.
-    let mut entries: Vec<(String, Option<i64>, Option<i64>)> = Vec::new();
+    let mut entries: Vec<(String, Option<i64>, Option<i64>, Option<Value>)> = Vec::new();
     for alias in snap.aliases.values() {
-        let (ctx, max) = match alias.target_type.as_str() {
-            "route" => snap
-                .routes
-                .get(&alias.target_id)
-                .map(|_| (None, None))
-                .unwrap_or((None, None)),
+        let (ctx, max, caps) = match alias.target_type.as_str() {
+            "route" => (None, None, None),
             _ => snap
                 .models
                 .get(&alias.target_id)
-                .map(|m| (m.context_window, m.max_output_tokens))
-                .unwrap_or((None, None)),
+                .map(|m| (m.context_window, m.max_output_tokens, declared_caps(m)))
+                .unwrap_or((None, None, None)),
         };
-        entries.push((alias.alias.clone(), ctx, max));
+        entries.push((alias.alias.clone(), ctx, max, caps));
     }
     for route in snap.routes.values() {
-        if route.enabled != 0 && !entries.iter().any(|(n, _, _)| n == &route.name) {
-            entries.push((route.name.clone(), None, None));
+        if route.enabled != 0 && !entries.iter().any(|(n, _, _, _)| n == &route.name) {
+            entries.push((route.name.clone(), None, None, None));
         }
     }
     for m in snap.models.values() {
         if m.enabled == 0 {
             continue;
         }
-        if !entries.iter().any(|(n, _, _)| n == &m.upstream_id) {
-            entries.push((m.upstream_id.clone(), m.context_window, m.max_output_tokens));
+        if !entries.iter().any(|(n, _, _, _)| n == &m.upstream_id) {
+            entries.push((
+                m.upstream_id.clone(),
+                m.context_window,
+                m.max_output_tokens,
+                declared_caps(m),
+            ));
         }
     }
 
     // Filter by the virtual key's allowed models (FR-10.10).
-    entries.retain(|(name, _, _)| {
+    entries.retain(|(name, _, _, _)| {
         if key_allowed.iter().any(|a| a == "*") {
             return true;
         }
@@ -90,7 +92,7 @@ pub fn models_body(format: FrontendFormat, registry: &Registry, key_allowed: &[S
         FrontendFormat::OpenAi => {
             let data: Vec<Value> = entries
                 .iter()
-                .map(|(name, ctx, max)| {
+                .map(|(name, ctx, max, caps)| {
                     let mut obj = json!({
                         "id": name,
                         "object": "model",
@@ -103,6 +105,11 @@ pub fn models_body(format: FrontendFormat, registry: &Registry, key_allowed: &[S
                     if let Some(m) = max {
                         obj["max_output_tokens"] = json!(m);
                     }
+                    // Only explicitly configured capabilities are exposed; unknown
+                    // metadata stays omitted, never assumed (FR-10.10).
+                    if let Some(c) = caps {
+                        obj["capabilities"] = c.clone();
+                    }
                     obj
                 })
                 .collect();
@@ -111,7 +118,7 @@ pub fn models_body(format: FrontendFormat, registry: &Registry, key_allowed: &[S
         FrontendFormat::Anthropic => {
             let data: Vec<Value> = entries
                 .iter()
-                .map(|(name, _, _)| {
+                .map(|(name, _, _, _)| {
                     json!({
                         "type": "model",
                         "id": name,
@@ -120,8 +127,8 @@ pub fn models_body(format: FrontendFormat, registry: &Registry, key_allowed: &[S
                     })
                 })
                 .collect();
-            let first = entries.first().map(|(n, _, _)| n.clone());
-            let last = entries.last().map(|(n, _, _)| n.clone());
+            let first = entries.first().map(|(n, _, _, _)| n.clone());
+            let last = entries.last().map(|(n, _, _, _)| n.clone());
             json!({
                 "data": data,
                 "has_more": false,
@@ -129,6 +136,24 @@ pub fn models_body(format: FrontendFormat, registry: &Registry, key_allowed: &[S
                 "last_id": last,
             })
         }
+    }
+}
+
+/// The explicitly declared boolean capabilities of a model, or `None` when the
+/// model declares no capability metadata. Unknown metadata is never invented.
+fn declared_caps(m: &ModelRow) -> Option<Value> {
+    let v: Value = serde_json::from_str(&m.capabilities).ok()?;
+    let obj = v.as_object()?;
+    let mut out = serde_json::Map::new();
+    for (k, val) in obj {
+        if val.is_boolean() {
+            out.insert(k.clone(), val.clone());
+        }
+    }
+    if out.is_empty() {
+        None
+    } else {
+        Some(Value::Object(out))
     }
 }
 
