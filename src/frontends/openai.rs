@@ -456,8 +456,12 @@ impl OpenAiEncoder {
                 "code": "stream_error"
             }
         });
+        // Emit the error object, then an explicit error finish_reason so a
+        // client cannot mistake a truncated stream for a clean completion
+        // (FR-4.6, NFR-2.9: no silent splicing), then terminate the SSE stream.
         vec![
             sse_frame(None, &frame.to_string()),
+            self.chunk(json!({}), Some("error")),
             Bytes::from_static(b"data: [DONE]\n\n"),
         ]
     }
