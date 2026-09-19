@@ -302,7 +302,7 @@ export const KeysView: React.FC<KeysViewProps> = ({ keys, onAddKey, onUpdateKeyS
       "baseUrl": "${window.location.origin}/v1",
       "apiKey": "<paste the sk-kinetix-... key shown at creation>",
       "api": "openai-completions",
-      "models": ["coder", "fast"]
+      "models": ["coder", "free"]
     }
   }
 }`}</pre>
@@ -379,7 +379,7 @@ export const KeysView: React.FC<KeysViewProps> = ({ keys, onAddKey, onUpdateKeyS
                   </label>
                   <input
                     type="text"
-                    placeholder="* or coder, fast, gemini-*"
+                    placeholder="* or coder, free, gemini-*"
                     value={allowedModels}
                     onChange={(e) => setAllowedModels(e.target.value)}
                     className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
