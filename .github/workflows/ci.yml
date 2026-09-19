@@ -23,6 +23,20 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # The dashboard bundle is embedded into the binary via rust-embed, so it
+      # must exist before any cargo step compiles the crate.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Build dashboard (embedded assets)
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+
       - name: Formatting
         run: cargo fmt --all -- --check
 
