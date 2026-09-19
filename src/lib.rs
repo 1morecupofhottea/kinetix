@@ -1,0 +1,41 @@
+//! Kinetix: a multi-protocol LLM proxy.
+//!
+//! OpenAI Chat Completions and Anthropic Messages in (streaming first),
+//! admin-configured upstreams out (Gemini, OpenAI-compatible, Anthropic), with
+//! virtual keys, account pools with automatic fallback Routes, and cost
+//! tracking.
+//!
+//! The crate is exposed as a library so that integration tests under `tests/`
+//! can drive the wire encoders/decoders directly (NFR-5.5 golden wire-output
+//! fixtures, FR-9.1 fixture suite) in addition to the unit and torture tests
+//! embedded in the modules.
+
+pub mod adapters;
+pub mod admin;
+pub mod alerts;
+pub mod api;
+pub mod app;
+pub mod assets;
+pub mod auth;
+pub mod bootstrap;
+pub mod config;
+pub mod cost;
+pub mod credentials;
+pub mod crypto;
+pub mod db;
+pub mod frontends;
+pub mod limits;
+pub mod live;
+pub mod logqueue;
+pub mod passthrough;
+pub mod pipeline;
+pub mod pool;
+pub mod predicate;
+pub mod registry;
+pub mod router;
+pub mod sse;
+#[cfg(test)]
+mod torture;
+pub mod trace;
+pub mod types;
+pub mod validate;

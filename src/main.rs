@@ -2,36 +2,10 @@
 //! Messages in (streaming first), admin-configured upstreams out (Gemini,
 //! OpenAI-compatible, Anthropic), with virtual keys, account pools with
 //! automatic fallback routes, and cost tracking.
-
-mod adapters;
-mod admin;
-mod alerts;
-mod api;
-mod app;
-mod assets;
-mod auth;
-mod bootstrap;
-mod config;
-mod cost;
-mod credentials;
-mod crypto;
-mod db;
-mod frontends;
-mod limits;
-mod live;
-mod logqueue;
-mod passthrough;
-mod pipeline;
-mod pool;
-mod predicate;
-mod registry;
-mod router;
-mod sse;
-#[cfg(test)]
-mod torture;
-mod trace;
-mod types;
-mod validate;
+//!
+//! This binary is a thin wrapper around the `kinetix` library crate (see
+//! `src/lib.rs`), which holds all modules so that integration tests can drive
+//! the wire encoders/decoders directly.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -39,11 +13,12 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use crate::app::AppState;
-use crate::config::Config;
-use crate::crypto::Crypto;
-use crate::logqueue::UsageLogQueue;
-use crate::registry::Registry;
+use kinetix::app::AppState;
+use kinetix::config::Config;
+use kinetix::crypto::Crypto;
+use kinetix::logqueue::UsageLogQueue;
+use kinetix::registry::Registry;
+use kinetix::{alerts, bootstrap, db, router};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -62,7 +37,7 @@ async fn main() -> Result<()> {
     // Optional bootstrap seed (first run only).
     if let Some(path) = &config.bootstrap_file {
         if path.exists() {
-            let boot = config::load_bootstrap(path)?;
+            let boot = kinetix::config::load_bootstrap(path)?;
             match bootstrap::seed_if_empty(&pool, &crypto, &boot).await {
                 Ok(generated) => {
                     for (name, key) in generated {
