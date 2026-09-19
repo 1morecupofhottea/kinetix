@@ -108,6 +108,22 @@ pub async fn scheduled_backup(
     if let Err(e) = std::fs::create_dir_all(&backup_dir) {
         return Err(format!("cannot create backup dir: {e}"));
     }
+    // NFR-2.4: document the restore path next to the backups so recovery does
+    // not depend on tribal knowledge (overwritten on each run).
+    let readme = "Kinetix database backups\n\
+=======================\n\n\
+These files are transactionally-consistent snapshots written by `VACUUM INTO`\n\
+(pre-migration snapshots are plain file copies taken before migrations run).\n\n\
+To restore:\n\n\
+  1. Stop Kinetix (systemctl stop kinetix).\n\
+  2. Remove the live database and its WAL sidecars:\n\
+       rm -f /var/lib/kinetix/kinetix.db /var/lib/kinetix/kinetix.db-wal /var/lib/kinetix/kinetix.db-shm\n\
+  3. Copy the chosen snapshot into place:\n\
+       cp <snapshot>.db /var/lib/kinetix/kinetix.db\n\
+  4. Ensure ownership matches the service user (chown kinetix:kinetix).\n\
+  5. Start Kinetix (systemctl start kinetix); migrations re-run automatically.\n\n\
+Retention: the newest 14 scheduled snapshots are kept; older ones are pruned.\n";
+    let _ = std::fs::write(backup_dir.join("RESTORE.txt"), readme);
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let dst = backup_dir.join(format!("kinetix-{stamp}.db"));
     let sql = format!(
