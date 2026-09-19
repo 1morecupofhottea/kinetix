@@ -3,12 +3,14 @@ import { Key, Plus, Copy, Check, ShieldAlert, Sparkles, Terminal, Trash2, Power 
 import { VirtualKey } from '../../types';
 import { WobblyCard, SketchButton, SketchBadge } from '../HandDrawnElements';
 import { formatCurrency, formatTokens } from '../../lib/designSystem';
+import { useConfirm } from '../../lib/useConfirm';
 
 interface KeysViewProps {
   keys: VirtualKey[];
   onAddKey: (newKey: VirtualKey) => Promise<{ key: VirtualKey; fullKey: string } | null>;
   onUpdateKeyStatus: (id: string, status: 'active' | 'disabled' | 'revoked') => void;
   onUpdateKeyIps: (id: string, ips: string[]) => void;
+  onDeleteKey?: (id: string) => void;
 }
 
 /** Inline per-key IP allowlist editor (FR-3.4). Empty means "no restriction". */
@@ -76,7 +78,9 @@ export const KeysView: React.FC<KeysViewProps> = ({
   onAddKey,
   onUpdateKeyStatus,
   onUpdateKeyIps,
+  onDeleteKey,
 }) => {
+  const { confirm, confirmNode } = useConfirm();
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<{ name: string; key: string } | null>(null);
@@ -144,6 +148,7 @@ export const KeysView: React.FC<KeysViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {confirmNode}
       {/* Top Banner & Action */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
@@ -346,9 +351,20 @@ export const KeysView: React.FC<KeysViewProps> = ({
                   )}
 
                   <button
-                    onClick={() => onUpdateKeyStatus(k.id, 'revoked')}
+                    onClick={async () => {
+                      const ok = await confirm({
+                        title: `Revoke and delete "${k.name}"?`,
+                        message:
+                          'The key is permanently removed from the database and its usage logs are deleted. Any client using it will immediately receive 401.',
+                        confirmLabel: 'Revoke & Delete',
+                        danger: true,
+                      });
+                      if (!ok) return;
+                      if (onDeleteKey) onDeleteKey(k.id);
+                      else onUpdateKeyStatus(k.id, 'revoked');
+                    }}
                     className="px-2 py-1 text-xs font-heading font-bold border border-[#2d2d2d] bg-white hover:bg-[#ff4d4d] hover:text-white rounded flex items-center gap-1 cursor-pointer whitespace-nowrap"
-                    title="Permanently revoke key"
+                    title="Permanently revoke and delete key"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                     Revoke

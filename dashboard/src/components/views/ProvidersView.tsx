@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Server, Plus, RefreshCw, CheckCircle2, Globe, Cpu, Sliders, ExternalLink, HelpCircle, Trash2, X } from 'lucide-react';
+import { Server, Plus, RefreshCw, CheckCircle2, Globe, Cpu, Sliders, ExternalLink, HelpCircle, Trash2, X, Pencil } from 'lucide-react';
 import { Provider, ModelConfig } from '../../types';
 import { WobblyCard, SketchButton, SketchBadge } from '../HandDrawnElements';
 import { DESIGN_TOKENS } from '../../lib/designSystem';
@@ -11,6 +11,7 @@ interface ProvidersViewProps {
   onAddProvider: (provider: Provider) => Promise<void> | void;
   onUpdateProvider: (providerId: string, provider: Provider) => Promise<void>;
   onAddModel: (model: ModelConfig) => void;
+  onUpdateModel: (model: ModelConfig) => void;
   onDeleteModel: (modelId: string) => void;
   onDeleteProvider: (providerId: string) => void;
   onRefresh?: () => void;
@@ -22,6 +23,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   onAddProvider,
   onUpdateProvider,
   onAddModel,
+  onUpdateModel,
   onDeleteModel,
   onDeleteProvider,
   onRefresh,
@@ -83,6 +85,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   const [capTools, setCapTools] = useState(true);
   const [modelValidation, setModelValidation] = useState<{ valid: boolean; problems: string[]; warnings: string[] } | null>(null);
   const [validatingModel, setValidatingModel] = useState(false);
+  const [editingModelId, setEditingModelId] = useState<string | null>(null);
 
   const activeProvider = providers.find((p) => p.id === selectedProviderId) || providers[0];
   const providerModels = models.filter((m) => m.providerId === activeProvider?.id);
@@ -275,12 +278,44 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     }
   };
 
-  const handleCreateCustomModel = (e: React.FormEvent) => {
+  /** Prefill the model form for editing an existing model. */
+  const openEditModel = (m: ModelConfig) => {
+    setEditingModelId(m.id);
+    setModelUpstreamId(m.upstreamModelId);
+    setModelDisplayName(m.displayName);
+    setModelContextWindow(m.contextWindow);
+    setModelMaxOutput(m.maxOutputTokens);
+    setModelInputPrice(m.prices.inputPer1M || 0);
+    setModelOutputPrice(m.prices.outputPer1M || 0);
+    setCapText(m.capabilities.text);
+    setCapVision(m.capabilities.vision);
+    setCapReasoning(m.capabilities.reasoning);
+    setCapTools(m.capabilities.toolCalling);
+    setModelValidation(null);
+    setShowAddModelModal(true);
+  };
+
+  const resetModelForm = () => {
+    setEditingModelId(null);
+    setModelUpstreamId('');
+    setModelDisplayName('');
+    setModelContextWindow(128000);
+    setModelMaxOutput(8192);
+    setModelInputPrice(1.0);
+    setModelOutputPrice(4.0);
+    setCapText(true);
+    setCapVision(true);
+    setCapReasoning(false);
+    setCapTools(true);
+    setModelValidation(null);
+  };
+
+  const handleCreateCustomModel = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!modelUpstreamId.trim()) return;
 
     const newModel: ModelConfig = {
-      id: '',
+      id: editingModelId || '',
       providerId: activeProvider.id,
       providerName: activeProvider.name,
       upstreamModelId: modelUpstreamId.trim(),
@@ -308,11 +343,13 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
       },
     };
 
-    onAddModel(newModel);
+    if (editingModelId) {
+      onUpdateModel(newModel);
+    } else {
+      onAddModel(newModel);
+    }
     setShowAddModelModal(false);
-    setModelUpstreamId('');
-    setModelDisplayName('');
-    setModelValidation(null);
+    resetModelForm();
   };
 
   const modelBody = () => ({
@@ -672,14 +709,24 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                                 </button>
                               </div>
                             ) : (
-                              <button
-                                onClick={() => setConfirmDeleteModelId(m.id)}
-                                className="px-2 py-1 text-xs font-heading font-bold text-[#ff4d4d] hover:bg-[#ffebee] border border-[#ff4d4d]/40 hover:border-[#ff4d4d] rounded flex items-center gap-1 cursor-pointer transition-colors"
-                                title="Remove model from provider"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                                <span>Remove</span>
-                              </button>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => openEditModel(m)}
+                                  className="px-2 py-1 text-xs font-heading font-bold text-[#2d5da1] hover:bg-[#e3ecf7] border border-[#2d5da1]/40 hover:border-[#2d5da1] rounded flex items-center gap-1 cursor-pointer transition-colors"
+                                  title="Edit model configuration"
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                  <span>Edit</span>
+                                </button>
+                                <button
+                                  onClick={() => setConfirmDeleteModelId(m.id)}
+                                  className="px-2 py-1 text-xs font-heading font-bold text-[#ff4d4d] hover:bg-[#ffebee] border border-[#ff4d4d]/40 hover:border-[#ff4d4d] rounded flex items-center gap-1 cursor-pointer transition-colors"
+                                  title="Remove model from provider"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                  <span>Remove</span>
+                                </button>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -1026,7 +1073,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
 
               <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] mb-1 flex items-center gap-2">
                 <Cpu className="w-6 h-6 text-[#ff4d4d]" />
-                Configure Model for {activeProvider.name}
+                {editingModelId ? `Edit Model for ${activeProvider.name}` : `Configure Model for ${activeProvider.name}`}
               </h3>
               <p className="text-sm font-body text-[#2d2d2d]/80 mb-4">
                 Define the model identifier, token capabilities, and per-million token pricing.
@@ -1185,7 +1232,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     {validatingModel ? 'Validating…' : 'Validate (Dry Run)'}
                   </SketchButton>
                   <SketchButton type="submit" variant="primary" className="font-bold">
-                    Save Model Configuration
+                    {editingModelId ? 'Save Changes' : 'Save Model Configuration'}
                   </SketchButton>
                 </div>
                 {modelValidation && (

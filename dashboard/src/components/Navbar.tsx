@@ -16,12 +16,13 @@ import {
   RefreshCw,
   Menu,
   X,
+  Settings,
 } from 'lucide-react';
 import { ProxyMetrics } from '../types';
 import { formatCurrency } from '../lib/designSystem';
 import { SketchButton, SketchBadge } from './HandDrawnElements';
 
-export type NavTab = 'keys' | 'routes' | 'providers' | 'accounts' | 'usage' | 'requests' | 'aliases' | 'audit';
+export type NavTab = 'keys' | 'routes' | 'providers' | 'accounts' | 'usage' | 'requests' | 'aliases' | 'audit' | 'settings';
 
 export const TAB_ROUTES: Record<NavTab, string> = {
   keys: '/admin/keys',
@@ -32,6 +33,7 @@ export const TAB_ROUTES: Record<NavTab, string> = {
   requests: '/admin/requests',
   aliases: '/admin/aliases',
   audit: '/admin/audit',
+  settings: '/admin/settings',
 };
 
 interface NavItem {
@@ -70,6 +72,10 @@ export const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
       { id: 'requests', label: 'Request Inspector', icon: <Radio className="w-5 h-5" />, badge: 'Live' },
       { id: 'audit', label: 'Audit Log', icon: <History className="w-5 h-5" /> },
     ],
+  },
+  {
+    label: 'System',
+    items: [{ id: 'settings', label: 'Settings & Security', icon: <Settings className="w-5 h-5" /> }],
   },
 ];
 

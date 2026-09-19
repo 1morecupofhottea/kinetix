@@ -549,13 +549,13 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 text-center text-xs font-mono pt-1">
-                    <div className="bg-white p-1 border border-[#2d2d2d] rounded">
+                    <div className="bg-white p-1 border border-[#2d2d2d] rounded min-w-0">
                       Status: <strong>{meta.statusCode}</strong>
                     </div>
-                    <div className="bg-white p-1 border border-[#2d2d2d] rounded">
+                    <div className="bg-white p-1 border border-[#2d2d2d] rounded min-w-0 truncate" title={`${meta.ttftMs}ms`}>
                       TTFT: <strong>{meta.ttftMs}ms</strong>
                     </div>
-                    <div className="bg-white p-1 border border-[#2d2d2d] rounded">
+                    <div className="bg-white p-1 border border-[#2d2d2d] rounded min-w-0 truncate" title={`${meta.latencyMs}ms`}>
                       Total: <strong>{meta.latencyMs}ms</strong>
                     </div>
                   </div>

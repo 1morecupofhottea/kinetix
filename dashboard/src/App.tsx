@@ -22,7 +22,8 @@ import { AliasesView } from './components/views/AliasesView';
 import { AuditView } from './components/views/AuditView';
 import { SquiggleDivider, SketchButton, SketchBadge } from './components/HandDrawnElements';
 import { EMPTY_METRICS } from './lib/mappers';
-import { Kinetix } from './lib/resources';
+import { Kinetix, ExportFile, UsageDay } from './lib/resources';
+import { SettingsView } from './components/views/SettingsView';
 import { ApiError } from './lib/api';
 import {
   VirtualKey,
@@ -68,6 +69,10 @@ export default function App() {
   const [aliases, setAliases] = useState<ModelAlias[]>([]);
   const [requests, setRequests] = useState<RequestLog[]>([]);
   const [liveRequests, setLiveRequests] = useState<LiveRequest[]>([]);
+  const [exportFiles, setExportFiles] = useState<ExportFile[]>([]);
+  const [exportDir, setExportDir] = useState<string>('');
+  const [exportRetentionDays, setExportRetentionDays] = useState<number>(30);
+  const [exportDays, setExportDays] = useState<UsageDay[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [metrics, setMetrics] = useState<ProxyMetrics>(EMPTY_METRICS);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -87,7 +92,7 @@ export default function App() {
   const refresh = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      const [k, p, a, m, c, al, req, aud, met] = await Promise.all([
+      const [k, p, a, m, c, al, req, aud, met, exp] = await Promise.all([
         Kinetix.keys(),
         Kinetix.providers(),
         Kinetix.accounts(),
@@ -97,6 +102,7 @@ export default function App() {
         Kinetix.requests(),
         Kinetix.audit(),
         Kinetix.overview(),
+        Kinetix.exports(),
       ]);
       setKeys(k);
       setProviders(p);
@@ -107,6 +113,10 @@ export default function App() {
       setRequests(req);
       setAuditLogs(aud);
       setMetrics(met);
+      setExportFiles(exp.files);
+      setExportDir(exp.dir);
+      setExportRetentionDays(exp.retention_days);
+      setExportDays(exp.days);
       setLoadError(null);
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
@@ -233,6 +243,8 @@ export default function App() {
   const handleUpdateKeyIps = (id: string, ips: string[]) =>
     withRefresh(() => Kinetix.updateKey(id, { allowed_ips: ips }));
 
+  const handleDeleteKey = (id: string) => withRefresh(() => Kinetix.deleteKey(id));
+
   const handleAddRoute = (newRoute: Route) =>
     withRefresh(() =>
       Kinetix.createRoute({
@@ -341,6 +353,26 @@ export default function App() {
 
   const handleDeleteModel = (modelId: string) => withRefresh(() => Kinetix.deleteModel(modelId));
 
+  const handleUpdateModel = (model: ModelConfig) =>
+    withRefresh(() =>
+      Kinetix.updateModel(model.id, {
+        upstream_id: model.upstreamModelId,
+        display_name: model.displayName,
+        enabled: model.enabled,
+        context_window: model.contextWindow,
+        max_output_tokens: model.maxOutputTokens,
+        capabilities: model.capabilities,
+        prices: {
+          input_per_1m: model.prices.inputPer1M,
+          output_per_1m: model.prices.outputPer1M,
+          cached_per_1m: model.prices.cachedPer1M,
+          thinking_per_1m: model.prices.thinkingPer1M,
+        },
+        parameters: model.parameters,
+        thinking_map: model.thinkingMap,
+      }),
+    );
+
   const handleAddAccount = (acc: Account & { apiKey?: string }) =>
     withRefresh(() =>
       Kinetix.createAccount({
@@ -354,7 +386,15 @@ export default function App() {
     );
 
   const handleUpdateAccount = (acc: Account) =>
-    withRefresh(() => Kinetix.resetAccount(acc.id));
+    withRefresh(() =>
+      Kinetix.updateAccount(acc.id, {
+        label: acc.label,
+        priority: acc.priority,
+        weight: 1,
+        soft_quota_usd: acc.softQuotaSpendLimit ?? null,
+        quota_type: acc.quotaType,
+      }),
+    );
 
   const handleDeleteAccount = (accountId: string) =>
     withRefresh(() => Kinetix.deleteAccount(accountId));
@@ -422,6 +462,7 @@ export default function App() {
             onAddKey={handleAddKey}
             onUpdateKeyStatus={handleUpdateKeyStatus}
             onUpdateKeyIps={handleUpdateKeyIps}
+            onDeleteKey={handleDeleteKey}
           />
         )}
 
@@ -444,6 +485,7 @@ export default function App() {
             onAddProvider={handleAddProvider}
             onUpdateProvider={handleUpdateProvider}
             onAddModel={handleAddModel}
+            onUpdateModel={handleUpdateModel}
             onDeleteModel={handleDeleteModel}
             onDeleteProvider={handleDeleteProvider}
             onRefresh={refresh}
@@ -460,7 +502,20 @@ export default function App() {
           />
         )}
 
-        {activeTab === 'usage' && <UsageView keys={keys} models={models} requests={requests} />}
+        {activeTab === 'usage' && (
+          <UsageView
+            keys={keys}
+            models={models}
+            requests={requests}
+            exportFiles={exportFiles}
+            exportDir={exportDir}
+            exportRetentionDays={exportRetentionDays}
+            exportDays={exportDays}
+            onExportDay={(day) => withRefresh(() => Kinetix.exportDay(day))}
+            onDeleteExport={(name) => withRefresh(() => Kinetix.deleteExport(name))}
+            onRefreshExports={refresh}
+          />
+        )}
 
         {activeTab === 'requests' && (
           <RequestsView requests={requests} liveRequests={liveRequests} />
@@ -477,6 +532,8 @@ export default function App() {
         )}
 
         {activeTab === 'audit' && <AuditView logs={auditLogs} />}
+
+        {activeTab === 'settings' && <SettingsView onLogout={handleLogout} />}
         </main>
 
         <div className="w-full px-4 md:px-8">

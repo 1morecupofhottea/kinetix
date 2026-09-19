@@ -3,6 +3,7 @@ import { Compass, Plus, ArrowRight, Trash2 } from 'lucide-react';
 import { ModelAlias, Route, ModelConfig } from '../../types';
 import { WobblyCard, SketchButton, SketchBadge } from '../HandDrawnElements';
 import { DESIGN_TOKENS } from '../../lib/designSystem';
+import { useConfirm } from '../../lib/useConfirm';
 
 interface AliasesViewProps {
   aliases: ModelAlias[];
@@ -19,6 +20,7 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
   onAddAlias,
   onDeleteAlias,
 }) => {
+  const { confirm, confirmNode } = useConfirm();
   const [showAddModal, setShowAddModal] = useState(false);
   const [aliasName, setAliasName] = useState('');
   const [targetType, setTargetType] = useState<'route' | 'model'>('route');
@@ -55,6 +57,7 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
 
   return (
     <div className="space-y-6">
+      {confirmNode}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <h2 className="text-3xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
@@ -119,7 +122,15 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
 
               <div className="pt-3 border-t border-[#2d2d2d]/20 flex justify-end mt-4">
                 <button
-                  onClick={() => onDeleteAlias(alias.id)}
+                  onClick={async () => {
+                    const ok = await confirm({
+                      title: `Remove alias "${alias.aliasName}"?`,
+                      message: `Clients calling the model name "${alias.aliasName}" will stop resolving. This does not affect the underlying model or route.`,
+                      confirmLabel: 'Remove Alias',
+                      danger: true,
+                    });
+                    if (ok) onDeleteAlias(alias.id);
+                  }}
                   className="text-xs font-mono text-[#ff4d4d] hover:underline flex items-center gap-1 cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />

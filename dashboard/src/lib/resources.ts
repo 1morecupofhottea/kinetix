@@ -43,11 +43,33 @@ export interface TestResult {
   response_preview?: string;
 }
 
+export interface ExportFile {
+  name: string;
+  day: string;
+  kind: string;
+  bytes: number;
+}
+
+export interface UsageDay {
+  day: string;
+  requests: number;
+  tokens: number;
+}
+
 export const Kinetix = {
   // --- session -------------------------------------------------------------
   me: () => api.get<{ authenticated: boolean; user: string }>('/admin/api/me'),
   login: (password: string) => api.post<{ ok: boolean; user: string }>('/admin/api/login', { password }),
   logout: () => api.post<{ ok: boolean }>('/admin/api/logout'),
+  changePassword: (current_password: string, new_password: string) =>
+    api.post<{ ok: boolean; note: string }>('/admin/api/password', { current_password, new_password }),
+
+  // --- usage exports -------------------------------------------------------
+  async exports(): Promise<{ dir: string; retention_days: number; files: ExportFile[]; days: UsageDay[] }> {
+    return api.get('/admin/api/exports');
+  },
+  exportDay: (day?: string) => api.post<{ ok: boolean; day: string; jsonl: string; csv: string }>('/admin/api/exports', { day: day ?? null }),
+  deleteExport: (name: string) => api.del(`/admin/api/exports/${encodeURIComponent(name)}`),
 
   // --- overview ------------------------------------------------------------
   async overview(): Promise<ProxyMetrics> {
