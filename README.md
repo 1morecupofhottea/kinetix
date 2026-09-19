@@ -94,7 +94,9 @@ Tech: Rust + Tokio, Axum 0.8, reqwest (rustls, HTTP/2), SQLite in WAL mode via s
 ## Testing
 
 - `scripts/ci.sh` runs the full gate (fmt, clippy, tests, release build,
-  `cargo deny` when installed).
+  `cargo deny` when installed). `.github/workflows/ci.yml` runs the same gate in
+  CI plus the dashboard typecheck/build and `cargo-deny` (advisories, licenses,
+  bans — NFR-3.7).
 - `cargo test` runs the unit + protocol-torture/fuzz suite (SSE framing across
   arbitrary chunk boundaries, UTF-8 splits, tool-argument fragmentation,
   interleaved parallel tool calls, reasoning/text interleaving, usage only in
