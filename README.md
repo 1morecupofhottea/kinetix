@@ -189,6 +189,10 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
 - The credential-strategy seam (FR-11.2) represents refresh/expiry/rotation and
   health reporting (`resolve`/`health`/`rotate`, `CredentialHealth`,
   `ResolvedCredential`) even though v1 ships only the static-key strategy.
+- The opaque `X-Kinetix-Route-Id` a client receives resolves back to its Route
+  Trace at `GET /admin/api/route-traces/{opaque_id}` (admin-only), so serving
+  topology stays hidden from clients while remaining explainable to operators
+  (FR-12.15). The Live Tester can resolve the id it received.
 - Discovery never overwrites admin edits (FR-10.5): `POST
   /admin/api/providers/:id/discover` records a per-model `discovery` observation
   and returns a `disappeared` list flagging models no longer advertised

@@ -107,6 +107,11 @@ pub fn build(state: AppState) -> Router {
             "/requests/{id}/diagnostics",
             get(admin::request_diagnostics),
         )
+        // Resolve an opaque X-Kinetix-Route-Id to its Route Trace (FR-12.15).
+        .route(
+            "/route-traces/{opaque_id}",
+            get(admin::route_trace_by_opaque),
+        )
         .route("/audit", get(admin::audit))
         .route("/metrics", get(admin::metrics))
         // Admin mutations fail closed while the control-plane store is degraded

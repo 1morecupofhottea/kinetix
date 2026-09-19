@@ -487,6 +487,38 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
 
                   <div className="text-[10px] font-mono text-[#2d2d2d]/60 break-all">
                     Route ID (opaque): {meta.routeId || '(none)'}
+                    {meta.routeId && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          try {
+                            const r = await fetch(
+                              `/admin/api/route-traces/${meta.routeId}`,
+                              { credentials: 'same-origin' },
+                            );
+                            const j = await r.json();
+                            if (!r.ok) {
+                              alert(j.error || `HTTP ${r.status}`);
+                              return;
+                            }
+                            const steps = (j.steps || [])
+                              .map((s: any) => `${s.stage}${s.target ? ` [${s.target}]` : ''} ${s.detail} (${s.elapsed_ms}ms)`)
+                              .join('\n');
+                            alert(
+                              `Route Trace for ${j.opaque_route_id}\n` +
+                                `request: ${j.request_id}\n` +
+                                `outcome: ${j.outcome} | commit: ${j.commit_state}\n` +
+                                `final: ${j.final_target || '(none)'}\n\n${steps}`,
+                            );
+                          } catch (e) {
+                            alert((e as Error).message);
+                          }
+                        }}
+                        className="ml-2 underline text-[#2d5da1]"
+                      >
+                        resolve trace
+                      </button>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 text-center text-xs font-mono pt-1">

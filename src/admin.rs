@@ -2075,6 +2075,21 @@ pub async fn request_route_trace(
     Ok(Json(route_trace_json(&trace)))
 }
 
+/// `GET /admin/api/route-traces/{opaque_id}` (FR-12.15): resolve the opaque
+/// `X-Kinetix-Route-Id` a client received back to its Route Trace. Serving
+/// topology is admin-only, so this never leaks to the client itself.
+pub async fn route_trace_by_opaque(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(opaque_id): Path<String>,
+) -> ApiResult {
+    let trace = db::get_route_trace_by_opaque(&state.pool, &opaque_id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("no route trace for that opaque route id"))?;
+    Ok(Json(route_trace_json(&trace)))
+}
+
 /// `GET /admin/api/requests/{id}/diagnostics` (FR-13.4): correlate the Route
 /// Trace with the flight-recorder events for one request.
 pub async fn request_diagnostics(
