@@ -550,3 +550,100 @@ mod tests {
         let _ = AuthScheme::Bearer;
     }
 }
+
+#[cfg(test)]
+mod param_default_tests {
+    use super::*;
+    use crate::db::{ModelRow, ProviderRow};
+
+    fn provider() -> ProviderRow {
+        ProviderRow {
+            id: "prov".into(),
+            name: "p".into(),
+            base_url: "https://api.example.com/v1".into(),
+            wire_format: "openai".into(),
+            auth_scheme: "bearer".into(),
+            custom_header_name: None,
+            custom_param_name: None,
+            extra_headers: "{}".into(),
+            timeout_ms: 1000,
+            capability_mode: "permissive".into(),
+            models_path: None,
+            rate_limit_rules: "{}".into(),
+            enabled: 1,
+            follow_redirects: 0,
+            credential_hosts: String::new(),
+            allow_insecure_tls: 0,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn model_with_params(parameters: &str) -> ModelRow {
+        ModelRow {
+            id: "m".into(),
+            provider_id: "prov".into(),
+            upstream_id: "up".into(),
+            display_name: "Up".into(),
+            enabled: 1,
+            context_window: None,
+            max_output_tokens: None,
+            capabilities: "{}".into(),
+            prices: "{}".into(),
+            parameters: parameters.into(),
+            thinking_map: "{}".into(),
+            extra_request: "{}".into(),
+            discovery: "{}".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn req_without_temperature() -> InternalRequest {
+        InternalRequest {
+            requested_model: "up".into(),
+            system: vec![],
+            messages: vec![],
+            tools: vec![],
+            tool_choice: None,
+            tool_choice_name: None,
+            params: Default::default(),
+            stream: true,
+            thinking: None,
+            extra: Default::default(),
+            raw_body: None,
+        }
+    }
+
+    #[test]
+    fn configured_default_is_applied_when_client_omits_the_field() {
+        let p = provider();
+        let m = model_with_params(r#"{"temperature":{"supported":true,"default":0.3}}"#);
+        let ctx = UpstreamContext {
+            provider: &p,
+            model: &m,
+            credential: "k".into(),
+        };
+        let adapter = OpenAiAdapter;
+        let body = adapter.build_body(&ctx, &req_without_temperature());
+        assert_eq!(
+            body.get("temperature").and_then(|v| v.as_f64()),
+            Some(0.3),
+            "an unset field with a configured default must be filled (FR-10.6)"
+        );
+    }
+
+    #[test]
+    fn client_value_wins_over_the_default() {
+        let p = provider();
+        let m = model_with_params(r#"{"temperature":{"supported":true,"default":0.3}}"#);
+        let ctx = UpstreamContext {
+            provider: &p,
+            model: &m,
+            credential: "k".into(),
+        };
+        let mut req = req_without_temperature();
+        req.params.temperature = Some(0.9);
+        let adapter = OpenAiAdapter;
+        let body = adapter.build_body(&ctx, &req);
+        assert_eq!(body.get("temperature").and_then(|v| v.as_f64()), Some(0.9));
+    }
+}
