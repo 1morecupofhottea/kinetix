@@ -230,7 +230,9 @@ pub async fn overview(State(state): State<AppState>, _auth: AdminAuth) -> ApiRes
         .await
         .map_err(ApiError::internal)?;
 
-    let active_streams = state.log_queue.depth();
+    // Active streams comes from the in-memory live view (NFR-4.2), not the
+    // usage-log queue depth.
+    let active_streams = state.live.live_count();
     let fallback_rate = {
         let reqs = summary["requests"].as_i64().unwrap_or(0);
         let hops = summary["fallback_hops"].as_i64().unwrap_or(0);
@@ -243,6 +245,8 @@ pub async fn overview(State(state): State<AppState>, _auth: AdminAuth) -> ApiRes
 
     Ok(Json(json!({
         "active_streams": active_streams,
+        "live_requests": state.live.snapshot().len(),
+        "live_dropped": state.live.dropped(),
         "total_requests": summary["requests"],
         "total_tokens": summary["input_tokens"].as_i64().unwrap_or(0) + summary["output_tokens"].as_i64().unwrap_or(0),
         "total_spend_usd": summary["cost_usd"],
@@ -1904,6 +1908,38 @@ pub async fn request_diagnostics(
     })))
 }
 
+/// Live in-flight request view (FR-8.3). Control-plane only: served from an
+/// in-memory registry so it never touches the data plane, and DB enrichment is
+/// best-effort so a degraded store cannot fail the view (NFR-2.6/2.7).
+pub async fn live_requests(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
+    let mut rows = state.live.snapshot();
+    // Best-effort enrichment: for a finished request still in the tail, attach
+    // the persisted commit state / status / tokens if the DB is reachable.
+    if db_healthy(&state).await {
+        if let Ok(recent) = db::recent_usage(&state.pool, 200).await {
+            let by_id: std::collections::HashMap<&str, &db::UsageLogRow> =
+                recent.iter().map(|u| (u.request_id.as_str(), u)).collect();
+            for r in rows.iter_mut() {
+                if let Some(u) = by_id.get(r.request_id.as_str()) {
+                    if r.finished {
+                        r.status = u.status.clone();
+                        r.commit_state = u.commit_state.clone();
+                        r.retry_count = u.retry_count.max(0) as u32;
+                        r.fallback_hops = u.fallback_hops.max(0) as u32;
+                        r.input_tokens = u.input_tokens.map(|v| v.max(0) as u64);
+                        r.output_tokens = u.output_tokens.map(|v| v.max(0) as u64);
+                    }
+                }
+            }
+        }
+    }
+    Ok(Json(json!({
+        "live": rows,
+        "live_count": state.live.live_count(),
+        "dropped": state.live.dropped(),
+    })))
+}
+
 fn route_trace_json(t: &db::RouteTraceRow) -> Value {
     json!({
         "request_id": t.request_id,
@@ -2055,6 +2091,18 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
     body.push_str(&format!(
         "kinetix_flight_recorder_requests {}\n",
         state.flight.request_count()
+    ));
+    body.push_str("# HELP kinetix_active_streams Requests currently in flight (live view)\n");
+    body.push_str("# TYPE kinetix_active_streams gauge\n");
+    body.push_str(&format!(
+        "kinetix_active_streams {}\n",
+        state.live.live_count()
+    ));
+    body.push_str("# HELP kinetix_live_view_dropped_total Live-view entries evicted under load\n");
+    body.push_str("# TYPE kinetix_live_view_dropped_total counter\n");
+    body.push_str(&format!(
+        "kinetix_live_view_dropped_total {}\n",
+        state.live.dropped()
     ));
     body.push_str(
         "# HELP kinetix_flight_recorder_dropped_total Diagnostics dropped when saturated\n",

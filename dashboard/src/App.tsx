@@ -17,6 +17,7 @@ import { ProvidersView } from './components/views/ProvidersView';
 import { AccountsView } from './components/views/AccountsView';
 import { UsageView } from './components/views/UsageView';
 import { RequestsView } from './components/views/RequestsView';
+import { LiveRequest } from './types';
 import { AliasesView } from './components/views/AliasesView';
 import { AuditView } from './components/views/AuditView';
 import { SquiggleDivider, SketchButton, SketchBadge } from './components/HandDrawnElements';
@@ -65,6 +66,7 @@ export default function App() {
   const [routes, setRoutes] = useState<Route[]>([]);
   const [aliases, setAliases] = useState<ModelAlias[]>([]);
   const [requests, setRequests] = useState<RequestLog[]>([]);
+  const [liveRequests, setLiveRequests] = useState<LiveRequest[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [metrics, setMetrics] = useState<ProxyMetrics>(EMPTY_METRICS);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -130,6 +132,25 @@ export default function App() {
     }, 15000);
     return () => clearInterval(id);
   }, [auth]);
+
+  // Poll the live in-flight view while the Requests tab is open (FR-8.3).
+  useEffect(() => {
+    if (auth !== 'signed-in' || activeTab !== 'requests') return;
+    let cancelled = false;
+    const poll = () => {
+      Kinetix.liveRequests()
+        .then((r) => {
+          if (!cancelled) setLiveRequests(r);
+        })
+        .catch(() => {});
+    };
+    poll();
+    const id = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [auth, activeTab]);
 
   // ---- routing ------------------------------------------------------------
   useEffect(() => {
@@ -380,7 +401,9 @@ export default function App() {
 
         {activeTab === 'usage' && <UsageView keys={keys} models={models} requests={requests} />}
 
-        {activeTab === 'requests' && <RequestsView requests={requests} />}
+        {activeTab === 'requests' && (
+          <RequestsView requests={requests} liveRequests={liveRequests} />
+        )}
 
         {activeTab === 'aliases' && (
           <AliasesView

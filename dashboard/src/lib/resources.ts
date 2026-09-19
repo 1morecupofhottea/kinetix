@@ -12,8 +12,9 @@ import {
   mapModel,
   mapProvider,
   mapRequest,
+  mapLiveRequest,
 } from './mappers';
-import { Account, AuditLog, Route, ModelAlias, ModelConfig, Provider, ProxyMetrics, RequestLog, VirtualKey } from '../types';
+import { Account, AuditLog, Route, ModelAlias, ModelConfig, Provider, ProxyMetrics, RequestLog, VirtualKey, LiveRequest } from '../types';
 
 export interface CreateKeyInput {
   name: string;
@@ -121,6 +122,13 @@ export const Kinetix = {
   async requests(limit = 200): Promise<RequestLog[]> {
     const r = await api.get<{ usage: any[] }>(`/admin/api/usage?limit=${limit}`);
     return r.usage.map(mapRequest);
+  },
+
+  // Live in-flight view (FR-8.3): metadata-only snapshot of requests currently
+  // being served plus a short finished tail.
+  async liveRequests(): Promise<LiveRequest[]> {
+    const r = await api.get<{ live: any[] }>('/admin/api/requests/live');
+    return r.live.map(mapLiveRequest);
   },
 
   // --- audit ---------------------------------------------------------------

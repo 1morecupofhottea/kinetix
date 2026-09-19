@@ -93,6 +93,7 @@ pub fn build(state: AppState) -> Router {
         // usage / requests / audit / metrics
         .route("/usage", get(admin::usage))
         .route("/requests", get(admin::usage))
+        .route("/requests/live", get(admin::live_requests))
         .route(
             "/requests/{id}/route-trace",
             get(admin::request_route_trace),

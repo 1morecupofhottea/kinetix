@@ -170,9 +170,16 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
 - `deny.toml` + `scripts/ci.sh`: fmt/clippy/test/release gate plus dependency
   license/advisory/ban checks (`cargo deny`, NFR-3.7) that explicitly ban a
   local response-cache crate (FR-7.6).
+- Live in-flight request view (FR-8.3): a bounded, metadata-only in-memory
+  registry (`src/live.rs`) exposed at `GET /admin/api/requests/live`, surfaced in
+  the dashboard's Request Inspector, and reflected in the overview's
+  `active_streams` and the `kinetix_active_streams` metric. It shows phase
+  (selecting → committed → done), commit state, fallback hops, TTFT, and token
+  counts without storing any bodies.
+- Flight-recorder coverage (FR-13.1) extended to `upstream_first_frame`,
+  `reasoning_event`, `tool_call_event`, and `cancellation_issued`.
 
 **Deferred** (documented, not silently dropped): local response caching (removed
 from v1, FR-7.6), budget reservation (FR-6.9), and the M4 polish items
 (config export/import FR-10.12, per-key IP allowlist FR-3.4, webhook alerts
-FR-6.6/12.17, the live request view FR-8.3). See the r4 requirements document for
-the full delta.
+FR-6.6/12.17). See the r4 requirements document for the full delta.

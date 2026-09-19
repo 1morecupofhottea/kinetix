@@ -164,6 +164,24 @@ export interface RequestLog {
   responsePreview: string;
 }
 
+export interface LiveRequest {
+  requestId: string;
+  keyName?: string | null;
+  frontend: string;
+  requestedModel: string;
+  routeName?: string | null;
+  phase: 'selecting' | 'streaming' | 'committed' | 'done';
+  commitState: string;
+  fallbackHops: number;
+  retryCount: number;
+  inputTokens?: number | null;
+  outputTokens?: number | null;
+  status: string;
+  latencyMs: number;
+  ttftMs?: number | null;
+  finished: boolean;
+}
+
 export interface AuditLog {
   id: string;
   timestamp: string;

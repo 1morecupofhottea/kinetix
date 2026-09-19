@@ -16,6 +16,8 @@ use crate::trace::FlightRecorder;
 
 #[derive(Clone)]
 pub struct AppState {
+    /// Live in-flight request view (FR-8.3), bounded and metadata-only.
+    pub live: crate::live::LiveRequests,
     pub config: Arc<Config>,
     pub pool: Pool,
     pub registry: Arc<Registry>,
@@ -73,6 +75,7 @@ impl AppState {
             log_queue,
             started_at: chrono::Utc::now(),
             flight: Arc::new(FlightRecorder::new(512, 128)),
+            live: crate::live::LiveRequests::new(512),
             sticky: Arc::new(DashMap::new()),
             rr_counters: Arc::new(DashMap::new()),
             failures_pre_commit: Arc::new(AtomicU64::new(0)),

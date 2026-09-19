@@ -1,14 +1,15 @@
 import React, { useState } from 'react';
 import { Radio, Search, Filter, CheckCircle2, AlertTriangle, ArrowRight, Eye, Sparkles } from 'lucide-react';
-import { RequestLog } from '../../types';
+import { LiveRequest, RequestLog } from '../../types';
 import { WobblyCard, SketchBadge, SketchButton } from '../HandDrawnElements';
 import { formatCurrency, formatLatency } from '../../lib/designSystem';
 
 interface RequestsViewProps {
   requests: RequestLog[];
+  liveRequests?: LiveRequest[];
 }
 
-export const RequestsView: React.FC<RequestsViewProps> = ({ requests }) => {
+export const RequestsView: React.FC<RequestsViewProps> = ({ requests, liveRequests = [] }) => {
   const [filterText, setFilterText] = useState('');
   const [statusFilter, setStatusFilter] = useState<'all' | 'success' | 'fallback_recovered' | 'rate_limited'>('all');
   const [selectedRequest, setSelectedRequest] = useState<RequestLog | null>(null);
@@ -70,6 +71,74 @@ export const RequestsView: React.FC<RequestsViewProps> = ({ requests }) => {
           </select>
         </div>
       </div>
+
+
+      {/* Live in-flight view (FR-8.3): metadata-only, no bodies. */}
+      <WobblyCard decoration="tack-blue" className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
+            <Radio className="w-4 h-4 text-[#ff4d4d] animate-pulse" />
+            In-Flight Requests
+          </h3>
+          <span className="text-xs font-mono text-[#2d2d2d]/60">
+            {liveRequests.filter((l) => !l.finished).length} active
+          </span>
+        </div>
+        {liveRequests.length === 0 ? (
+          <p className="text-sm font-body text-[#2d2d2d]/60">
+            No in-flight requests right now. Send one through the Live Proxy Test to watch it
+            commit, stream, and finalize here.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left font-mono text-xs">
+              <thead className="text-[#2d2d2d]/70 font-heading">
+                <tr>
+                  <th className="py-1 pr-3">Phase</th>
+                  <th className="py-1 pr-3">Request ID</th>
+                  <th className="py-1 pr-3">Key</th>
+                  <th className="py-1 pr-3">Model</th>
+                  <th className="py-1 pr-3">Fallback</th>
+                  <th className="py-1 pr-3">TTFT</th>
+                  <th className="py-1 pr-3">In / Out</th>
+                  <th className="py-1 pr-3">Total</th>
+                </tr>
+              </thead>
+              <tbody>
+                {liveRequests.map((l) => (
+                  <tr key={l.requestId} className="border-t border-[#2d2d2d]/15">
+                    <td className="py-1 pr-3">
+                      {l.finished ? (
+                        <SketchBadge variant={l.status === 'success' ? 'green' : 'red'}>
+                          {l.status}
+                        </SketchBadge>
+                      ) : (
+                        <SketchBadge variant="blue">{l.phase}</SketchBadge>
+                      )}
+                    </td>
+                    <td className="py-1 pr-3 truncate max-w-[160px]">{l.requestId}</td>
+                    <td className="py-1 pr-3">{l.keyName || '—'}</td>
+                    <td className="py-1 pr-3">
+                      {l.requestedModel}
+                      {l.routeName ? ` (${l.routeName})` : ''}
+                    </td>
+                    <td className="py-1 pr-3">
+                      {l.fallbackHops > 0 ? `⚡ ${l.fallbackHops}` : '—'}
+                    </td>
+                    <td className="py-1 pr-3">{l.ttftMs != null ? formatLatency(l.ttftMs) : '—'}</td>
+                    <td className="py-1 pr-3">
+                      {l.inputTokens ?? '?'} / {l.outputTokens ?? '?'}
+                    </td>
+                    <td className="py-1 pr-3">
+                      {l.finished ? formatLatency(l.latencyMs) : 'streaming…'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </WobblyCard>
 
       {/* Requests Table */}
       <WobblyCard decoration="tape" className="p-0 overflow-hidden">

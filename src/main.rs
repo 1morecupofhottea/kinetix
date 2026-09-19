@@ -17,6 +17,7 @@ mod crypto;
 mod db;
 mod frontends;
 mod limits;
+mod live;
 mod logqueue;
 mod passthrough;
 mod pipeline;

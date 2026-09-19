@@ -102,6 +102,14 @@ struct Attempt {
 /// A single immutable snapshot is taken at entry and used for the whole
 /// request, so a concurrent configuration change never alters an in-flight
 /// request (NFR-2.10).
+///
+/// Cancellation note (FR-2.9): the client-disconnect watchdog is the response
+/// body's drop-guard, which only exists once a response is produced. During the
+/// pre-commit selection/connect window there is no body to observe, so a client
+/// that goes away then is noticed only when the upstream responds or the
+/// provider timeout elapses. That window is bounded by `provider.timeout_ms`.
+/// Post-commit cancellation is immediate (the guard flips the flag and wakes the
+/// driver).
 pub async fn run(
     state: &AppState,
     format: FrontendFormat,
@@ -124,6 +132,13 @@ pub async fn run(
         }
     }
     state.total_requests.fetch_add(1, Ordering::Relaxed);
+    state.live.start(
+        &request_id,
+        &format!("{format:?}").to_lowercase(),
+        &req.requested_model,
+        meta.key_name.clone(),
+        None,
+    );
     state
         .flight
         .record(&request_id, 0, "request_accepted", format!("{format:?}"));
@@ -233,6 +248,7 @@ pub async fn run(
 
     if let Some(route) = &route {
         meta.fallback_path.push(format!("route:{}", route.name));
+        state.live.set_fallback_hops(&meta.request_id, 0, 0);
     }
 
     // Filter by key provider restrictions (FR-12.19) and compatibility (FR-12.11).
@@ -274,6 +290,9 @@ pub async fn run(
 
     if targets.is_empty() {
         trace.finish("no_eligible_target");
+        state
+            .live
+            .finish(&meta.request_id, "no_eligible_target", 0, None, None);
         let _ = db::insert_route_trace(&state.pool, &trace).await;
         return Err(ProxyError::unsupported(
             "no configured target can satisfy this request (predicates, capabilities, or limits mismatch)",
@@ -402,6 +421,9 @@ pub async fn run(
         // Parameter policy reject (FR-10.6): a request-level failure, never retried.
         if let Err(e) = check_param_policy(&target, &req) {
             trace.finish("rejected");
+            state
+                .live
+                .finish(&meta.request_id, "rejected", 0, None, None);
             let _ = db::insert_route_trace(&state.pool, &trace).await;
             return Err(e);
         }
@@ -411,6 +433,11 @@ pub async fn run(
             req.raw_body.is_some() && passthrough::is_passthrough(format, target.provider.wire());
 
         attempts_done += 1;
+        state.live.set_fallback_hops(
+            &meta.request_id,
+            (attempts_done - 1) as u32,
+            (attempts_done - 1) as u32,
+        );
         state.flight.record(
             &meta.request_id,
             started.elapsed().as_millis() as u64,
@@ -488,6 +515,13 @@ pub async fn run(
                         format!("HTTP {status} (not retryable)"),
                     );
                     trace.finish("failed");
+                    state.live.finish(
+                        &meta.request_id,
+                        "failed",
+                        started.elapsed().as_millis() as u64,
+                        None,
+                        None,
+                    );
                     let _ = db::insert_route_trace(&state.pool, &trace).await;
                     return Err(failure_to_error(&failure, &target));
                 }
@@ -505,6 +539,13 @@ pub async fn run(
                 );
                 if !allow_fallback {
                     trace.finish("failed");
+                    state.live.finish(
+                        &meta.request_id,
+                        "failed",
+                        started.elapsed().as_millis() as u64,
+                        None,
+                        None,
+                    );
                     let _ = db::insert_route_trace(&state.pool, &trace).await;
                     return Err(failure_to_error(&failure, &target));
                 }
@@ -527,6 +568,13 @@ pub async fn run(
         .map(|e| e.message)
         .unwrap_or_else(|| format!("all targets of {name} are currently unavailable"));
     trace.finish("all_targets_unavailable");
+    state.live.finish(
+        &meta.request_id,
+        "all_targets_unavailable",
+        started.elapsed().as_millis() as u64,
+        None,
+        None,
+    );
     let _ = db::insert_route_trace(&state.pool, &trace).await;
     Err(ProxyError::all_unavailable(
         format!("{name}: {msg}"),
@@ -1161,6 +1209,8 @@ async fn drive_stream(
     let mut status_code = 200i64;
     let mut error_message: Option<String> = None;
     let mut committed = false;
+    let mut saw_reasoning = false;
+    let mut saw_tool = false;
     let mut upstream = attempt.stream.take().expect("stream present");
     let adapter = attempt.adapter.clone();
     let mut framer = crate::sse::SseFramer::new();
@@ -1209,14 +1259,46 @@ async fn drive_stream(
                                         if let StreamEvent::Usage(u) = &ev {
                                             usage.merge(u);
                                         }
+                                        // Flight recorder: event classes, metadata
+                                        // only (FR-13.1, FR-13.2).
+                                        match &ev {
+                                            StreamEvent::ThinkingDelta { .. } if !saw_reasoning => {
+                                                saw_reasoning = true;
+                                                state.flight.record(
+                                                    &meta.request_id,
+                                                    started.elapsed().as_millis() as u64,
+                                                    "reasoning_event",
+                                                    "first thinking delta",
+                                                );
+                                            }
+                                            StreamEvent::ToolCallStart { .. } if !saw_tool => {
+                                                saw_tool = true;
+                                                state.flight.record(
+                                                    &meta.request_id,
+                                                    started.elapsed().as_millis() as u64,
+                                                    "tool_call_event",
+                                                    "first tool call",
+                                                );
+                                            }
+                                            _ => {}
+                                        }
                                         let frames = encoder.encode(ev);
                                         if ttft_ms.is_none() && !frames.is_empty() {
                                             ttft_ms = Some(started.elapsed().as_millis() as i64);
+                                            state.live.set_ttft(&meta.request_id, ttft_ms.unwrap());
+                                            state.live.mark_streaming(&meta.request_id);
+                                            state.flight.record(
+                                                &meta.request_id,
+                                                started.elapsed().as_millis() as u64,
+                                                "upstream_first_frame",
+                                                "first upstream frame",
+                                            );
                                         }
                                         for f in frames {
                                             if !committed {
                                                 committed = true;
                                                 trace.commit();
+                                                state.live.mark_committed(&meta.request_id);
                                                 state.flight.record(&meta.request_id, started.elapsed().as_millis() as u64, "commit", "first client bytes");
                                             }
                                             if tx.send(Ok(f)).await.is_err() {
@@ -1321,6 +1403,8 @@ async fn drive_stream_passthrough(
     let mut status_code = 200i64;
     let mut error_message: Option<String> = None;
     let mut committed = false;
+    let mut saw_reasoning = false;
+    let mut saw_tool = false;
     let mut upstream = attempt.stream.take().expect("stream present");
     let adapter = attempt.adapter.clone();
     let mut framer = crate::sse::SseFramer::new();
@@ -1366,16 +1450,46 @@ async fn drive_stream_passthrough(
                                             if let StreamEvent::Usage(u) = &ev {
                                                 usage.merge(u);
                                             }
+                                            match &ev {
+                                                StreamEvent::ThinkingDelta { .. } if !saw_reasoning => {
+                                                    saw_reasoning = true;
+                                                    state.flight.record(
+                                                        &meta.request_id,
+                                                        started.elapsed().as_millis() as u64,
+                                                        "reasoning_event",
+                                                        "first thinking delta",
+                                                    );
+                                                }
+                                                StreamEvent::ToolCallStart { .. } if !saw_tool => {
+                                                    saw_tool = true;
+                                                    state.flight.record(
+                                                        &meta.request_id,
+                                                        started.elapsed().as_millis() as u64,
+                                                        "tool_call_event",
+                                                        "first tool call",
+                                                    );
+                                                }
+                                                _ => {}
+                                            }
                                         }
                                     }
                                 }
                             }
                             if ttft_ms.is_none() {
                                 ttft_ms = Some(started.elapsed().as_millis() as i64);
+                                state.live.set_ttft(&meta.request_id, ttft_ms.unwrap());
+                                state.live.mark_streaming(&meta.request_id);
+                                state.flight.record(
+                                    &meta.request_id,
+                                    started.elapsed().as_millis() as u64,
+                                    "upstream_first_frame",
+                                    "first upstream frame",
+                                );
                             }
                             if !committed {
                                 committed = true;
                                 trace.commit();
+                                state.live.mark_committed(&meta.request_id);
                             }
                             let out = Bytes::from(format!("{frame}\n\n"));
                             if tx.send(Ok(out)).await.is_err() {
@@ -1664,6 +1778,13 @@ async fn finalize_log(
         started.elapsed().as_millis() as u64,
         "usage_finalized",
         format!("status={status} tokens={:?}", usage.input),
+    );
+    state.live.finish(
+        &meta.request_id,
+        status,
+        started.elapsed().as_millis() as u64,
+        usage.input,
+        usage.output,
     );
 
     // Optional per-key body logging (FR-6.5).

@@ -168,6 +168,26 @@ export function mapAlias(j: any): ModelAlias {
   };
 }
 
+export function mapLiveRequest(j: any): import('../types').LiveRequest {
+  return {
+    requestId: j.request_id,
+    keyName: j.key_name,
+    frontend: j.frontend,
+    requestedModel: j.requested_model,
+    routeName: j.route_name,
+    phase: j.phase,
+    commitState: j.commit_state,
+    fallbackHops: j.fallback_hops ?? 0,
+    retryCount: j.retry_count ?? 0,
+    inputTokens: j.input_tokens,
+    outputTokens: j.output_tokens,
+    status: j.status,
+    latencyMs: j.latency_ms ?? 0,
+    ttftMs: j.ttft_ms,
+    finished: !!j.finished,
+  };
+}
+
 export function mapRequest(j: any): RequestLog {
   return {
     id: str(j.id),
