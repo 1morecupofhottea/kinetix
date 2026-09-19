@@ -18,6 +18,11 @@ use kinetix::config::Config;
 use kinetix::crypto::Crypto;
 use kinetix::logqueue::UsageLogQueue;
 use kinetix::registry::Registry;
+
+// Optional allocation accounting (NFR-1.8). Enabled with `--features alloc-stats`.
+#[cfg(feature = "alloc-stats")]
+#[global_allocator]
+static GLOBAL_ALLOC: kinetix::alloc::CountingAllocator = kinetix::alloc::CountingAllocator;
 use kinetix::{alerts, bootstrap, db, router};
 
 #[tokio::main]

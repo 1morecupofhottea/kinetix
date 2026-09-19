@@ -2303,6 +2303,20 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
         "kinetix_requests_total {}\n",
         summary["requests"].as_i64().unwrap_or(0)
     ));
+    // Allocation accounting (NFR-1.8). Zero unless built with `alloc-stats`, so
+    // the value honestly reads "not measured" rather than fabricating a number.
+    body.push_str("# HELP kinetix_allocations_total Allocation calls (0 unless built with --features alloc-stats)\n");
+    body.push_str("# TYPE kinetix_allocations_total counter\n");
+    body.push_str(&format!(
+        "kinetix_allocations_total {}\n",
+        crate::alloc::allocations()
+    ));
+    body.push_str("# HELP kinetix_alloc_bytes_total Bytes allocated (0 unless built with --features alloc-stats)\n");
+    body.push_str("# TYPE kinetix_alloc_bytes_total counter\n");
+    body.push_str(&format!(
+        "kinetix_alloc_bytes_total {}\n",
+        crate::alloc::alloc_bytes()
+    ));
     // Request/error rate (NFR-4.2): errors over total requests, including
     // client disconnects, so the ratio matches the alert loop's definition.
     {

@@ -13,6 +13,7 @@
 pub mod adapters;
 pub mod admin;
 pub mod alerts;
+pub mod alloc;
 pub mod api;
 pub mod app;
 pub mod assets;

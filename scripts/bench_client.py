@@ -15,7 +15,7 @@ import urllib.request
 WORD = "lorem"
 
 
-def one(url, key, path, out, idx):
+def one(url, key, path, out, idx, tool_fragments=0):
     if path == "passthrough":
         model = "syn-openai"
         body = {"model": model, "stream": True, "max_tokens": 64,
@@ -29,6 +29,9 @@ def one(url, key, path, out, idx):
         body = {"model": model, "stream": True, "max_tokens": 64,
                 "tools": [{"type": "function", "function": {"name": "f", "parameters": {"type": "object", "properties": {"a": {"type": "string"}}}}}],
                 "messages": [{"role": "user", "content": "call f"}]}
+        if tool_fragments > 0:
+            # NFR-1.9: ask the upstream to split the arguments into many pieces.
+            body["tool_fragments"] = tool_fragments
     else:  # large
         model = "syn-openai"
         big = ("The quick brown fox. " * 4000)
@@ -73,6 +76,7 @@ def main():
     ap.add_argument("--concurrency", type=int, required=True)
     ap.add_argument("--requests", type=int, required=True)
     ap.add_argument("--path", required=True)
+    ap.add_argument("--tool-fragments", type=int, default=0)
     a = ap.parse_args()
 
     out = [None] * a.requests
@@ -81,7 +85,7 @@ def main():
 
     def worker(i):
         with sem:
-            one(a.url, a.key, a.path, out, i)
+            one(a.url, a.key, a.path, out, i, a.tool_fragments)
 
     t0 = time.perf_counter()
     threads = [threading.Thread(target=worker, args=(i,)) for i in range(a.requests)]

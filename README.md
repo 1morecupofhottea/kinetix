@@ -103,12 +103,15 @@ Tech: Rust + Tokio, Axum 0.8, reqwest (rustls, HTTP/2), SQLite in WAL mode via s
   the final event, zero-token responses, large tool calls, malformed/unknown
   frames, bounded fuzzing, and a >120s silent-thinking keepalive stream).
 - `scripts/bench.sh [concurrency-list] [requests-per-level]` runs the synthetic
-  benchmark matrix (passthrough / translation / tools / large) against a
-  deterministic local upstream, measuring added latency and TTFT versus NFR-1.
+  benchmark matrix (passthrough / translation / tools / large /
+  tools-large-fragments) against a deterministic local upstream, measuring added
+  latency and TTFT versus NFR-1.
 - `scripts/bench-rust.sh [concurrency-list] [requests-per-level]` is a
   std-only-Rust capacity rig that reaches the NFR-1.4 reference load (200
-  concurrent streams) without the Python GIL saturating first. Measured results
-  and methodology are in [`docs/benchmarks.md`](docs/benchmarks.md).
+  concurrent streams) without the Python GIL saturating first. Set `ALLOC_STATS=1`
+  to build with the `alloc-stats` feature and report allocations/bytes per
+  request (NFR-1.8). Measured results and methodology are in
+  [`docs/benchmarks.md`](docs/benchmarks.md).
 - `scripts/cancel_bench.py` measures client-disconnect cancellation latency
   (NFR-1.10).
 - `scripts/smoke.sh` is an end-to-end smoke test (synthetic upstream + a fresh

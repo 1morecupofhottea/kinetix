@@ -21,11 +21,19 @@ DELAY_US="${DELAY_US:-0}"
 CPUSET="${CPUSET:-}"
 PORT="${PORT:-8180}"
 UP="${UP:-9099}"
+# NFR-1.8: when ALLOC_STATS=1, build with the `alloc-stats` feature and report
+# allocations (and bytes) per request for each level by scraping the counters
+# from /admin/api/metrics.
+ALLOC_STATS="${ALLOC_STATS:-0}"
 
 BIN=/tmp/bench_rust
 rustc -O scripts/bench_rust.rs -o "$BIN"
 
-cargo build --release --quiet
+if [ "$ALLOC_STATS" = "1" ]; then
+  cargo build --release --quiet --features alloc-stats
+else
+  cargo build --release --quiet
+fi
 
 D=$(mktemp -d)
 export KINETIX_BIND="127.0.0.1:$PORT"
@@ -52,8 +60,23 @@ for _ in $(seq 1 40); do
 done
 KEY=$(grep -oE 'sk-kinetix-[0-9a-f]+' /tmp/bench-rust-kinetix.log | head -1)
 echo "key: ${KEY:0:20}...  upstream tokens=$TOKENS"
+
+# Admin session cookie for scraping metrics (used only when ALLOC_STATS=1).
+CK=$(mktemp)
+if [ "$ALLOC_STATS" = "1" ]; then
+  curl -s -c "$CK" -X POST "http://127.0.0.1:$PORT/admin/api/login" \
+    -H 'content-type: application/json' \
+    -d "{\"password\":\"$KINETIX_ADMIN_TOKEN\"}" >/dev/null 2>&1 || true
+fi
+scrape_alloc() {
+  curl -s -b "$CK" "http://127.0.0.1:$PORT/admin/api/metrics" 2>/dev/null \
+    | awk '/^kinetix_allocations_total /{a=$2} /^kinetix_alloc_bytes_total /{b=$2} END{print a" "b}'
+}
+
 echo "concurrency | rps | ttft_p50 p95 p99 (ms) | total_p50 p95 p99 (ms) | errors | kinetix_rss_kB"
 for c in $CONC_LIST; do
+  A0=""; A1=""
+  if [ "$ALLOC_STATS" = "1" ]; then A0=$(scrape_alloc); fi
   "$BIN" load "http://127.0.0.1:$PORT/v1/chat/completions" "$c" "$REQS" "$TOKENS" \
     | python3 -c '
 import json,sys
@@ -64,7 +87,18 @@ print("{c:>5} | {rps:>7.1f} | {t50:>7.2f} {t95:>7.2f} {t99:>8.2f} | {T50:>7.2f} 
   T50=d["total_p50_ms"], T95=d["total_p95_ms"], T99=d["total_p99_ms"]), end="")
 '
   RSS=$(grep VmRSS "/proc/$KPID/status" 2>/dev/null | awk '{print $2}')
-  echo " ${RSS:-?}"
+  echo -n " ${RSS:-?}"
+  if [ "$ALLOC_STATS" = "1" ]; then
+    A1=$(scrape_alloc)
+    python3 -c "
+import sys
+a0,b0='$A0'.split(); a1,b1='$A1'.split()
+reqs=$REQS
+d=(int(a1)-int(a0))/reqs; db=(int(b1)-int(b0))/reqs
+print(f' | allocs/req {d:.1f} bytes/req {db:.0f}', end='')
+"
+  fi
+  echo
 done
 kill "$KPID" "$UPPID" 2>/dev/null || true
-rm -rf "$D"
+rm -rf "$D" "$CK"

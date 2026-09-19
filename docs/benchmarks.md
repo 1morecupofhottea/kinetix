@@ -85,13 +85,67 @@ Measured on the release binary with a fresh throwaway database:
 | Idle RSS | ≤ 50 MB | ~13 MB |
 | Idle CPU | negligible | ~1% |
 
+## Allocations per request (NFR-1.8)
+
+The build optionally counts allocations (`--features alloc-stats`, a
+`#[global_allocator]` wrapper in `src/alloc.rs`). The default build reports the
+metric as 0 — honestly "not measured" rather than a fabricated number — and the
+feature is off in production.
+
+Measured with `ALLOC_STATS=1 TOKENS=60 scripts/bench-rust.sh "1 10 100" 2000`
+(60-token passthrough streams; allocs/req is steady-state, so it is essentially
+independent of concurrency):
+
+| Concurrency | rps | allocs/request | bytes/request | errors |
+|---|---|---|---|---|
+| 1 | 4491 | 779.5 | 190,946 | 0 |
+| 10 | 4730 | 779.5 | 190,947 | 0 |
+| 100 | 4932 | 779.7 | 190,964 | 0 |
+
+~780 allocations and ~186 KB per 60-token passthrough request. The value is
+flat across concurrency (no per-request amplification under load) and is
+dominated by JSON parsing/serialization of the request and the encoded stream
+frames.
+
+## Path coverage (NFR-1.9)
+
+The Python rig covers four paths plus a large-incremental-tool-argument path:
+
+| Path | What it exercises |
+|---|---|
+| `passthrough` | OpenAI -> OpenAI same-format byte forwarding (FR-2.7). |
+| `translation` | OpenAI -> Gemini translation (canonical state). |
+| `tools` | A tool call with arguments split across three frames. |
+| `large` | A ~76 KB user message (context handling). |
+| `tools-large-fragments` | One tool argument (~660 B) split into ~200 fragments (NFR-1.9: incremental argument reassembly). |
+
+`scripts/bench.sh "1 10" 40` results (Python rig, so rps is rig-bound, not
+Kinetix-bound):
+
+| Concurrency | Path | p50 (ms) | p95 (ms) | TTFT p50 (ms) | errors |
+|---|---|---|---|---|---|
+| 1 | passthrough | 97.1 | 99.7 | 60.9 | 0 |
+| 1 | translation | 96.3 | 99.3 | 47.6 | 0 |
+| 1 | tools | 8.9 | 10.2 | 8.9 | 0 |
+| 1 | tools-large-fragments | 12.0 | 13.6 | 8.6 | 0 |
+| 10 | passthrough | 99.0 | 123.0 | 61.6 | 0 |
+| 10 | translation | 98.1 | 122.4 | 49.3 | 0 |
+| 10 | tools | 8.2 | 32.6 | 8.2 | 0 |
+| 10 | tools-large-fragments | 29.7 | 56.7 | 13.1 | 0 |
+
+All five paths complete with zero errors, including the ~200-fragment tool
+argument reassembly under concurrency.
+
 ## Reproduce
 
 ```sh
 # Rust rig, NFR-1.4 style (1 vCPU approximation, sustained streams)
 DELAY_US=2000 TOKENS=100 CPUSET=0 scripts/bench-rust.sh "1 10 100 200" 4000
 
-# Python rig, path coverage (passthrough, translation, tools, large context)
+# Rust rig with allocation accounting (NFR-1.8)
+ALLOC_STATS=1 TOKENS=60 scripts/bench-rust.sh "1 10 100" 2000
+
+# Python rig, path coverage (passthrough, translation, tools, large, tool fragments)
 scripts/bench.sh "1 10 100" 80
 ```
 

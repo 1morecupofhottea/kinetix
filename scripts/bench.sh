@@ -59,6 +59,18 @@ bench_one() { # $1=concurrency $2=path
     --path "$2"
 }
 
+# NFR-1.9: exercise a large tool argument delivered as many small fragments.
+# The synthetic upstream reads SYN_TOOL_FRAGMENTS (set for the whole process).
+toolfrag_bench() { # $1=concurrency
+  python3 "$ROOT/scripts/bench_client.py" \
+    --url http://127.0.0.1:8180/v1/chat/completions \
+    --key "$KEY" \
+    --concurrency "$1" \
+    --requests "$NREQ" \
+    --path tools \
+    --tool-fragments 200
+}
+
 echo "==> matrix"
 RESULT="["
 for c in $CONCURRENCY; do
@@ -68,6 +80,11 @@ for c in $CONCURRENCY; do
     echo "$ROW" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("    p50={p50_overhead_ms}ms p95={p95_overhead_ms}ms p99={p99_overhead_ms}ms ttft_p50={ttft_p50_ms}ms ttft_p95={ttft_p95_ms}ms rps={rps} err={errors}".format(**d))'
     RESULT="$RESULT$ROW,"
   done
+  # NFR-1.9: large tool arguments split into many fragments.
+  echo "--- concurrency=$c path=tools-large-fragments"
+  ROW=$(toolfrag_bench "$c")
+  echo "$ROW" | python3 -c 'import json,sys;d=json.load(sys.stdin);print("    p50={p50_overhead_ms}ms p95={p95_overhead_ms}ms p99={p99_overhead_ms}ms ttft_p50={ttft_p50_ms}ms ttft_p95={ttft_p95_ms}ms rps={rps} err={errors}".format(**d))'
+  RESULT="$RESULT$ROW,"
 done
 RESULT="${RESULT%,}]"
 

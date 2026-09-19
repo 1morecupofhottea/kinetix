@@ -33,6 +33,18 @@ def mark_write():
         LAST_WRITE = time.time()
 
 
+
+def _split_json_fragments(n: int) -> list:
+    """Split a JSON tool-argument payload into n fragments (NFR-1.9).
+
+    The concatenation of the fragments is always valid JSON, so the reassembly
+    path can be exercised with large, many-piece arguments.
+    """
+    payload = '{"city": "' + ("Paris-" * 40) + '", "note": "' + ("x" * 400) + '"}'
+    n = max(1, min(n, len(payload)))
+    size = (len(payload) + n - 1) // n
+    return [payload[i:i + size] for i in range(0, len(payload), size)]
+
 class _Disconnected(Exception):
     """Client went away mid-stream (expected under cancellation benchmarks)."""
 
@@ -83,14 +95,18 @@ class Handler(BaseHTTPRequestHandler):
         stream = bool(req.get("stream"))
 
         want_tools = bool(req.get("tools"))
+        # NFR-1.9: a large tool argument delivered as many small fragments, to
+        # exercise incremental argument reassembly under load. The benchmark
+        # client sets this on the request body.
+        tool_fragments = int(req.get("tool_fragments", 0) or 0)
 
         if "/gemini/" in self.path:
             self._gemini(model)
         else:
-            self._openai(model, stream, want_tools)
+            self._openai(model, stream, want_tools, tool_fragments)
 
     # -- OpenAI-compatible SSE -------------------------------------------
-    def _openai(self, model, stream, want_tools=False):
+    def _openai(self, model, stream, want_tools=False, tool_fragments=0):
         if not stream:
             body = json.dumps(
                 {
@@ -138,7 +154,12 @@ class Handler(BaseHTTPRequestHandler):
                            {"index": 0, "id": "call_syn_1", "type": "function",
                             "function": {"name": "get_weather", "arguments": ""}}]},
                            "finish_reason": None}]})
-                for frag in ['{"city"', ': "Par', 'is"}']:
+                frags = (
+                    ['{"city"', ': "Par', 'is"}']
+                    if tool_fragments <= 0
+                    else _split_json_fragments(tool_fragments)
+                )
+                for frag in frags:
                     frame({"id": "syn-1", "object": "chat.completion.chunk", "model": model,
                            "choices": [{"index": 0, "delta": {"tool_calls": [
                                {"index": 0, "function": {"arguments": frag}}]},
