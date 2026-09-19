@@ -45,4 +45,14 @@ This wiki is the detailed, task-oriented companion to the repo
 The wiki pages are generated from the markdown files in
 [`docs/wiki/`](https://github.com/LazyGreed/kinetix/tree/main/docs/wiki). Edit
 them there (so changes are reviewed and versioned with the code) and mirror them
-to the GitHub wiki. `Home.md` here is the wiki landing page.
+to the GitHub wiki with:
+
+```bash
+scripts/publish-wiki.sh "docs(wiki): describe your change"
+```
+
+The script clones `<repo>.wiki.git`, copies `docs/wiki/*.md` over it, and pushes.
+If the wiki git repository does not exist yet, enable the wiki in the repo
+settings and create **one page** in the web UI first (GitHub only provisions
+`<repo>.wiki.git` after the first page exists), then re-run the script.
+`Home.md` is the wiki landing page.
