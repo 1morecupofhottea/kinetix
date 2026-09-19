@@ -8,9 +8,75 @@ interface KeysViewProps {
   keys: VirtualKey[];
   onAddKey: (newKey: VirtualKey) => Promise<{ key: VirtualKey; fullKey: string } | null>;
   onUpdateKeyStatus: (id: string, status: 'active' | 'disabled' | 'revoked') => void;
+  onUpdateKeyIps: (id: string, ips: string[]) => void;
 }
 
-export const KeysView: React.FC<KeysViewProps> = ({ keys, onAddKey, onUpdateKeyStatus }) => {
+/** Inline per-key IP allowlist editor (FR-3.4). Empty means "no restriction". */
+const IpAllowlistEditor: React.FC<{
+  keyId: string;
+  current: string[];
+  onSave: (id: string, ips: string[]) => void;
+}> = ({ keyId, current, onSave }) => {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(current.join(', '));
+  return (
+    <div className="col-span-2 pt-1 border-t border-[#2d2d2d]/15 flex flex-wrap items-center gap-2">
+      <span>
+        IP Allowlist:{' '}
+        <strong className="text-[#2d5da1] font-mono">
+          {current.length > 0 ? current.join(', ') : 'any'}
+        </strong>
+      </span>
+      {editing ? (
+        <span className="flex items-center gap-1">
+          <input
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder="203.0.113.0/24, 198.51.100.7"
+            className="px-2 py-0.5 text-xs font-mono border border-[#2d2d2d] rounded bg-white w-64"
+          />
+          <button
+            onClick={() => {
+              const ips = text
+                .split(',')
+                .map((s) => s.trim())
+                .filter(Boolean);
+              onSave(keyId, ips);
+              setEditing(false);
+            }}
+            className="px-2 py-0.5 text-xs font-heading font-bold border border-[#2d2d2d] bg-[#e8f5e9] rounded cursor-pointer"
+          >
+            Save
+          </button>
+          <button
+            onClick={() => {
+              setText(current.join(', '));
+              setEditing(false);
+            }}
+            className="px-2 py-0.5 text-xs font-heading border border-[#2d2d2d]/40 bg-white rounded cursor-pointer"
+          >
+            Cancel
+          </button>
+        </span>
+      ) : (
+        <button
+          onClick={() => setEditing(true)}
+          className="px-2 py-0.5 text-xs font-heading font-bold border border-[#2d2d2d]/40 bg-white hover:bg-[#fff9c4] rounded cursor-pointer"
+          title="Edit the per-key IP allowlist (empty = any)"
+        >
+          Edit
+        </button>
+      )}
+    </div>
+  );
+};
+
+export const KeysView: React.FC<KeysViewProps> = ({
+  keys,
+  onAddKey,
+  onUpdateKeyStatus,
+  onUpdateKeyIps,
+}) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [copiedKeyId, setCopiedKeyId] = useState<string | null>(null);
   const [newlyCreatedKey, setNewlyCreatedKey] = useState<{ name: string; key: string } | null>(null);
@@ -145,8 +211,14 @@ export const KeysView: React.FC<KeysViewProps> = ({ keys, onAddKey, onUpdateKeyS
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {keys.map((k, idx) => {
           const rotation = idx % 2 === 0 ? '-0.5deg' : '0.5deg';
-          const dailyPct = Math.min(100, Math.round((k.currentDailySpend / k.dailyBudget) * 100));
-          const monthlyPct = Math.min(100, Math.round((k.currentMonthlySpend / k.monthlyBudget) * 100));
+          const dailyPct =
+            k.dailyBudget > 0
+              ? Math.min(100, Math.round((k.currentDailySpend / k.dailyBudget) * 100))
+              : 0;
+          const monthlyPct =
+            k.monthlyBudget > 0
+              ? Math.min(100, Math.round((k.currentMonthlySpend / k.monthlyBudget) * 100))
+              : 0;
 
           return (
             <WobblyCard
@@ -237,6 +309,11 @@ export const KeysView: React.FC<KeysViewProps> = ({ keys, onAddKey, onUpdateKeyS
                       Allowed Models:{' '}
                       <strong className="text-[#2d5da1]">{k.allowedModels.join(', ')}</strong>
                     </div>
+                    <IpAllowlistEditor
+                      keyId={k.id}
+                      current={k.allowedIps ?? []}
+                      onSave={onUpdateKeyIps}
+                    />
                   </div>
                 </div>
               </div>

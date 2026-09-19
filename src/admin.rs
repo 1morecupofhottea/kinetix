@@ -409,6 +409,8 @@ pub struct UpdateKeyBody {
     pub monthly_budget: Option<f64>,
     pub expires_at: Option<String>,
     pub body_logging: Option<bool>,
+    /// Per-key IP allowlist (FR-3.4). An explicit empty list clears it.
+    pub allowed_ips: Option<Vec<String>>,
 }
 
 pub async fn update_key(
@@ -455,10 +457,16 @@ pub async fn update_key(
         .body_logging
         .map(|b| b as i64)
         .unwrap_or(existing.body_logging);
+    // FR-3.4: persist the per-key IP allowlist. Only touch it when provided,
+    // so an update that omits it leaves the existing allowlist intact.
+    let allowed_ips = body
+        .allowed_ips
+        .map(|v| serde_json::to_string(&v).unwrap())
+        .unwrap_or(existing.allowed_ips.clone());
 
     sqlx::query(
         "UPDATE virtual_keys SET name=?, owner=?, tag=?, allowed_models=?, allowed_providers=?,
-         rpm_limit=?, tpm_limit=?, daily_budget=?, monthly_budget=?, expires_at=?, body_logging=? WHERE id=?",
+         rpm_limit=?, tpm_limit=?, daily_budget=?, monthly_budget=?, expires_at=?, body_logging=?, allowed_ips=? WHERE id=?",
     )
     .bind(name)
     .bind(owner)
@@ -471,6 +479,7 @@ pub async fn update_key(
     .bind(body.monthly_budget.or(existing.monthly_budget))
     .bind(body.expires_at.or(existing.expires_at))
     .bind(body_logging)
+    .bind(allowed_ips)
     .bind(&id)
     .execute(&state.pool)
     .await

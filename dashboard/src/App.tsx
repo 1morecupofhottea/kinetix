@@ -217,6 +217,9 @@ export default function App() {
   const handleUpdateKeyStatus = (id: string, status: 'active' | 'disabled' | 'revoked') =>
     withRefresh(() => Kinetix.updateKey(id, { status }));
 
+  const handleUpdateKeyIps = (id: string, ips: string[]) =>
+    withRefresh(() => Kinetix.updateKey(id, { allowed_ips: ips }));
+
   const handleAddRoute = (newRoute: Route) =>
     withRefresh(() =>
       Kinetix.createRoute({
@@ -368,7 +371,12 @@ export default function App() {
         )}
 
         {activeTab === 'keys' && (
-          <KeysView keys={keys} onAddKey={handleAddKey} onUpdateKeyStatus={handleUpdateKeyStatus} />
+          <KeysView
+            keys={keys}
+            onAddKey={handleAddKey}
+            onUpdateKeyStatus={handleUpdateKeyStatus}
+            onUpdateKeyIps={handleUpdateKeyIps}
+          />
         )}
 
         {activeTab === 'routes' && (
