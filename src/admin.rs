@@ -834,23 +834,58 @@ pub async fn discover_models(
         .map_err(|e| ApiError::bad(format!("invalid discovery response: {e}")))?;
     let discovered = adapter.parse_model_list(&parsed);
 
-    // Mark which are already imported.
+    // Mark which are already imported and record the observation (FR-10.5).
+    // Discovery never overwrites admin-edited fields — only the `discovery`
+    // column is written — and a model that has disappeared upstream is flagged,
+    // not deleted.
     let existing = db::models_for_provider(&state.pool, &id)
         .await
         .map_err(ApiError::internal)?;
-    let out: Vec<Value> = discovered
-        .into_iter()
-        .map(|m| {
-            json!({
-                "id": m.id,
-                "display_name": m.display_name,
-                "context_window": m.context_window,
-                "max_output_tokens": m.max_output_tokens,
-                "already_imported": existing.iter().any(|e| e.upstream_id == m.id),
-            })
-        })
-        .collect();
-    Ok(Json(json!({ "models": out })))
+    let now = db::now_iso();
+    let discovered_ids: std::collections::HashSet<String> =
+        discovered.iter().map(|m| m.id.clone()).collect();
+    let mut out: Vec<Value> = Vec::new();
+    for m in &discovered {
+        if let Some(row) = existing.iter().find(|e| e.upstream_id == m.id) {
+            let _ = db::set_model_discovery(
+                &state.pool,
+                &row.id,
+                &json!({
+                    "last_seen": now,
+                    "context_window": m.context_window,
+                    "max_output_tokens": m.max_output_tokens,
+                    "display_name": m.display_name,
+                    "disappeared": false,
+                }),
+            )
+            .await;
+        }
+        out.push(json!({
+            "id": m.id,
+            "display_name": m.display_name,
+            "context_window": m.context_window,
+            "max_output_tokens": m.max_output_tokens,
+            "already_imported": existing.iter().any(|e| e.upstream_id == m.id),
+        }));
+    }
+    // Flag imported models that are no longer advertised upstream.
+    let mut disappeared: Vec<Value> = Vec::new();
+    for row in &existing {
+        if discovered_ids.contains(&row.upstream_id) {
+            continue;
+        }
+        let prev: Value = serde_json::from_str(&row.discovery).unwrap_or(json!({}));
+        let mut merged = prev.clone();
+        merged["disappeared"] = json!(true);
+        merged["flagged_at"] = json!(now);
+        let _ = db::set_model_discovery(&state.pool, &row.id, &merged).await;
+        disappeared.push(json!({
+            "upstream_id": row.upstream_id,
+            "display_name": row.display_name,
+            "model_id": row.id,
+        }));
+    }
+    Ok(Json(json!({ "models": out, "disappeared": disappeared })))
 }
 
 /// `POST /admin/api/providers/:id/test` — send a minimal probe (FR-10.11).
@@ -1011,6 +1046,10 @@ fn model_json(m: &db::ModelRow, providers: &[db::ProviderRow]) -> Value {
         "parameters": m.params(),
         "thinking_map": m.thinking(),
         "extra_request": m.extra_request_value(),
+        // Discovery-suggested values (FR-10.5). Surfaced so an admin can see
+        // what the last discovery observed, including models that have since
+        // disappeared upstream (flagged, never silently deleted).
+        "discovery": serde_json::from_str::<Value>(&m.discovery).unwrap_or(json!({})),
     })
 }
 

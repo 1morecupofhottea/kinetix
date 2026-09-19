@@ -143,10 +143,15 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   connect-time DNS re-check, and an explicit insecure-TLS dev mode.
 - Cache-aware sticky routing (FR-7.3) keyed on an explicit session header.
 - Protocol torture + fuzz tests (FR-9.4/9.5) over a byte-robust SSE framer.
-- Data-plane/control-plane separation (NFR-2.6/2.7): `/healthz` distinguishes
-  serviceability from degraded control-plane state; admin login fails closed
-  when the store is down, while inference keeps serving from the in-memory
-  snapshot and `/metrics` reports `kinetix_control_plane_degraded`.
+- Data-plane/control-plane separation (NFR-2.6/2.7): `/healthz` stays HTTP 200
+  while the data plane is serviceable (it reports `control_plane: degraded` in
+  the body rather than dropping out of rotation); admin login fails closed when
+  the store is down, while inference keeps serving from the in-memory snapshot
+  and `/metrics` reports `kinetix_control_plane_degraded`.
+- Discovery never overwrites admin edits (FR-10.5): `POST
+  /admin/api/providers/:id/discover` records a per-model `discovery` observation
+  and returns a `disappeared` list flagging models no longer advertised
+  upstream, instead of silently deleting them.
 - Immutable per-request config snapshots (NFR-2.10/FR-10.13): every request
   captures one `Arc<Snapshot>` for its whole lifetime, so config edits never
   affect in-flight work; the snapshot is reloaded every second so time-based

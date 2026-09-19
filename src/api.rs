@@ -167,13 +167,15 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> R
 pub async fn healthz(State(state): State<AppState>) -> Response {
     // Lightweight process + database check (Monitoring section).
     let db_ok = sqlx::query("SELECT 1").fetch_one(&state.pool).await.is_ok();
-    let status = if db_ok {
-        StatusCode::OK
-    } else {
-        StatusCode::SERVICE_UNAVAILABLE
-    };
+    // The data plane serves inference from an immutable in-memory snapshot, so
+    // it remains serviceable even when the control-plane database is briefly
+    // unavailable (NFR-2.7). `/healthz` therefore reports the DATA PLANE as the
+    // external probe signal and must not drop out of rotation while inference
+    // still works; control-plane degradation is surfaced in the body and by the
+    // `kinetix_control_plane_degraded` metric instead of a 503.
+    let status = StatusCode::OK;
     let body = serde_json::json!({
-        "status": if db_ok { "ok" } else { "degraded" },
+        "status": "ok",
         "uptime_secs": state.uptime_secs(),
         "database": if db_ok { "ok" } else { "unavailable" },
         // Distinguish data-plane serviceability from degraded control-plane

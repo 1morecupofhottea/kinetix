@@ -740,6 +740,17 @@ pub async fn insert_model(pool: &Pool, m: &NewModel<'_>) -> Result<String> {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Record the last discovery observation for a model (FR-10.5). Only the
+/// `discovery` column is touched, so admin-edited fields are never overwritten.
+pub async fn set_model_discovery(pool: &Pool, id: &str, discovery: &Value) -> Result<()> {
+    sqlx::query("UPDATE models SET discovery=? WHERE id=?")
+        .bind(discovery.to_string())
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
 pub async fn update_model(
     pool: &Pool,
     id: &str,
