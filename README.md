@@ -208,8 +208,20 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
 - Alerting (FR-6.6/FR-12.17) also covers the Monitoring section: high fallback
   and error rates, unhealthy accounts, routes with no healthy target, virtual
   keys crossing 80% of their monthly budget, usage-log queue saturation/drops,
-  scheduled-backup failure, and p95 added proxy latency above
-  `KINETIX_ALERT_P95_LATENCY_MS` sustained for 10 minutes.
+  scheduled-backup failure, p95 added proxy latency above
+  `KINETIX_ALERT_P95_LATENCY_MS` sustained for 10 minutes, and repeated
+  credential-strategy failures (`kinetix_credential_failures_total`).
+- Generation-parameter metadata (FR-10.6): a configured `default` is applied
+  when the client omits the field (a client value always wins), `supported`
+  fields are dropped, and an out-of-range value is clamped or rejected per the
+  configured `policy`. No parameter defaults are ever invented for a model with
+  no configuration.
+- A post-commit stream failure is marked with an explicit `finish_reason`
+  (OpenAI `error`) before `[DONE]`, so a truncated stream is never mistaken for
+  a clean completion (FR-4.6/NFR-2.9).
+- Per-key IP allowlists (FR-3.4) are editable from the Keys view (an explicit
+  empty list clears the restriction) and enforced on both `/v1/chat/completions`
+  and `/v1/models`.
 - Discovery never overwrites admin edits (FR-10.5): `POST
   /admin/api/providers/:id/discover` records a per-model `discovery` observation
   and returns a `disappeared` list flagging models no longer advertised
