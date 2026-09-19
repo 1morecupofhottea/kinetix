@@ -55,7 +55,9 @@ pub fn build(state: AppState) -> Router {
         )
         .route(
             "/providers/{id}",
-            put(admin::update_provider).delete(admin::delete_provider),
+            get(admin::get_provider)
+                .put(admin::update_provider)
+                .delete(admin::delete_provider),
         )
         .route("/providers/{id}/discover", post(admin::discover_models))
         .route("/providers/{id}/test", post(admin::test_provider))

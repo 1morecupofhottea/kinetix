@@ -62,6 +62,9 @@ export function mapProvider(j: any): Provider {
     modelsPath: j.models_path ?? undefined,
     timeoutMs: num(j.timeout_ms, 120000),
     capabilityMode: (j.capability_mode as Provider['capabilityMode']) || 'permissive',
+    followRedirects: !!j.follow_redirects,
+    credentialHosts: str(j.credential_hosts),
+    allowInsecureTls: !!j.allow_insecure_tls,
     lastPingMs: 0,
   };
 }

@@ -37,6 +37,9 @@ export interface Provider {
   modelsPath?: string;
   timeoutMs: number;
   capabilityMode: 'permissive' | 'strict';
+  followRedirects?: boolean;
+  credentialHosts?: string;
+  allowInsecureTls?: boolean;
   lastPingMs: number;
 }
 

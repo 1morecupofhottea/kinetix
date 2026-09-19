@@ -9,6 +9,7 @@ interface ProvidersViewProps {
   providers: Provider[];
   models: ModelConfig[];
   onAddProvider: (provider: Provider) => void;
+  onUpdateProvider: (providerId: string, provider: Provider) => Promise<void>;
   onAddModel: (model: ModelConfig) => void;
   onDeleteModel: (modelId: string) => void;
   onDeleteProvider: (providerId: string) => void;
@@ -19,6 +20,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   providers,
   models,
   onAddProvider,
+  onUpdateProvider,
   onAddModel,
   onDeleteModel,
   onDeleteProvider,
@@ -37,12 +39,20 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   const [name, setName] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [wireFormat, setWireFormat] = useState<'gemini' | 'openai' | 'anthropic'>('gemini');
-  const [authScheme, setAuthScheme] = useState<'bearer' | 'custom_header' | 'query_param'>('query_param');
+  const [authScheme, setAuthScheme] = useState<'bearer' | 'custom_header' | 'query_param'>('bearer');
   const [customHeader, setCustomHeader] = useState('');
+  const [customParam, setCustomParam] = useState('');
   const [modelsPath, setModelsPath] = useState('/models');
   const [extraHeaders, setExtraHeaders] = useState('');
+  const [credentialHosts, setCredentialHosts] = useState('');
+  const [followRedirects, setFollowRedirects] = useState(false);
+  const [allowInsecureTls, setAllowInsecureTls] = useState(false);
+  const [timeoutMs, setTimeoutMs] = useState(120000);
+  const [capabilityMode, setCapabilityMode] = useState<'permissive' | 'strict'>('permissive');
   const [validation, setValidation] = useState<{ valid: boolean; problems: string[]; warnings: string[] } | null>(null);
   const [validating, setValidating] = useState(false);
+  const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   /** Parse a "Header: value" per line textarea into an object. */
   const parseHeaders = (text: string): Record<string, string> => {
@@ -144,17 +154,60 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     setDiscoveryResults((prev) => prev?.filter((x) => x.id !== m.id) || null);
   };
 
+  const headersToText = (h?: Record<string, string>): string =>
+    h ? Object.entries(h).map(([k, v]) => `${k}: ${v}`).join('\n') : '';
+
+  const resetProviderForm = () => {
+    setEditingProviderId(null);
+    setName('');
+    setBaseUrl('');
+    setWireFormat('gemini');
+    setAuthScheme('bearer');
+    setCustomHeader('');
+    setCustomParam('');
+    setModelsPath('/models');
+    setExtraHeaders('');
+    setCredentialHosts('');
+    setFollowRedirects(false);
+    setAllowInsecureTls(false);
+    setTimeoutMs(120000);
+    setCapabilityMode('permissive');
+    setValidation(null);
+  };
+
+  const openEditProvider = (p: Provider) => {
+    setEditingProviderId(p.id);
+    setName(p.name);
+    setBaseUrl(p.baseUrl);
+    setWireFormat(p.wireFormat);
+    setAuthScheme(p.authScheme);
+    setCustomHeader(p.customHeaderName || '');
+    setCustomParam(p.customParamName || '');
+    setModelsPath(p.modelsPath || '/models');
+    setExtraHeaders(headersToText(p.extraHeaders));
+    setCredentialHosts(p.credentialHosts || '');
+    setFollowRedirects(!!p.followRedirects);
+    setAllowInsecureTls(!!p.allowInsecureTls);
+    setTimeoutMs(p.timeoutMs || 120000);
+    setCapabilityMode(p.capabilityMode || 'permissive');
+    setValidation(null);
+    setShowAddProviderModal(true);
+  };
+
   const providerBody = () => ({
     name: name.trim(),
     base_url: baseUrl.trim(),
     wire_format: wireFormat,
     auth_scheme: authScheme,
-    custom_header_name: authScheme === 'custom_header' ? customHeader : null,
-    custom_param_name: null,
+    custom_header_name: authScheme === 'custom_header' ? customHeader.trim() || null : null,
+    custom_param_name: authScheme === 'query_param' ? customParam.trim() || null : null,
     extra_headers: parseHeaders(extraHeaders),
-    timeout_ms: 60000,
-    capability_mode: 'permissive',
+    timeout_ms: timeoutMs,
+    capability_mode: capabilityMode,
     models_path: modelsPath.trim() || null,
+    credential_hosts: credentialHosts.trim(),
+    follow_redirects: followRedirects,
+    allow_insecure_tls: allowInsecureTls,
   });
 
   const handleValidateProvider = async () => {
@@ -170,32 +223,44 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     }
   };
 
-  const handleCreateProvider = (e: React.FormEvent) => {
+  const handleCreateProvider = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !baseUrl.trim()) return;
 
-    const newProv: Provider = {
-      id: '',
+    const prov: Provider = {
+      id: editingProviderId || '',
       name: name.trim(),
       baseUrl: baseUrl.trim(),
       wireFormat,
       authScheme,
       customHeaderName: authScheme === 'custom_header' ? customHeader : undefined,
+      customParamName: authScheme === 'query_param' ? customParam : undefined,
       status: 'healthy',
       modelsCount: 0,
-      accountsCount: 1,
-      timeoutMs: 60000,
-      capabilityMode: 'permissive',
+      accountsCount: 0,
+      extraHeaders: parseHeaders(extraHeaders),
+      modelsPath: modelsPath.trim() || undefined,
+      timeoutMs,
+      capabilityMode,
+      followRedirects,
+      credentialHosts: credentialHosts.trim(),
+      allowInsecureTls,
       lastPingMs: 0,
     };
 
-    onAddProvider(newProv);
-    setSelectedProviderId(newProv.id);
-    setShowAddProviderModal(false);
-    setValidation(null);
-    setName('');
-    setBaseUrl('');
-    setExtraHeaders('');
+    setIsSaving(true);
+    try {
+      if (editingProviderId) {
+        await onUpdateProvider(editingProviderId, prov);
+      } else {
+        onAddProvider(prov);
+        setSelectedProviderId(prov.id);
+      }
+      setShowAddProviderModal(false);
+      resetProviderForm();
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   const handleCreateCustomModel = (e: React.FormEvent) => {
@@ -283,7 +348,10 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
         <SketchButton
           variant="primary"
           size="md"
-          onClick={() => setShowAddProviderModal(true)}
+          onClick={() => {
+            resetProviderForm();
+            setShowAddProviderModal(true);
+          }}
           className="gap-2 font-heading font-bold"
         >
           <Plus className="w-5 h-5" />
@@ -302,7 +370,10 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
           <SketchButton
             variant="primary"
             size="md"
-            onClick={() => setShowAddProviderModal(true)}
+            onClick={() => {
+              resetProviderForm();
+              setShowAddProviderModal(true);
+            }}
             className="gap-2 font-heading font-bold"
           >
             <Plus className="w-5 h-5" />
@@ -403,6 +474,15 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     >
                       <RefreshCw className={`w-4 h-4 ${isDiscovering ? 'animate-spin' : ''}`} />
                       {isDiscovering ? 'Querying Upstream...' : 'Fetch Models (Discovery)'}
+                    </SketchButton>
+                    <SketchButton
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => openEditProvider(activeProvider)}
+                      className="gap-1.5 font-heading"
+                    >
+                      <Sliders className="w-4 h-4" />
+                      Edit
                     </SketchButton>
                     <SketchButton
                       variant="primary"
@@ -645,7 +725,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
 
               <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] mb-4 flex items-center gap-2">
                 <Server className="w-6 h-6 text-[#2d5da1]" />
-                Add Upstream Provider (No Presets)
+                {editingProviderId ? 'Edit Upstream Provider' : 'Add Upstream Provider (No Presets)'}
               </h3>
 
               <form onSubmit={handleCreateProvider} className="space-y-4 font-body">
@@ -706,9 +786,9 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                       className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none font-mono"
                       style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
                     >
-                      <option value="query_param">Query Param (?key=...)</option>
-                      <option value="bearer">Bearer Header</option>
+                      <option value="bearer">Bearer Header (Authorization)</option>
                       <option value="custom_header">Custom Header (e.g. x-api-key)</option>
+                      <option value="query_param">Query Param (?key=...)</option>
                     </select>
                   </div>
                 </div>
@@ -723,6 +803,21 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                       placeholder="e.g. x-api-key"
                       value={customHeader}
                       onChange={(e) => setCustomHeader(e.target.value)}
+                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                    />
+                  </div>
+                )}
+
+                {authScheme === 'query_param' && (
+                  <div>
+                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                      Custom Query Parameter Name
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="e.g. key"
+                      value={customParam}
+                      onChange={(e) => setCustomParam(e.target.value)}
                       className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     />
                   </div>
@@ -754,6 +849,67 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     />
                   </div>
                 </div>
+
+                <details className="text-sm font-body">
+                  <summary className="cursor-pointer font-heading font-bold text-[#2d5da1]">
+                    Advanced (security & timeout)
+                  </summary>
+                  <div className="grid grid-cols-2 gap-3 mt-3">
+                    <div>
+                      <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                        Timeout (ms)
+                      </label>
+                      <input
+                        type="number"
+                        min={1000}
+                        value={timeoutMs}
+                        onChange={(e) => setTimeoutMs(Number(e.target.value) || 120000)}
+                        className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                        Capability Mode
+                      </label>
+                      <select
+                        value={capabilityMode}
+                        onChange={(e) => setCapabilityMode(e.target.value as any)}
+                        className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                      >
+                        <option value="permissive">Permissive (never reject on caps)</option>
+                        <option value="strict">Strict (reject unmet caps)</option>
+                      </select>
+                    </div>
+                    <div className="col-span-2">
+                      <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                        Credential Host Binding (comma-separated, optional)
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. api.example.com, uploads.example.com"
+                        value={credentialHosts}
+                        onChange={(e) => setCredentialHosts(e.target.value)}
+                        className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                      />
+                    </div>
+                    <label className="flex items-center gap-2 font-body text-sm">
+                      <input
+                        type="checkbox"
+                        checked={followRedirects}
+                        onChange={(e) => setFollowRedirects(e.target.checked)}
+                      />
+                      Follow redirects (default off)
+                    </label>
+                    <label className="flex items-center gap-2 font-body text-sm">
+                      <input
+                        type="checkbox"
+                        checked={allowInsecureTls}
+                        onChange={(e) => setAllowInsecureTls(e.target.checked)}
+                      />
+                      Allow plain-HTTP (dev only)
+                    </label>
+                  </div>
+                </details>
 
                 {validation && (
                   <div
@@ -796,8 +952,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                   >
                     {validating ? 'Validating…' : 'Validate (Dry Run)'}
                   </SketchButton>
-                  <SketchButton type="submit" variant="danger" className="font-bold">
-                    Save Provider
+                  <SketchButton type="submit" variant="danger" className="font-bold" disabled={isSaving}>
+                    {isSaving ? 'Saving…' : editingProviderId ? 'Save Changes' : 'Save Provider'}
                   </SketchButton>
                 </div>
               </form>

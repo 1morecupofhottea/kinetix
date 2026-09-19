@@ -72,6 +72,9 @@ export const Kinetix = {
     return r.providers.map(mapProvider);
   },
   createProvider: (body: Record<string, unknown>) => api.post('/admin/api/providers', body),
+  async getProvider(id: string): Promise<Provider> {
+    return mapProvider(await api.get(`/admin/api/providers/${id}`));
+  },
   updateProvider: (id: string, body: Record<string, unknown>) => api.put(`/admin/api/providers/${id}`, body),
   deleteProvider: (id: string) => api.del(`/admin/api/providers/${id}`),
   validateProvider: (body: Record<string, unknown>) =>

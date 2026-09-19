@@ -275,12 +275,33 @@ export default function App() {
         models_path: prov.modelsPath || null,
         timeout_ms: prov.timeoutMs,
         capability_mode: prov.capabilityMode,
+        credential_hosts: prov.credentialHosts || '',
+        follow_redirects: !!prov.followRedirects,
+        allow_insecure_tls: !!prov.allowInsecureTls,
+      }),
+    );
+
+  const handleUpdateProvider = (providerId: string, prov: Provider) =>
+    withRefresh(() =>
+      Kinetix.updateProvider(providerId, {
+        name: prov.name,
+        base_url: prov.baseUrl,
+        wire_format: prov.wireFormat,
+        auth_scheme: prov.authScheme,
+        custom_header_name: prov.customHeaderName || null,
+        custom_param_name: prov.customParamName || null,
+        extra_headers: prov.extraHeaders || {},
+        models_path: prov.modelsPath || null,
+        timeout_ms: prov.timeoutMs,
+        capability_mode: prov.capabilityMode,
+        credential_hosts: prov.credentialHosts || '',
+        follow_redirects: !!prov.followRedirects,
+        allow_insecure_tls: !!prov.allowInsecureTls,
       }),
     );
 
   const handleDeleteProvider = (providerId: string) =>
     withRefresh(() => Kinetix.deleteProvider(providerId));
-
   const handleAddModel = (model: ModelConfig) =>
     withRefresh(() =>
       Kinetix.createModel(model.providerId, {
@@ -396,6 +417,7 @@ export default function App() {
             providers={providers}
             models={models}
             onAddProvider={handleAddProvider}
+            onUpdateProvider={handleUpdateProvider}
             onAddModel={handleAddModel}
             onDeleteModel={handleDeleteModel}
             onDeleteProvider={handleDeleteProvider}

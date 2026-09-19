@@ -523,6 +523,20 @@ pub async fn delete_key(
 // Providers
 // ===========================================================================
 
+/// FR-8.4: return a single provider's full configuration so the dashboard can
+/// populate an edit form (list_providers is intentionally summary-shaped).
+pub async fn get_provider(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let p = db::get_provider(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("provider not found"))?;
+    Ok(Json(provider_json(&p)))
+}
+
 pub async fn list_providers(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
     let providers = db::list_providers(&state.pool)
         .await
@@ -536,26 +550,41 @@ pub async fn list_providers(State(state): State<AppState>, _auth: AdminAuth) -> 
     let out: Vec<Value> = providers
         .iter()
         .map(|p| {
-            json!({
-                "id": p.id,
-                "name": p.name,
-                "base_url": p.base_url,
-                "wire_format": p.wire_format,
-                "auth_scheme": p.auth_scheme,
-                "custom_header_name": p.custom_header_name,
-                "custom_param_name": p.custom_param_name,
-                "extra_headers": p.extra_headers_map(),
-                "timeout_ms": p.timeout_ms,
-                "capability_mode": p.capability_mode,
-                "models_path": p.models_path,
-                "enabled": p.enabled != 0,
-                "accounts_count": accounts.iter().filter(|a| a.provider_id == p.id).count(),
-                "models_count": models.iter().filter(|m| m.provider_id == p.id).count(),
-                "healthy_accounts": accounts.iter().filter(|a| a.provider_id == p.id && a.status == "healthy").count(),
-            })
+            let mut v = provider_json(p);
+            v["accounts_count"] = json!(accounts.iter().filter(|a| a.provider_id == p.id).count());
+            v["models_count"] = json!(models.iter().filter(|m| m.provider_id == p.id).count());
+            v["healthy_accounts"] = json!(accounts
+                .iter()
+                .filter(|a| a.provider_id == p.id && a.status == "healthy")
+                .count());
+            v
         })
         .collect();
     Ok(Json(json!({ "providers": out })))
+}
+
+/// Full provider configuration (used by both the list and single-provider
+/// endpoints). The dashboard's edit form is populated from this shape, so every
+/// field an admin can set must be present here (FR-8.4/8.6).
+fn provider_json(p: &db::ProviderRow) -> Value {
+    json!({
+        "id": p.id,
+        "name": p.name,
+        "base_url": p.base_url,
+        "wire_format": p.wire_format,
+        "auth_scheme": p.auth_scheme,
+        "custom_header_name": p.custom_header_name,
+        "custom_param_name": p.custom_param_name,
+        "extra_headers": p.extra_headers_map(),
+        "timeout_ms": p.timeout_ms,
+        "capability_mode": p.capability_mode,
+        "models_path": p.models_path,
+        "enabled": p.enabled != 0,
+        "follow_redirects": p.follow_redirects != 0,
+        "credential_hosts": p.credential_hosts,
+        "allow_insecure_tls": p.allow_insecure_tls != 0,
+        "created_at": p.created_at,
+    })
 }
 
 #[derive(Deserialize)]
