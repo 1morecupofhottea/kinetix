@@ -190,6 +190,12 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   then `apply:true` (upsert by name, never deletes, never overwrites an existing
   credential).
 
+- Webhook alerting (FR-6.6/FR-12.17): a background loop watches recent usage and
+  account/route health and POSTs edge-triggered JSON alerts (high fallback rate,
+  high error rate, an account exhausted/circuit-open, a route with no healthy
+  target). Disabled unless `KINETIX_ALERT_WEBHOOK_URL` is set; delivery is
+  best-effort and never touches the data plane.
+
 **Deferred** (documented, not silently dropped): local response caching (removed
-from v1, FR-7.6), budget reservation (FR-6.9), and webhook alerts
-(FR-6.6/12.17). See the r4 requirements document for the full delta.
+from v1, FR-7.6) and budget reservation (FR-6.9). See the r4 requirements
+document for the full delta.

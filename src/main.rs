@@ -5,6 +5,7 @@
 
 mod adapters;
 mod admin;
+mod alerts;
 mod api;
 mod app;
 mod assets;
@@ -171,6 +172,17 @@ fn spawn_background_tasks(state: AppState) {
             st.sticky_sweep(Duration::from_secs(30 * 60));
         }
     });
+
+    // Webhook alerting (FR-6.6/FR-12.17): evaluates accounting and account
+    // health on an interval and fires edge-triggered alerts. No-op when
+    // KINETIX_ALERT_WEBHOOK_URL is unset.
+    {
+        let st = state.clone();
+        let alerts = std::sync::Arc::new(alerts::AlertState::new());
+        tokio::spawn(async move {
+            alerts::run(st, alerts).await;
+        });
+    }
 
     // Purge expired body logs (FR-6.5 retention) and old route traces.
     let st = state.clone();

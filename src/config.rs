@@ -36,6 +36,18 @@ pub struct Config {
     /// Graceful-shutdown drain window before in-flight streams are dropped
     /// (NFR-2.3). Default 30s.
     pub shutdown_grace_secs: u64,
+    /// Optional webhook URL for alerts (FR-6.6). When set, alert-worthy events
+    /// are POSTed as JSON. Unset means alerting is disabled.
+    pub alert_webhook_url: Option<String>,
+    /// Fallback-rate alert threshold as a fraction of requests (FR-12.17).
+    pub alert_fallback_rate: f64,
+    /// 5xx/error-rate alert threshold as a fraction of requests.
+    pub alert_error_rate: f64,
+    /// Minimum requests in the window before a rate alert can fire, so a
+    /// quiet instance does not alert on one request.
+    pub alert_min_requests: i64,
+    /// Seconds between alert evaluations.
+    pub alert_interval_secs: u64,
 }
 
 impl Config {
@@ -74,6 +86,21 @@ impl Config {
         let shutdown_grace_secs = env_or("KINETIX_SHUTDOWN_GRACE_SECS", "30")
             .parse::<u64>()
             .unwrap_or(30);
+        let alert_webhook_url = std::env::var("KINETIX_ALERT_WEBHOOK_URL")
+            .ok()
+            .filter(|u| !u.trim().is_empty());
+        let alert_fallback_rate = env_or("KINETIX_ALERT_FALLBACK_RATE", "0.25")
+            .parse::<f64>()
+            .unwrap_or(0.25);
+        let alert_error_rate = env_or("KINETIX_ALERT_ERROR_RATE", "0.10")
+            .parse::<f64>()
+            .unwrap_or(0.10);
+        let alert_min_requests = env_or("KINETIX_ALERT_MIN_REQUESTS", "20")
+            .parse::<i64>()
+            .unwrap_or(20);
+        let alert_interval_secs = env_or("KINETIX_ALERT_INTERVAL_SECS", "60")
+            .parse::<u64>()
+            .unwrap_or(60);
 
         Ok(Config {
             bind,
@@ -93,6 +120,11 @@ impl Config {
             allow_insecure_tls,
             data_dir,
             shutdown_grace_secs,
+            alert_webhook_url,
+            alert_fallback_rate,
+            alert_error_rate,
+            alert_min_requests,
+            alert_interval_secs,
         })
     }
 }
