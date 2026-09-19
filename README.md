@@ -184,7 +184,10 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
 - Accounting truthfulness (FR-6.2/6.8): unknown token counts are never coerced
   to zero, and `/metrics` exposes `kinetix_usage_unknown_total`,
   `kinetix_usage_estimated_total`, and `kinetix_usage_unknown_cost_total` so
-  non-provider-reported usage/cost is never read as exact.
+  non-provider-reported usage/cost is never read as exact. `/metrics` also
+  reports request/error rate (`kinetix_error_rate`), average latency/TTFT
+  (`kinetix_avg_latency_ms`, `kinetix_avg_ttft_ms`), and
+  `kinetix_credential_failures_total` (NFR-4.2).
 - Dashboard request inspector renders the Route Trace (candidate/skip/attempt/
   commit/result steps with timings) and the flight-recorder diagnostics inline
   (NFR-4.3/4.4); the Routes editor exposes the opaque-state portability policy
