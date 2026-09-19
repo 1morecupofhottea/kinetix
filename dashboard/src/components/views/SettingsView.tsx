@@ -52,14 +52,14 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onLogout }) => {
   return (
     <div className="space-y-6">
       <div>
-        <h2 className="text-3xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
-          <Settings className="w-7 h-7 text-[#2d5da1]" />
+        <h2 className="text-3xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
+          <Settings className="w-7 h-7 text-[var(--pen-blue)]" />
           <span>Settings &amp; Security</span>
           <SketchBadge variant="blue" rotation="1deg">
             Control Plane
           </SketchBadge>
         </h2>
-        <p className="text-base font-body text-[#2d2d2d]/80">
+        <p className="text-base font-body text-[var(--ink)]/80">
           Session handling and the administrator password. Everything else is configured under the Gateway and
           Configuration sections, or from the <span className="font-mono">kinetix</span> CLI.
         </p>
@@ -67,8 +67,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onLogout }) => {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <WobblyCard decoration="tack" className="p-6">
-          <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] mb-4 flex items-center gap-2">
-            <KeyRound className="w-6 h-6 text-[#ff4d4d]" />
+          <h3 className="text-2xl font-heading font-bold text-[var(--ink)] mb-4 flex items-center gap-2">
+            <KeyRound className="w-6 h-6 text-[var(--marker-red)]" />
             Change Administrator Password
           </h3>
 
@@ -79,7 +79,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onLogout }) => {
                 type="password"
                 value={current}
                 onChange={(e) => setCurrent(e.target.value)}
-                className="w-full px-3 py-2 bg-white border-2 border-[#2d2d2d] sketch-shadow-sm font-mono text-sm focus:outline-none focus:border-[#2d5da1]"
+                className="w-full px-3 py-2 bg-[var(--surface)] border-2 border-[var(--ink)] sketch-shadow-sm font-mono text-sm focus:outline-none focus:border-[var(--pen-blue)]"
                 style={{ borderRadius: '12px 16px 12px 16px / 16px 12px 16px 12px' }}
                 autoComplete="current-password"
               />
@@ -90,7 +90,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onLogout }) => {
                 type="password"
                 value={next}
                 onChange={(e) => setNext(e.target.value)}
-                className="w-full px-3 py-2 bg-white border-2 border-[#2d2d2d] sketch-shadow-sm font-mono text-sm focus:outline-none focus:border-[#2d5da1]"
+                className="w-full px-3 py-2 bg-[var(--surface)] border-2 border-[var(--ink)] sketch-shadow-sm font-mono text-sm focus:outline-none focus:border-[var(--pen-blue)]"
                 style={{ borderRadius: '12px 16px 12px 16px / 16px 12px 16px 12px' }}
                 autoComplete="new-password"
               />
@@ -101,19 +101,19 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onLogout }) => {
                 type="password"
                 value={confirmPw}
                 onChange={(e) => setConfirmPw(e.target.value)}
-                className="w-full px-3 py-2 bg-white border-2 border-[#2d2d2d] sketch-shadow-sm font-mono text-sm focus:outline-none focus:border-[#2d5da1]"
+                className="w-full px-3 py-2 bg-[var(--surface)] border-2 border-[var(--ink)] sketch-shadow-sm font-mono text-sm focus:outline-none focus:border-[var(--pen-blue)]"
                 style={{ borderRadius: '12px 16px 12px 16px / 16px 12px 16px 12px' }}
                 autoComplete="new-password"
               />
             </div>
 
             {error && (
-              <div className="p-2 bg-[#ffebee] border-2 border-[#ff4d4d] rounded text-sm font-mono text-[#b71c1c]">
+              <div className="p-2 bg-[var(--tint-red)] border-2 border-[var(--marker-red)] rounded text-sm font-mono text-[var(--danger-text)]">
                 {error}
               </div>
             )}
             {done && (
-              <div className="p-2 bg-[#e8f5e9] border-2 border-[#2e7d32] rounded text-sm font-mono text-[#1b5e20]">
+              <div className="p-2 bg-[var(--tint-green)] border-2 border-[var(--pen-green)] rounded text-sm font-mono text-[var(--success-text)]">
                 Password changed. All sessions invalidated — signing you out…
               </div>
             )}
@@ -128,9 +128,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onLogout }) => {
         <div className="space-y-6">
           <WobblyCard variant="muted" className="p-5">
             <h4 className="text-lg font-heading font-bold mb-2 flex items-center gap-2">
-              <Info className="w-5 h-5 text-[#2d5da1]" /> Session Policy
+              <Info className="w-5 h-5 text-[var(--pen-blue)]" /> Session Policy
             </h4>
-            <ul className="list-disc list-inside space-y-1.5 text-sm font-body text-[#2d2d2d]/85">
+            <ul className="list-disc list-inside space-y-1.5 text-sm font-body text-[var(--ink)]/85">
               <li>Sessions are held in server memory with a TTL (default 12 h).</li>
               <li>
                 <strong>Restarting the server invalidates every session</strong>, so a browser must log in again — a
@@ -143,10 +143,10 @@ export const SettingsView: React.FC<SettingsViewProps> = ({ onLogout }) => {
 
           <WobblyCard decoration="tape" className="p-5">
             <h4 className="text-lg font-heading font-bold mb-2">CLI Equivalent</h4>
-            <p className="text-sm font-body text-[#2d2d2d]/85 mb-2">
+            <p className="text-sm font-body text-[var(--ink)]/85 mb-2">
               The same change can be made without the dashboard (works while the server is stopped):
             </p>
-            <pre className="bg-[#2d2d2d] text-[#fdfbf7] text-xs font-mono p-3 rounded overflow-x-auto">
+            <pre className="bg-[var(--code-bg)] text-[var(--code-fg)] text-xs font-mono p-3 rounded overflow-x-auto">
 {`kinetix password set 'a-new-strong-password'
 kinetix password show`}
             </pre>

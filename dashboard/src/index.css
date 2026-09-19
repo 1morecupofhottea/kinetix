@@ -1,5 +1,10 @@
 @import "tailwindcss";
 
+/* Enable `dark:` variants keyed off a `.dark` class on <html> (or any ancestor).
+   The palette itself is driven by CSS variables so both the hand-drawn
+   utilities and the many arbitrary-value classes switch together. */
+@custom-variant dark (&:where(.dark, .dark *));
+
 @theme {
   --color-paper: #fdfbf7;
   --color-pencil: #2d2d2d;
@@ -16,33 +21,81 @@
   --font-mono: 'JetBrains Mono', monospace;
 }
 
+/* ---- Themeable palette (light is the default) ---------------------------- */
 :root {
-  --paper-bg: #fdfbf7;
-  --pencil-black: #2d2d2d;
-  --erased-gray: #e5e0d8;
+  --paper: #fdfbf7;
+  --ink: #2d2d2d;
+  --erased: #e5e0d8;
+  --erased-soft: #f4efe8;
+  --surface: #ffffff;
   --marker-red: #ff4d4d;
   --pen-blue: #2d5da1;
-  --postit-yellow: #fff9c4;
-  
+  --postit: #fff9c4;
+  --pen-green: #2e7d32;
+  --marker-orange: #d97706;
+  --danger-text: #b71c1c;
+  --success-text: #1b5e20;
+  --info-text: #1a3d7c;
+  --warn-text: #826b00;
+  --tint-red: #ffebee;
+  --tint-green: #e8f5e9;
+  --tint-blue: #e8f0fe;
+  --tint-yellow: #fffde7;
+  --tint-orange: #fdf2e9;
+  --shadow-ink: #2d2d2d;
+  --code-bg: #2d2d2d;
+  --code-fg: #fdfbf7;
+
+  /* legacy aliases kept for compatibility */
+  --paper-bg: var(--paper);
+  --pencil-black: var(--ink);
+  --erased-gray: var(--erased);
+  --postit-yellow: var(--postit);
+
   --wobbly-1: 255px 15px 225px 15px / 15px 225px 15px 255px;
   --wobbly-2: 15px 255px 15px 225px / 225px 15px 255px 15px;
   --wobbly-3: 20px 280px 20px 260px / 260px 20px 280px 20px;
   --wobbly-btn: 255px 25px 225px 25px / 25px 225px 25px 255px;
   --wobbly-badge: 120px 10px 100px 10px / 10px 100px 10px 120px;
   --wobbly-pill: 9999px 9999px 9999px 9999px / 9999px 9999px 9999px 9999px;
-  
-  --shadow-sketch: 4px 4px 0px 0px #2d2d2d;
-  --shadow-sketch-lg: 8px 8px 0px 0px #2d2d2d;
-  --shadow-sketch-sm: 2px 2px 0px 0px #2d2d2d;
+
+  --shadow-sketch: 4px 4px 0px 0px var(--shadow-ink);
+  --shadow-sketch-lg: 8px 8px 0px 0px var(--shadow-ink);
+  --shadow-sketch-sm: 2px 2px 0px 0px var(--shadow-ink);
+}
+
+.dark {
+  --paper: #17150f;
+  --ink: #ece7db;
+  --erased: #3b362b;
+  --erased-soft: #262218;
+  --surface: #211d16;
+  --marker-red: #ff6b6b;
+  --pen-blue: #7aa2e3;
+  --postit: #3d3714;
+  --pen-green: #6fcf7a;
+  --marker-orange: #f0a94a;
+  --danger-text: #ff8a8a;
+  --success-text: #8be08b;
+  --info-text: #9ec1f0;
+  --warn-text: #f2c46b;
+  --tint-red: rgba(255, 107, 107, 0.14);
+  --tint-green: rgba(111, 207, 122, 0.14);
+  --tint-blue: rgba(122, 162, 227, 0.14);
+  --tint-yellow: rgba(240, 169, 74, 0.14);
+  --tint-orange: rgba(240, 169, 74, 0.14);
+  --shadow-ink: #000000;
+  --code-bg: #0d0c09;
+  --code-fg: #ded8ca;
 }
 
 body {
-  background-color: #fdfbf7;
-  color: #2d2d2d;
+  background-color: var(--paper);
+  color: var(--ink);
   font-family: 'Patrick Hand', cursive, sans-serif;
   font-size: 1.125rem;
   line-height: 1.6;
-  background-image: radial-gradient(#e5e0d8 1.5px, transparent 1.5px);
+  background-image: radial-gradient(var(--erased) 1.5px, transparent 1.5px);
   background-size: 24px 24px;
   min-height: 100vh;
   margin: 0;
@@ -51,7 +104,7 @@ body {
 
 h1, h2, h3, h4, h5, h6 {
   font-family: 'Kalam', cursive, sans-serif;
-  color: #2d2d2d;
+  color: var(--ink);
 }
 
 /* Wobbly Border Utilities */
@@ -81,29 +134,29 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Hard Offset Shadows */
 .sketch-shadow {
-  box-shadow: 4px 4px 0px 0px #2d2d2d;
+  box-shadow: 4px 4px 0px 0px var(--shadow-ink);
 }
 
 .sketch-shadow-lg {
-  box-shadow: 8px 8px 0px 0px #2d2d2d;
+  box-shadow: 8px 8px 0px 0px var(--shadow-ink);
 }
 
 .sketch-shadow-sm {
-  box-shadow: 2px 2px 0px 0px #2d2d2d;
+  box-shadow: 2px 2px 0px 0px var(--shadow-ink);
 }
 
 .sketch-shadow-blue {
-  box-shadow: 4px 4px 0px 0px #2d5da1;
+  box-shadow: 4px 4px 0px 0px var(--pen-blue);
 }
 
 .sketch-shadow-red {
-  box-shadow: 4px 4px 0px 0px #ff4d4d;
+  box-shadow: 4px 4px 0px 0px var(--marker-red);
 }
 
 /* Interactive Button Hover & Active States */
 .sketch-btn {
   border-radius: var(--wobbly-btn);
-  box-shadow: 4px 4px 0px 0px #2d2d2d;
+  box-shadow: 4px 4px 0px 0px var(--shadow-ink);
   transition: transform 100ms ease, box-shadow 100ms ease, background-color 100ms ease, color 100ms ease;
   cursor: pointer;
   display: inline-flex;
@@ -113,12 +166,12 @@ h1, h2, h3, h4, h5, h6 {
 
 .sketch-btn:hover:not(:disabled) {
   transform: translate(2px, 2px);
-  box-shadow: 2px 2px 0px 0px #2d2d2d;
+  box-shadow: 2px 2px 0px 0px var(--shadow-ink);
 }
 
 .sketch-btn:active:not(:disabled) {
   transform: translate(4px, 4px);
-  box-shadow: 0px 0px 0px 0px #2d2d2d;
+  box-shadow: 0px 0px 0px 0px var(--shadow-ink);
 }
 
 .sketch-btn:disabled {
@@ -135,9 +188,9 @@ h1, h2, h3, h4, h5, h6 {
   transform: translateX(-50%) rotate(-1.5deg);
   width: 90px;
   height: 24px;
-  background-color: rgba(229, 224, 216, 0.85);
-  border-left: 2px dashed rgba(45, 45, 45, 0.3);
-  border-right: 2px dashed rgba(45, 45, 45, 0.3);
+  background-color: color-mix(in srgb, var(--erased) 85%, transparent);
+  border-left: 2px dashed color-mix(in srgb, var(--ink) 30%, transparent);
+  border-right: 2px dashed color-mix(in srgb, var(--ink) 30%, transparent);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
   pointer-events: none;
   z-index: 10;
@@ -150,9 +203,9 @@ h1, h2, h3, h4, h5, h6 {
   transform: rotate(35deg);
   width: 70px;
   height: 20px;
-  background-color: rgba(229, 224, 216, 0.85);
-  border-left: 1px dashed rgba(45, 45, 45, 0.3);
-  border-right: 1px dashed rgba(45, 45, 45, 0.3);
+  background-color: color-mix(in srgb, var(--erased) 85%, transparent);
+  border-left: 1px dashed color-mix(in srgb, var(--ink) 30%, transparent);
+  border-right: 1px dashed color-mix(in srgb, var(--ink) 30%, transparent);
   pointer-events: none;
   z-index: 10;
 }
@@ -165,26 +218,26 @@ h1, h2, h3, h4, h5, h6 {
   transform: translateX(-50%);
   width: 18px;
   height: 18px;
-  background: radial-gradient(circle at 35% 35%, #ff7676, #ff4d4d 60%, #b71c1c);
-  border: 2px solid #2d2d2d;
+  background: radial-gradient(circle at 35% 35%, #ff7676, var(--marker-red) 60%, #b71c1c);
+  border: 2px solid var(--ink);
   border-radius: 50%;
-  box-shadow: 2px 2px 0px 0px rgba(45, 45, 45, 0.6);
+  box-shadow: 2px 2px 0px 0px color-mix(in srgb, var(--ink) 60%, transparent);
   z-index: 10;
   pointer-events: none;
 }
 
 .thumbtack-pin-blue {
-  background: radial-gradient(circle at 35% 35%, #6495ed, #2d5da1 60%, #153463);
+  background: radial-gradient(circle at 35% 35%, #6495ed, var(--pen-blue) 60%, #153463);
 }
 
 /* Wavy underline */
 .wavy-underline {
-  text-decoration: underline wavy #ff4d4d;
+  text-decoration: underline wavy var(--marker-red);
   text-underline-offset: 6px;
 }
 
 .wavy-underline-blue {
-  text-decoration: underline wavy #2d5da1;
+  text-decoration: underline wavy var(--pen-blue);
   text-underline-offset: 6px;
 }
 
@@ -195,15 +248,14 @@ h1, h2, h3, h4, h5, h6 {
 }
 
 ::-webkit-scrollbar-track {
-  background: #fdfbf7;
+  background: var(--paper);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #2d2d2d;
+  background: var(--ink);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #ff4d4d;
+  background: var(--marker-red);
 }
-

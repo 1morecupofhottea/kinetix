@@ -60,13 +60,13 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
       {confirmNode}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
+          <h2 className="text-3xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
             <span>Model Aliasing & Routing Table</span>
             <SketchBadge variant="yellow" rotation="-1deg">
               FR-5 Spec
             </SketchBadge>
           </h2>
-          <p className="text-base font-body text-[#2d2d2d]/80">
+          <p className="text-base font-body text-[var(--ink)]/80">
             Expose clean, stable model names (like <code>coder</code> or <code>fast</code>) to tools like Pi, routing them to routes or specific upstream models.
           </p>
         </div>
@@ -96,10 +96,10 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
               <div>
                 <div className="flex items-start justify-between gap-2 mb-3">
                   <div>
-                    <span className="text-xs font-mono text-[#2d2d2d]/60 block mb-1">
+                    <span className="text-xs font-mono text-[var(--ink)]/60 block mb-1">
                       Client-Facing Model Name:
                     </span>
-                    <h3 className="text-2xl font-heading font-bold text-[#2d2d2d]">
+                    <h3 className="text-2xl font-heading font-bold text-[var(--ink)]">
                       "{alias.aliasName}"
                     </h3>
                   </div>
@@ -109,18 +109,18 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
                   </SketchBadge>
                 </div>
 
-                <div className="p-3 bg-[#fdfbf7] border-2 border-[#2d2d2d] sketch-shadow-sm rounded mb-3 flex items-center gap-2 text-sm font-mono">
-                  <span className="font-bold text-[#2d5da1]">{alias.aliasName}</span>
-                  <ArrowRight className="w-4 h-4 text-[#2d2d2d]" />
-                  <span className="font-bold text-[#2d2d2d]">{alias.targetDisplayName}</span>
+                <div className="p-3 bg-[var(--paper)] border-2 border-[var(--ink)] sketch-shadow-sm rounded mb-3 flex items-center gap-2 text-sm font-mono">
+                  <span className="font-bold text-[var(--pen-blue)]">{alias.aliasName}</span>
+                  <ArrowRight className="w-4 h-4 text-[var(--ink)]" />
+                  <span className="font-bold text-[var(--ink)]">{alias.targetDisplayName}</span>
                 </div>
 
-                <p className="text-sm font-body text-[#2d2d2d]/80">
+                <p className="text-sm font-body text-[var(--ink)]/80">
                   {alias.description}
                 </p>
               </div>
 
-              <div className="pt-3 border-t border-[#2d2d2d]/20 flex justify-end mt-4">
+              <div className="pt-3 border-t border-[var(--ink)]/20 flex justify-end mt-4">
                 <button
                   onClick={async () => {
                     const ok = await confirm({
@@ -131,7 +131,7 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
                     });
                     if (ok) onDeleteAlias(alias.id);
                   }}
-                  className="text-xs font-mono text-[#ff4d4d] hover:underline flex items-center gap-1 cursor-pointer"
+                  className="text-xs font-mono text-[var(--marker-red)] hover:underline flex items-center gap-1 cursor-pointer"
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Remove Alias
@@ -146,22 +146,22 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
           <div className="w-full max-w-lg">
-            <WobblyCard decoration="tape" className="bg-[#fdfbf7] p-6 relative">
+            <WobblyCard decoration="tape" className="bg-[var(--paper)] p-6 relative">
               <button
                 onClick={() => setShowAddModal(false)}
-                className="absolute top-4 right-4 text-[#2d2d2d] font-bold text-xl hover:text-[#ff4d4d] cursor-pointer"
+                className="absolute top-4 right-4 text-[var(--ink)] font-bold text-xl hover:text-[var(--marker-red)] cursor-pointer"
               >
                 ✕
               </button>
 
-              <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] mb-4 flex items-center gap-2">
-                <Compass className="w-6 h-6 text-[#2d5da1]" />
+              <h3 className="text-2xl font-heading font-bold text-[var(--ink)] mb-4 flex items-center gap-2">
+                <Compass className="w-6 h-6 text-[var(--pen-blue)]" />
                 Add Model Alias
               </h3>
 
               <form onSubmit={handleCreateSubmit} className="space-y-4 font-body">
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Client Alias Name (e.g. coder, fast, sonnet)
                   </label>
                   <input
@@ -170,20 +170,20 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
                     placeholder="e.g. coder"
                     value={aliasName}
                     onChange={(e) => setAliasName(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: DESIGN_TOKENS.radii.wobblyMd }}
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Target Type
                     </label>
                     <select
                       value={targetType}
                       onChange={(e) => setTargetType(e.target.value as any)}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none"
                       style={{ borderRadius: DESIGN_TOKENS.radii.wobblyMd }}
                     >
                       <option value="route">Route (With Fallback)</option>
@@ -192,13 +192,13 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Target Destination
                     </label>
                     <select
                       value={targetId}
                       onChange={(e) => setTargetId(e.target.value)}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none"
                       style={{ borderRadius: DESIGN_TOKENS.radii.wobbly }}
                     >
                       {targetType === 'route'
@@ -217,7 +217,7 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Description / Purpose
                   </label>
                   <input
@@ -225,7 +225,7 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
                     placeholder="e.g. Primary Pi coding target"
                     value={description}
                     onChange={(e) => setDescription(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: DESIGN_TOKENS.radii.wobblyBtn }}
                   />
                 </div>

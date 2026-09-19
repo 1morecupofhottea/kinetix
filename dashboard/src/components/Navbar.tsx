@@ -17,10 +17,14 @@ import {
   Menu,
   X,
   Settings,
+  Sun,
+  Moon,
+  Monitor,
 } from 'lucide-react';
 import { ProxyMetrics } from '../types';
 import { formatCurrency } from '../lib/designSystem';
 import { SketchButton, SketchBadge } from './HandDrawnElements';
+import type { ThemeMode } from '../lib/theme';
 
 export type NavTab = 'keys' | 'routes' | 'providers' | 'accounts' | 'usage' | 'requests' | 'aliases' | 'audit' | 'settings';
 
@@ -91,20 +95,20 @@ function Brand({ compact = false }: { compact?: boolean }) {
   return (
     <div className="flex items-center gap-3">
       <div
-        className="w-11 h-11 bg-[#ff4d4d] text-white flex items-center justify-center font-heading font-bold text-2xl border-2 border-[#2d2d2d] sketch-shadow -rotate-2 select-none shrink-0"
+        className="w-11 h-11 bg-[var(--marker-red)] text-[var(--surface)] flex items-center justify-center font-heading font-bold text-2xl border-2 border-[var(--ink)] sketch-shadow -rotate-2 select-none shrink-0"
         style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
       >
         K
       </div>
       <div className="min-w-0">
         <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-heading font-bold tracking-tight text-[#2d2d2d]">Kinetix</h1>
+          <h1 className="text-2xl font-heading font-bold tracking-tight text-[var(--ink)]">Kinetix</h1>
           <SketchBadge variant="yellow" rotation="1deg" className="text-xs font-heading">
             v0.1
           </SketchBadge>
         </div>
         {!compact && (
-          <p className="text-xs text-[#2d2d2d]/70 font-body leading-tight">
+          <p className="text-xs text-[var(--ink)]/70 font-body leading-tight">
             Multi-Protocol LLM Proxy
           </p>
         )}
@@ -135,7 +139,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <nav className="flex-1 overflow-y-auto px-3 py-4 space-y-5">
       {NAV_GROUPS.map((group) => (
         <div key={group.label}>
-          <div className="px-2 mb-1.5 text-[0.7rem] font-heading font-bold uppercase tracking-[0.15em] text-[#2d2d2d]/45">
+          <div className="px-2 mb-1.5 text-[0.7rem] font-heading font-bold uppercase tracking-[0.15em] text-[var(--ink)]/45">
             {group.label}
           </div>
           <div className="space-y-1">
@@ -153,25 +157,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   }}
                   className={`group relative flex items-center gap-3 pl-3 pr-2 py-2 border-2 transition-all select-none no-underline cursor-pointer ${
                     isActive
-                      ? 'bg-white border-[#2d2d2d] sketch-shadow-sm font-bold -translate-y-0.5'
-                      : 'bg-transparent border-transparent hover:bg-[#e5e0d8]/60 hover:border-[#2d2d2d]/30'
+                      ? 'bg-[var(--surface)] border-[var(--ink)] sketch-shadow-sm font-bold -translate-y-0.5'
+                      : 'bg-transparent border-transparent hover:bg-[var(--erased)]/60 hover:border-[var(--ink)]/30'
                   }`}
                   style={{ borderRadius: '14px 10px 16px 10px / 10px 16px 10px 14px' }}
                 >
                   {/* active marker bar */}
                   <span
                     className={`absolute left-0 top-1.5 bottom-1.5 w-1.5 rounded-full ${
-                      isActive ? 'bg-[#ff4d4d]' : 'bg-transparent'
+                      isActive ? 'bg-[var(--marker-red)]' : 'bg-transparent'
                     }`}
                   />
-                  <span className={isActive ? 'text-[#ff4d4d]' : 'text-[#2d2d2d]/60 group-hover:text-[#2d2d2d]'}>
+                  <span className={isActive ? 'text-[var(--marker-red)]' : 'text-[var(--ink)]/60 group-hover:text-[var(--ink)]'}>
                     {item.icon}
                   </span>
-                  <span className="flex-1 text-base font-heading text-[#2d2d2d]">{item.label}</span>
+                  <span className="flex-1 text-base font-heading text-[var(--ink)]">{item.label}</span>
                   {item.badge && (
                     <span
-                      className={`text-[0.65rem] px-1.5 py-0.5 rounded-full border border-[#2d2d2d] font-heading ${
-                        item.badge === 'Live' ? 'bg-[#ff4d4d] text-white animate-pulse' : 'bg-[#fff9c4] text-[#2d2d2d]'
+                      className={`text-[0.65rem] px-1.5 py-0.5 rounded-full border border-[var(--ink)] font-heading ${
+                        item.badge === 'Live' ? 'bg-[var(--marker-red)] text-[var(--surface)] animate-pulse' : 'bg-[var(--postit)] text-[var(--ink)]'
                       }`}
                     >
                       {item.badge}
@@ -187,10 +191,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   );
 
   const footer = currentUser && (
-    <div className="px-3 pb-4 pt-2 border-t-2 border-dashed border-[#2d2d2d]/20">
+    <div className="px-3 pb-4 pt-2 border-t-2 border-dashed border-[var(--ink)]/20">
       <div className="flex items-center gap-2 mb-2 px-1">
-        <div className="w-2 h-2 rounded-full bg-[#2e7d32] shrink-0" />
-        <span className="text-xs font-mono text-[#2d2d2d]/80 truncate font-bold" title={`Session: ${currentUser}`}>
+        <div className="w-2 h-2 rounded-full bg-[var(--pen-green)] shrink-0" />
+        <span className="text-xs font-mono text-[var(--ink)]/80 truncate font-bold" title={`Session: ${currentUser}`}>
           {currentUser}
         </span>
       </div>
@@ -198,7 +202,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <button
           id="btn-logout"
           onClick={onLogout}
-          className="w-full px-3 py-2 bg-white hover:bg-[#ffebee] text-[#2d2d2d] hover:text-[#ff4d4d] border-2 border-[#2d2d2d] cursor-pointer transition-colors flex items-center justify-center gap-2 text-sm font-heading font-bold sketch-shadow-sm"
+          className="w-full px-3 py-2 bg-[var(--surface)] hover:bg-[var(--tint-red)] text-[var(--ink)] hover:text-[var(--marker-red)] border-2 border-[var(--ink)] cursor-pointer transition-colors flex items-center justify-center gap-2 text-sm font-heading font-bold sketch-shadow-sm"
           style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
           title="Sign Out / Lock Gateway"
         >
@@ -212,8 +216,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   return (
     <>
       {/* Desktop rail */}
-      <aside className="hidden lg:flex flex-col w-64 shrink-0 h-screen sticky top-0 bg-[#fdfbf7] border-r-2 border-[#2d2d2d]">
-        <div className="px-4 pt-4 pb-3 border-b-2 border-dashed border-[#2d2d2d]/20">
+      <aside className="hidden lg:flex flex-col w-64 shrink-0 h-screen sticky top-0 bg-[var(--paper)] border-r-2 border-[var(--ink)]">
+        <div className="px-4 pt-4 pb-3 border-b-2 border-dashed border-[var(--ink)]/20">
           <Brand />
         </div>
         {nav}
@@ -230,15 +234,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={onCloseMobile}
         />
         <aside
-          className={`absolute left-0 top-0 bottom-0 w-72 max-w-[85vw] flex flex-col bg-[#fdfbf7] border-r-2 border-[#2d2d2d] transition-transform duration-200 ${
+          className={`absolute left-0 top-0 bottom-0 w-72 max-w-[85vw] flex flex-col bg-[var(--paper)] border-r-2 border-[var(--ink)] transition-transform duration-200 ${
             mobileOpen ? 'translate-x-0' : '-translate-x-full'
           }`}
         >
-          <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b-2 border-dashed border-[#2d2d2d]/20">
+          <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b-2 border-dashed border-[var(--ink)]/20">
             <Brand compact />
             <button
               onClick={onCloseMobile}
-              className="p-1.5 border-2 border-[#2d2d2d] bg-white sketch-shadow-sm cursor-pointer"
+              className="p-1.5 border-2 border-[var(--ink)] bg-[var(--surface)] sketch-shadow-sm cursor-pointer"
               style={{ borderRadius: '10px 14px 10px 14px / 14px 10px 14px 10px' }}
               aria-label="Close navigation"
             >
@@ -260,7 +264,43 @@ interface TopBarProps {
   onOpenNav: () => void;
   onRefresh?: () => void;
   isRefreshing?: boolean;
+  themeMode: ThemeMode;
+  onThemeChange: (mode: ThemeMode) => void;
 }
+
+const THEME_OPTIONS: { mode: ThemeMode; icon: React.ReactNode; label: string }[] = [
+  { mode: 'light', icon: <Sun className="w-4 h-4" />, label: 'Light' },
+  { mode: 'dark', icon: <Moon className="w-4 h-4" />, label: 'Dark' },
+  { mode: 'system', icon: <Monitor className="w-4 h-4" />, label: 'System' },
+];
+
+const ThemeSwitch: React.FC<{ mode: ThemeMode; onChange: (m: ThemeMode) => void }> = ({
+  mode,
+  onChange,
+}) => (
+  <div
+    className="flex items-center bg-[var(--surface)] border-2 border-[var(--ink)] sketch-shadow-sm overflow-hidden"
+    style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
+    role="group"
+    aria-label="Color theme"
+  >
+    {THEME_OPTIONS.map((opt) => (
+      <button
+        key={opt.mode}
+        onClick={() => onChange(opt.mode)}
+        title={`${opt.label} theme`}
+        aria-pressed={mode === opt.mode}
+        className={`px-2 py-1.5 cursor-pointer transition-colors ${
+          mode === opt.mode
+            ? 'bg-[var(--ink)] text-[var(--surface)]'
+            : 'text-[var(--ink)] hover:bg-[var(--erased)]'
+        }`}
+      >
+        {opt.icon}
+      </button>
+    ))}
+  </div>
+);
 
 /**
  * A slim, low-noise top bar: it holds only the current page title, at-a-glance
@@ -274,14 +314,16 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenNav,
   onRefresh,
   isRefreshing,
+  themeMode,
+  onThemeChange,
 }) => {
   return (
-    <header className="sticky top-0 z-30 w-full bg-[#fdfbf7]/95 backdrop-blur-sm border-b-2 border-[#2d2d2d]">
+    <header className="sticky top-0 z-30 w-full bg-[var(--paper)]/95 backdrop-blur-sm border-b-2 border-[var(--ink)]">
       <div className="w-full px-4 md:px-8 py-2.5 flex items-center gap-3">
         {/* Mobile nav trigger */}
         <button
           onClick={onOpenNav}
-          className="lg:hidden p-2 border-2 border-[#2d2d2d] bg-white sketch-shadow-sm cursor-pointer shrink-0"
+          className="lg:hidden p-2 border-2 border-[var(--ink)] bg-[var(--surface)] sketch-shadow-sm cursor-pointer shrink-0"
           style={{ borderRadius: '12px 16px 12px 16px / 16px 12px 16px 12px' }}
           aria-label="Open navigation"
         >
@@ -290,7 +332,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
         {/* Current page */}
         <div className="min-w-0">
-          <h2 className="text-xl md:text-2xl font-heading font-bold text-[#2d2d2d] truncate leading-tight">
+          <h2 className="text-xl md:text-2xl font-heading font-bold text-[var(--ink)] truncate leading-tight">
             {tabLabel(activeTab)}
           </h2>
         </div>
@@ -300,35 +342,35 @@ export const TopBar: React.FC<TopBarProps> = ({
         {/* At-a-glance status — grouped, quiet, wraps on small screens */}
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <div
-            className="hidden sm:flex items-center gap-1.5 bg-white px-2.5 py-1 border-2 border-[#2d2d2d] sketch-shadow-sm text-xs"
+            className="hidden sm:flex items-center gap-1.5 bg-[var(--surface)] px-2.5 py-1 border-2 border-[var(--ink)] sketch-shadow-sm text-xs"
             style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
             title="Cloudflare Tunnel status"
           >
-            <span className="w-2 h-2 rounded-full bg-[#2e7d32] animate-pulse border border-[#2d2d2d]" />
-            <ShieldCheck className="w-3.5 h-3.5 text-[#2d5da1]" />
-            <span className="font-body text-[#2d2d2d]">
+            <span className="w-2 h-2 rounded-full bg-[var(--pen-green)] animate-pulse border border-[var(--ink)]" />
+            <ShieldCheck className="w-3.5 h-3.5 text-[var(--pen-blue)]" />
+            <span className="font-body text-[var(--ink)]">
               Tunnel <strong className="font-heading">Online</strong>
             </span>
           </div>
 
           <div
-            className="flex items-center gap-1.5 bg-white px-2.5 py-1 border-2 border-[#2d2d2d] sketch-shadow-sm text-xs"
+            className="flex items-center gap-1.5 bg-[var(--surface)] px-2.5 py-1 border-2 border-[var(--ink)] sketch-shadow-sm text-xs"
             style={{ borderRadius: '255px 25px 225px 25px / 25px 225px 25px 255px' }}
             title="Active upstream streams"
           >
-            <Activity className="w-3.5 h-3.5 text-[#ff4d4d]" />
-            <span className="font-body text-[#2d2d2d]">
+            <Activity className="w-3.5 h-3.5 text-[var(--marker-red)]" />
+            <span className="font-body text-[var(--ink)]">
               <strong className="font-heading text-sm">{metrics.activeStreams}</strong> streams
             </span>
           </div>
 
           <div
-            className="flex items-center gap-1.5 bg-[#fff9c4] px-2.5 py-1 border-2 border-[#2d2d2d] sketch-shadow-sm text-xs"
+            className="flex items-center gap-1.5 bg-[var(--postit)] px-2.5 py-1 border-2 border-[var(--ink)] sketch-shadow-sm text-xs"
             style={{ borderRadius: '20px 300px 20px 280px / 280px 20px 300px 20px' }}
             title="Total recorded spend"
           >
-            <DollarSign className="w-3.5 h-3.5 text-[#2d5da1]" />
-            <span className="font-body text-[#2d2d2d]">
+            <DollarSign className="w-3.5 h-3.5 text-[var(--pen-blue)]" />
+            <span className="font-body text-[var(--ink)]">
               <strong className="font-heading text-sm">{formatCurrency(metrics.totalSpendUsd)}</strong>
             </span>
           </div>
@@ -337,7 +379,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             <button
               onClick={onRefresh}
               disabled={isRefreshing}
-              className="flex items-center gap-1.5 bg-white px-2.5 py-1.5 border-2 border-[#2d2d2d] sketch-shadow-sm text-sm font-heading font-bold cursor-pointer hover:bg-[#e5e0d8] disabled:opacity-60"
+              className="flex items-center gap-1.5 bg-[var(--surface)] px-2.5 py-1.5 border-2 border-[var(--ink)] sketch-shadow-sm text-sm font-heading font-bold cursor-pointer hover:bg-[var(--erased)] disabled:opacity-60"
               style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
               title="Reload all data from the admin API"
             >
@@ -346,6 +388,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             </button>
           )}
 
+          <ThemeSwitch mode={themeMode} onChange={onThemeChange} />
+
           <SketchButton
             id="btn-test-proxy"
             variant="danger"
@@ -353,7 +397,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             onClick={onOpenTester}
             className="gap-1.5 font-heading font-bold"
           >
-            <Play className="w-4 h-4 fill-white" />
+            <Play className="w-4 h-4 fill-[var(--surface)]" />
             <span className="hidden sm:inline">Live Proxy Test</span>
             <span className="sm:hidden">Test</span>
           </SketchButton>

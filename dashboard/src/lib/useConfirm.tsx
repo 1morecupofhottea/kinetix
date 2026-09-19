@@ -53,17 +53,17 @@ export function useConfirm() {
   const confirmNode = req ? (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
       <div
-        className="w-full max-w-md bg-[#fdfbf7] border-2 border-[#2d2d2d] p-6 sketch-shadow"
+        className="w-full max-w-md bg-[var(--paper)] border-2 border-[var(--ink)] p-6 sketch-shadow"
         style={{ borderRadius: DESIGN_TOKENS.radii.wobblyLg }}
       >
-        <h3 className="text-xl font-heading font-bold text-[#2d2d2d] mb-2 flex items-center gap-2">
-          <AlertTriangle className="w-5 h-5 text-[#ff4d4d]" />
+        <h3 className="text-xl font-heading font-bold text-[var(--ink)] mb-2 flex items-center gap-2">
+          <AlertTriangle className="w-5 h-5 text-[var(--marker-red)]" />
           {req.title}
         </h3>
-        <p className="text-base font-body text-[#2d2d2d]/90">{req.message}</p>
+        <p className="text-base font-body text-[var(--ink)]/90">{req.message}</p>
         {req.detail && (
           <p
-            className="mt-2 p-2 text-sm font-mono bg-[#fff9c4] border border-[#d97706] text-[#7a4a00]"
+            className="mt-2 p-2 text-sm font-mono bg-[var(--postit)] border border-[var(--marker-orange)] text-[var(--warn-text)]"
             style={{ borderRadius: DESIGN_TOKENS.radii.wobblyMd }}
           >
             {req.detail}

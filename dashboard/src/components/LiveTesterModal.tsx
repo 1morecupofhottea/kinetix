@@ -43,7 +43,7 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
   const [protocol, setProtocol] = useState<'openai' | 'anthropic'>('openai');
   const [target, setTarget] = useState<string>('');
   const [prompt, setPrompt] = useState(
-    'Write a quick Rust function to calculate exponential backoff for an LLM pool key.',
+    'REPLY BACK EXACTLY: `Testing`',
   );
   const [stream, setStream] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -240,23 +240,23 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
       <div className="w-full max-w-4xl max-h-[92vh] overflow-y-auto">
-        <WobblyCard decoration="tape" className="bg-[#fdfbf7] p-6 relative">
+        <WobblyCard decoration="tape" className="bg-[var(--paper)] p-6 relative">
           <button
             onClick={onClose}
-            className="absolute top-4 right-4 p-1 rounded-full border-2 border-[#2d2d2d] bg-white hover:bg-[#ff4d4d] hover:text-white transition-colors cursor-pointer"
+            className="absolute top-4 right-4 p-1 rounded-full border-2 border-[var(--ink)] bg-[var(--surface)] hover:bg-[var(--marker-red)] hover:text-[var(--surface)] transition-colors cursor-pointer"
           >
             <X className="w-6 h-6" />
           </button>
 
           <div className="flex items-center gap-3 mb-4">
-            <div className="p-2 bg-[#ff4d4d] text-white border-2 border-[#2d2d2d] wobbly-circle -rotate-3">
+            <div className="p-2 bg-[var(--marker-red)] text-[var(--surface)] border-2 border-[var(--ink)] wobbly-circle -rotate-3">
               <Zap className="w-6 h-6" />
             </div>
             <div>
-              <h2 className="text-2xl md:text-3xl font-heading font-bold text-[#2d2d2d]">
+              <h2 className="text-2xl md:text-3xl font-heading font-bold text-[var(--ink)]">
                 Live Proxy Interactive Tester
               </h2>
-              <p className="text-base text-[#2d2d2d]/80 font-body">
+              <p className="text-base text-[var(--ink)]/80 font-body">
                 Runs a real request through the Kinetix pipeline and streams the upstream result back.
               </p>
             </div>
@@ -266,15 +266,15 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
             {/* Control Panel */}
             <div className="space-y-4">
               <div>
-                <label className="block text-base font-heading font-bold text-[#2d2d2d] mb-1">
+                <label className="block text-base font-heading font-bold text-[var(--ink)] mb-1">
                   1. Virtual Key (Authorization)
                 </label>
                 <div className="grid grid-cols-2 gap-2 mb-2">
                   <button
                     type="button"
                     onClick={() => setAuthMode('admin')}
-                    className={`py-1 px-2 border-2 border-[#2d2d2d] text-xs font-heading cursor-pointer ${
-                      authMode === 'admin' ? 'bg-[#2d5da1] text-white font-bold' : 'bg-white'
+                    className={`py-1 px-2 border-2 border-[var(--ink)] text-xs font-heading cursor-pointer ${
+                      authMode === 'admin' ? 'bg-[var(--pen-blue)] text-[var(--surface)] font-bold' : 'bg-[var(--surface)]'
                     }`}
                     style={{ borderRadius: '120px 10px 100px 10px / 10px 100px 10px 120px' }}
                   >
@@ -283,8 +283,8 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setAuthMode('raw')}
-                    className={`py-1 px-2 border-2 border-[#2d2d2d] text-xs font-heading cursor-pointer ${
-                      authMode === 'raw' ? 'bg-[#ff4d4d] text-white font-bold' : 'bg-white'
+                    className={`py-1 px-2 border-2 border-[var(--ink)] text-xs font-heading cursor-pointer ${
+                      authMode === 'raw' ? 'bg-[var(--marker-red)] text-[var(--surface)] font-bold' : 'bg-[var(--surface)]'
                     }`}
                     style={{ borderRadius: '120px 10px 100px 10px / 10px 100px 10px 120px' }}
                   >
@@ -295,7 +295,7 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                   <select
                     value={selectedKeyId}
                     onChange={(e) => setSelectedKeyId(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none focus:border-[#2d5da1]"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none focus:border-[var(--pen-blue)]"
                     style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
                   >
                     {keys.map((k) => (
@@ -310,24 +310,24 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                     value={rawKey}
                     onChange={(e) => setRawKey(e.target.value)}
                     placeholder="sk-kinetix-..."
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-sm font-mono sketch-shadow-sm focus:outline-none focus:border-[#ff4d4d]"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-sm font-mono sketch-shadow-sm focus:outline-none focus:border-[var(--marker-red)]"
                     style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
                   />
                 )}
               </div>
 
               <div>
-                <label className="block text-base font-heading font-bold text-[#2d2d2d] mb-1">
+                <label className="block text-base font-heading font-bold text-[var(--ink)] mb-1">
                   2. Inbound Format (Client Wire)
                 </label>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
                     onClick={() => setProtocol('openai')}
-                    className={`py-1.5 px-2 border-2 border-[#2d2d2d] text-sm font-heading cursor-pointer text-center ${
+                    className={`py-1.5 px-2 border-2 border-[var(--ink)] text-sm font-heading cursor-pointer text-center ${
                       protocol === 'openai'
-                        ? 'bg-[#2d5da1] text-white sketch-shadow-sm font-bold'
-                        : 'bg-white text-[#2d2d2d]'
+                        ? 'bg-[var(--pen-blue)] text-[var(--surface)] sketch-shadow-sm font-bold'
+                        : 'bg-[var(--surface)] text-[var(--ink)]'
                     }`}
                     style={{ borderRadius: '120px 10px 100px 10px / 10px 100px 10px 120px' }}
                   >
@@ -336,10 +336,10 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setProtocol('anthropic')}
-                    className={`py-1.5 px-2 border-2 border-[#2d2d2d] text-sm font-heading cursor-pointer text-center ${
+                    className={`py-1.5 px-2 border-2 border-[var(--ink)] text-sm font-heading cursor-pointer text-center ${
                       protocol === 'anthropic'
-                        ? 'bg-[#ff4d4d] text-white sketch-shadow-sm font-bold'
-                        : 'bg-white text-[#2d2d2d]'
+                        ? 'bg-[var(--marker-red)] text-[var(--surface)] sketch-shadow-sm font-bold'
+                        : 'bg-[var(--surface)] text-[var(--ink)]'
                     }`}
                     style={{ borderRadius: '120px 10px 100px 10px / 10px 100px 10px 120px' }}
                   >
@@ -349,13 +349,13 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
               </div>
 
               <div>
-                <label className="block text-base font-heading font-bold text-[#2d2d2d] mb-1">
+                <label className="block text-base font-heading font-bold text-[var(--ink)] mb-1">
                   3. Requested Model or Route
                 </label>
                 <select
                   value={effectiveTarget}
                   onChange={(e) => setTarget(e.target.value)}
-                  className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none focus:border-[#2d5da1]"
+                  className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none focus:border-[var(--pen-blue)]"
                   style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
                 >
                   {routes.length > 0 && (
@@ -378,7 +378,7 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
               </div>
 
               <div
-                className="p-3 bg-[#fff9c4] border-2 border-[#2d2d2d] sketch-shadow-sm"
+                className="p-3 bg-[var(--postit)] border-2 border-[var(--ink)] sketch-shadow-sm"
                 style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
               >
                 <label className="flex items-center gap-2 cursor-pointer select-none">
@@ -386,9 +386,9 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                     type="checkbox"
                     checked={stream}
                     onChange={(e) => setStream(e.target.checked)}
-                    className="w-4 h-4 accent-[#ff4d4d]"
+                    className="w-4 h-4 accent-[var(--marker-red)]"
                   />
-                  <span className="font-heading font-bold text-sm text-[#2d2d2d]">
+                  <span className="font-heading font-bold text-sm text-[var(--ink)]">
                     Stream (SSE) response
                   </span>
                 </label>
@@ -407,7 +407,7 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                   onClick={handleRunTest}
                   className="w-full gap-2 font-heading font-bold"
                 >
-                  <Play className="w-5 h-5 fill-white" />
+                  <Play className="w-5 h-5 fill-[var(--surface)]" />
                   Send Request
                 </SketchButton>
               )}
@@ -416,47 +416,47 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
             {/* Prompt & Output Panel */}
             <div className="md:col-span-2 space-y-4">
               <div>
-                <label className="block text-base font-heading font-bold text-[#2d2d2d] mb-1">
+                <label className="block text-base font-heading font-bold text-[var(--ink)] mb-1">
                   Prompt (Pi Coding Agent format)
                 </label>
                 <textarea
                   rows={3}
                   value={prompt}
                   onChange={(e) => setPrompt(e.target.value)}
-                  className="w-full bg-white border-2 border-[#2d2d2d] p-3 font-body text-base sketch-shadow-sm focus:outline-none focus:border-[#2d5da1] resize-none"
+                  className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] p-3 font-body text-base sketch-shadow-sm focus:outline-none focus:border-[var(--pen-blue)] resize-none"
                   style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
                 />
               </div>
 
               <div>
                 <div className="flex items-center justify-between mb-1">
-                  <label className="text-base font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
+                  <label className="text-base font-heading font-bold text-[var(--ink)] flex items-center gap-2">
                     <span>Live SSE Stream Result</span>
                     {isLoading && (
-                      <span className="inline-flex items-center gap-1 text-xs text-[#ff4d4d] animate-pulse">
-                        <span className="w-2 h-2 rounded-full bg-[#ff4d4d]" /> Receiving chunks
+                      <span className="inline-flex items-center gap-1 text-xs text-[var(--marker-red)] animate-pulse">
+                        <span className="w-2 h-2 rounded-full bg-[var(--marker-red)]" /> Receiving chunks
                       </span>
                     )}
                   </label>
                   {meta && (
-                    <span className="text-xs text-[#2d2d2d]/70 font-mono">
+                    <span className="text-xs text-[var(--ink)]/70 font-mono">
                       TTFT: {meta.ttftMs}ms | Total: {meta.latencyMs}ms
                     </span>
                   )}
                 </div>
 
                 <div
-                  className="w-full min-h-[160px] max-h-[240px] overflow-y-auto bg-white border-2 border-[#2d2d2d] p-3 font-mono text-sm sketch-shadow-sm whitespace-pre-wrap select-text"
+                  className="w-full min-h-[160px] max-h-[240px] overflow-y-auto bg-[var(--surface)] border-2 border-[var(--ink)] p-3 font-mono text-sm sketch-shadow-sm whitespace-pre-wrap select-text"
                   style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
                 >
                   {error && (
-                    <span className="text-[#b71c1c] flex items-start gap-2">
+                    <span className="text-[var(--danger-text)] flex items-start gap-2">
                       <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
                       {error}
                     </span>
                   )}
                   {!error && output.length === 0 && !isLoading && (
-                    <span className="text-[#2d2d2d]/40 font-body text-base">
+                    <span className="text-[var(--ink)]/40 font-body text-base">
                       Click "Send Request" to run a live request through the proxy...
                     </span>
                   )}
@@ -466,12 +466,12 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
 
               {meta && (
                 <div
-                  className="p-3 bg-[#e5e0d8]/50 border-2 border-[#2d2d2d] sketch-shadow-sm space-y-2 text-sm"
+                  className="p-3 bg-[var(--erased)]/50 border-2 border-[var(--ink)] sketch-shadow-sm space-y-2 text-sm"
                   style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
                 >
-                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[#2d2d2d]/20 pb-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--ink)]/20 pb-2">
                     <div className="flex items-center gap-2">
-                      <CheckCircle2 className="w-4 h-4 text-[#2e7d32]" />
+                      <CheckCircle2 className="w-4 h-4 text-[var(--pen-green)]" />
                       <span className="font-heading font-bold text-base">
                         {meta.servingAccount ? `Served By: ${meta.servingAccount}` : `Route ID: ${meta.routeId || '(unknown)'}`}
                       </span>
@@ -488,16 +488,16 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                   </div>
 
                   {meta.fallbackPath.length > 0 && (
-                    <div className="text-xs font-mono text-[#2d2d2d] bg-white p-2 border border-[#2d2d2d] rounded">
+                    <div className="text-xs font-mono text-[var(--ink)] bg-[var(--surface)] p-2 border border-[var(--ink)] rounded">
                       <strong className="font-heading">Fallback Sequence:</strong>
                       <div className="flex flex-wrap items-center gap-1.5 mt-1">
                         {meta.fallbackPath.map((step, idx) => (
                           <React.Fragment key={idx}>
-                            <span className={step.includes('429') ? 'text-[#ff4d4d] font-bold' : 'text-[#2e7d32]'}>
+                            <span className={step.includes('429') ? 'text-[var(--marker-red)] font-bold' : 'text-[var(--pen-green)]'}>
                               {step}
                             </span>
                             {idx < meta.fallbackPath.length - 1 && (
-                              <ArrowRight className="w-3.5 h-3.5 text-[#2d2d2d]" />
+                              <ArrowRight className="w-3.5 h-3.5 text-[var(--ink)]" />
                             )}
                           </React.Fragment>
                         ))}
@@ -506,13 +506,13 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                   )}
 
                   {meta.warnings.length > 0 && (
-                    <div className="text-xs font-mono text-[#d97706] bg-[#fff9c4] p-2 border border-[#d97706] rounded">
+                    <div className="text-xs font-mono text-[var(--marker-orange)] bg-[var(--postit)] p-2 border border-[var(--marker-orange)] rounded">
                       <strong className="font-heading">⚠ Portability warning:</strong>
                       <div className="mt-1">{meta.warnings.join('; ')}</div>
                     </div>
                   )}
 
-                  <div className="text-[10px] font-mono text-[#2d2d2d]/60 break-all">
+                  <div className="text-[10px] font-mono text-[var(--ink)]/60 break-all">
                     Route ID (opaque): {meta.routeId || '(none)'}
                     {meta.routeId && (
                       <button
@@ -541,7 +541,7 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                             alert((e as Error).message);
                           }
                         }}
-                        className="ml-2 underline text-[#2d5da1]"
+                        className="ml-2 underline text-[var(--pen-blue)]"
                       >
                         resolve trace
                       </button>
@@ -549,13 +549,13 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                   </div>
 
                   <div className="grid grid-cols-3 gap-2 text-center text-xs font-mono pt-1">
-                    <div className="bg-white p-1 border border-[#2d2d2d] rounded min-w-0">
+                    <div className="bg-[var(--surface)] p-1 border border-[var(--ink)] rounded min-w-0">
                       Status: <strong>{meta.statusCode}</strong>
                     </div>
-                    <div className="bg-white p-1 border border-[#2d2d2d] rounded min-w-0 truncate" title={`${meta.ttftMs}ms`}>
+                    <div className="bg-[var(--surface)] p-1 border border-[var(--ink)] rounded min-w-0 truncate" title={`${meta.ttftMs}ms`}>
                       TTFT: <strong>{meta.ttftMs}ms</strong>
                     </div>
-                    <div className="bg-white p-1 border border-[#2d2d2d] rounded min-w-0 truncate" title={`${meta.latencyMs}ms`}>
+                    <div className="bg-[var(--surface)] p-1 border border-[var(--ink)] rounded min-w-0 truncate" title={`${meta.latencyMs}ms`}>
                       Total: <strong>{meta.latencyMs}ms</strong>
                     </div>
                   </div>

@@ -22,10 +22,10 @@ const IpAllowlistEditor: React.FC<{
   const [editing, setEditing] = useState(false);
   const [text, setText] = useState(current.join(', '));
   return (
-    <div className="col-span-2 pt-1 border-t border-[#2d2d2d]/15 flex flex-wrap items-center gap-2">
+    <div className="col-span-2 pt-1 border-t border-[var(--ink)]/15 flex flex-wrap items-center gap-2">
       <span>
         IP Allowlist:{' '}
-        <strong className="text-[#2d5da1] font-mono">
+        <strong className="text-[var(--pen-blue)] font-mono">
           {current.length > 0 ? current.join(', ') : 'any'}
         </strong>
       </span>
@@ -35,7 +35,7 @@ const IpAllowlistEditor: React.FC<{
             value={text}
             onChange={(e) => setText(e.target.value)}
             placeholder="203.0.113.0/24, 198.51.100.7"
-            className="px-2 py-0.5 text-xs font-mono border border-[#2d2d2d] rounded bg-white w-64"
+            className="px-2 py-0.5 text-xs font-mono border border-[var(--ink)] rounded bg-[var(--surface)] w-64"
           />
           <button
             onClick={() => {
@@ -46,7 +46,7 @@ const IpAllowlistEditor: React.FC<{
               onSave(keyId, ips);
               setEditing(false);
             }}
-            className="px-2 py-0.5 text-xs font-heading font-bold border border-[#2d2d2d] bg-[#e8f5e9] rounded cursor-pointer"
+            className="px-2 py-0.5 text-xs font-heading font-bold border border-[var(--ink)] bg-[var(--tint-green)] rounded cursor-pointer"
           >
             Save
           </button>
@@ -55,7 +55,7 @@ const IpAllowlistEditor: React.FC<{
               setText(current.join(', '));
               setEditing(false);
             }}
-            className="px-2 py-0.5 text-xs font-heading border border-[#2d2d2d]/40 bg-white rounded cursor-pointer"
+            className="px-2 py-0.5 text-xs font-heading border border-[var(--ink)]/40 bg-[var(--surface)] rounded cursor-pointer"
           >
             Cancel
           </button>
@@ -63,7 +63,7 @@ const IpAllowlistEditor: React.FC<{
       ) : (
         <button
           onClick={() => setEditing(true)}
-          className="px-2 py-0.5 text-xs font-heading font-bold border border-[#2d2d2d]/40 bg-white hover:bg-[#fff9c4] rounded cursor-pointer"
+          className="px-2 py-0.5 text-xs font-heading font-bold border border-[var(--ink)]/40 bg-[var(--surface)] hover:bg-[var(--postit)] rounded cursor-pointer"
           title="Edit the per-key IP allowlist (empty = any)"
         >
           Edit
@@ -152,13 +152,13 @@ export const KeysView: React.FC<KeysViewProps> = ({
       {/* Top Banner & Action */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
+          <h2 className="text-3xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
             <span>Virtual Keys & Client Access</span>
             <SketchBadge variant="yellow" rotation="-1deg">
               {keys.filter((k) => k.status === 'active').length} Active
             </SketchBadge>
           </h2>
-          <p className="text-base font-body text-[#2d2d2d]/80">
+          <p className="text-base font-body text-[var(--ink)]/80">
             Issue scoped credentials for developers and coding tools like Pi. Real upstream keys never leave Kinetix.
           </p>
         </div>
@@ -176,35 +176,35 @@ export const KeysView: React.FC<KeysViewProps> = ({
 
       {/* Newly Created Key Alert (Shown once!) */}
       {newlyCreatedKey && (
-        <WobblyCard decoration="tape" variant="postit" className="p-4 bg-[#fff9c4]">
+        <WobblyCard decoration="tape" variant="postit" className="p-4 bg-[var(--postit)]">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2 mb-1">
-                <Sparkles className="w-5 h-5 text-[#d97706]" />
-                <h3 className="font-heading font-bold text-xl text-[#2d2d2d]">
+                <Sparkles className="w-5 h-5 text-[var(--marker-orange)]" />
+                <h3 className="font-heading font-bold text-xl text-[var(--ink)]">
                   New Virtual Key Generated for {newlyCreatedKey.name}!
                 </h3>
               </div>
-              <p className="text-sm font-body text-[#2d2d2d]/80 mb-2">
+              <p className="text-sm font-body text-[var(--ink)]/80 mb-2">
                 Copy this key now! In accordance with security requirements, this raw key is never shown again in full.
               </p>
-              <div className="flex items-center gap-2 bg-white px-3 py-2 border-2 border-[#2d2d2d] font-mono text-sm sketch-shadow-sm select-all">
-                <code className="text-[#2d2d2d] font-bold">{newlyCreatedKey.key}</code>
+              <div className="flex items-center gap-2 bg-[var(--surface)] px-3 py-2 border-2 border-[var(--ink)] font-mono text-sm sketch-shadow-sm select-all">
+                <code className="text-[var(--ink)] font-bold">{newlyCreatedKey.key}</code>
                 <button
                   onClick={() => handleCopy(newlyCreatedKey.key, 'newly-created')}
-                  className="ml-auto p-1.5 hover:bg-[#e5e0d8] border border-[#2d2d2d] rounded cursor-pointer"
+                  className="ml-auto p-1.5 hover:bg-[var(--erased)] border border-[var(--ink)] rounded cursor-pointer"
                 >
                   {copiedKeyId === 'newly-created' ? (
-                    <Check className="w-4 h-4 text-[#2e7d32]" />
+                    <Check className="w-4 h-4 text-[var(--pen-green)]" />
                   ) : (
-                    <Copy className="w-4 h-4 text-[#2d2d2d]" />
+                    <Copy className="w-4 h-4 text-[var(--ink)]" />
                   )}
                 </button>
               </div>
             </div>
             <button
               onClick={() => setNewlyCreatedKey(null)}
-              className="text-[#2d2d2d] font-bold hover:text-[#ff4d4d] cursor-pointer"
+              className="text-[var(--ink)] font-bold hover:text-[var(--marker-red)] cursor-pointer"
             >
               ✕
             </button>
@@ -236,13 +236,13 @@ export const KeysView: React.FC<KeysViewProps> = ({
                 {/* Header of Key Card */}
                 <div className="flex items-start justify-between gap-2 mb-2">
                   <div>
-                    <h3 className="text-xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
-                      <Key className="w-5 h-5 text-[#2d5da1]" />
+                    <h3 className="text-xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
+                      <Key className="w-5 h-5 text-[var(--pen-blue)]" />
                       {k.name}
                     </h3>
-                    <p className="text-sm font-body text-[#2d2d2d]/70">
+                    <p className="text-sm font-body text-[var(--ink)]/70">
                       Owner: <strong>{k.owner}</strong> • Tag:{' '}
-                      <span className="font-mono text-xs bg-[#e5e0d8] px-1.5 py-0.5 rounded border border-[#2d2d2d]/40">
+                      <span className="font-mono text-xs bg-[var(--erased)] px-1.5 py-0.5 rounded border border-[var(--ink)]/40">
                         {k.tag}
                       </span>
                     </p>
@@ -264,11 +264,11 @@ export const KeysView: React.FC<KeysViewProps> = ({
                 </div>
 
                 {/* Key masked string (raw keys are shown once at creation) */}
-                <div className="flex items-center gap-2 bg-[#fdfbf7] p-2 border-2 border-dashed border-[#2d2d2d] mb-4 text-xs font-mono">
+                <div className="flex items-center gap-2 bg-[var(--paper)] p-2 border-2 border-dashed border-[var(--ink)] mb-4 text-xs font-mono">
                   <span className="truncate flex-1">
                     {k.key}
                   </span>
-                  <span className="text-[10px] text-[#2d2d2d]/50 shrink-0">shown once</span>
+                  <span className="text-[10px] text-[var(--ink)]/50 shrink-0">shown once</span>
                 </div>
 
                 {/* Limits & Budgets */}
@@ -278,10 +278,10 @@ export const KeysView: React.FC<KeysViewProps> = ({
                       <span>Daily Spend: {formatCurrency(k.currentDailySpend)}</span>
                       <span>Limit: {formatCurrency(k.dailyBudget)} ({dailyPct}%)</span>
                     </div>
-                    <div className="w-full h-3 bg-[#e5e0d8] border-2 border-[#2d2d2d] rounded-full overflow-hidden">
+                    <div className="w-full h-3 bg-[var(--erased)] border-2 border-[var(--ink)] rounded-full overflow-hidden">
                       <div
-                        className={`h-full border-r-2 border-[#2d2d2d] ${
-                          dailyPct > 80 ? 'bg-[#ff4d4d]' : 'bg-[#2d5da1]'
+                        className={`h-full border-r-2 border-[var(--ink)] ${
+                          dailyPct > 80 ? 'bg-[var(--marker-red)]' : 'bg-[var(--pen-blue)]'
                         }`}
                         style={{ width: `${dailyPct}%` }}
                       />
@@ -293,26 +293,26 @@ export const KeysView: React.FC<KeysViewProps> = ({
                       <span>Monthly Spend: {formatCurrency(k.currentMonthlySpend)}</span>
                       <span>Cap: {formatCurrency(k.monthlyBudget)} ({monthlyPct}%)</span>
                     </div>
-                    <div className="w-full h-3 bg-[#e5e0d8] border-2 border-[#2d2d2d] rounded-full overflow-hidden">
+                    <div className="w-full h-3 bg-[var(--erased)] border-2 border-[var(--ink)] rounded-full overflow-hidden">
                       <div
-                        className={`h-full border-r-2 border-[#2d2d2d] ${
-                          monthlyPct > 80 ? 'bg-[#ff4d4d]' : 'bg-[#2e7d32]'
+                        className={`h-full border-r-2 border-[var(--ink)] ${
+                          monthlyPct > 80 ? 'bg-[var(--marker-red)]' : 'bg-[var(--pen-green)]'
                         }`}
                         style={{ width: `${monthlyPct}%` }}
                       />
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-white p-2.5 border border-[#2d2d2d] rounded">
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-[var(--surface)] p-2.5 border border-[var(--ink)] rounded">
                     <div>
                       Rate Limit: <strong>{k.rpmLimit} RPM</strong>
                     </div>
                     <div>
                       Tokens: <strong>{formatTokens(k.tpmLimit)} TPM</strong>
                     </div>
-                    <div className="col-span-2 pt-1 border-t border-[#2d2d2d]/15">
+                    <div className="col-span-2 pt-1 border-t border-[var(--ink)]/15">
                       Allowed Models:{' '}
-                      <strong className="text-[#2d5da1]">{k.allowedModels.join(', ')}</strong>
+                      <strong className="text-[var(--pen-blue)]">{k.allowedModels.join(', ')}</strong>
                     </div>
                     <IpAllowlistEditor
                       keyId={k.id}
@@ -324,8 +324,8 @@ export const KeysView: React.FC<KeysViewProps> = ({
               </div>
 
               {/* Actions Footer */}
-              <div className="flex flex-wrap items-center justify-between gap-2 border-t-2 border-dashed border-[#2d2d2d]/30 pt-3 mt-2">
-                <span className="text-xs font-mono text-[#2d2d2d]/60">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t-2 border-dashed border-[var(--ink)]/30 pt-3 mt-2">
+                <span className="text-xs font-mono text-[var(--ink)]/60">
                   Total: {k.totalRequests.toLocaleString()} reqs • {formatTokens(k.totalTokens)} tok
                 </span>
 
@@ -333,19 +333,19 @@ export const KeysView: React.FC<KeysViewProps> = ({
                   {k.status === 'active' ? (
                     <button
                       onClick={() => onUpdateKeyStatus(k.id, 'disabled')}
-                      className="px-2 py-1 text-xs font-heading font-bold border border-[#2d2d2d] bg-white hover:bg-[#fff9c4] rounded flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      className="px-2 py-1 text-xs font-heading font-bold border border-[var(--ink)] bg-[var(--surface)] hover:bg-[var(--postit)] rounded flex items-center gap-1 cursor-pointer whitespace-nowrap"
                       title="Temporarily disable key"
                     >
-                      <Power className="w-3.5 h-3.5 text-[#d97706]" />
+                      <Power className="w-3.5 h-3.5 text-[var(--marker-orange)]" />
                       Disable
                     </button>
                   ) : (
                     <button
                       onClick={() => onUpdateKeyStatus(k.id, 'active')}
-                      className="px-2 py-1 text-xs font-heading font-bold border border-[#2d2d2d] bg-white hover:bg-[#e8f5e9] rounded flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                      className="px-2 py-1 text-xs font-heading font-bold border border-[var(--ink)] bg-[var(--surface)] hover:bg-[var(--tint-green)] rounded flex items-center gap-1 cursor-pointer whitespace-nowrap"
                       title="Activate key"
                     >
-                      <Power className="w-3.5 h-3.5 text-[#2e7d32]" />
+                      <Power className="w-3.5 h-3.5 text-[var(--pen-green)]" />
                       Activate
                     </button>
                   )}
@@ -363,7 +363,7 @@ export const KeysView: React.FC<KeysViewProps> = ({
                       if (onDeleteKey) onDeleteKey(k.id);
                       else onUpdateKeyStatus(k.id, 'revoked');
                     }}
-                    className="px-2 py-1 text-xs font-heading font-bold border border-[#2d2d2d] bg-white hover:bg-[#ff4d4d] hover:text-white rounded flex items-center gap-1 cursor-pointer whitespace-nowrap"
+                    className="px-2 py-1 text-xs font-heading font-bold border border-[var(--ink)] bg-[var(--surface)] hover:bg-[var(--marker-red)] hover:text-[var(--surface)] rounded flex items-center gap-1 cursor-pointer whitespace-nowrap"
                     title="Permanently revoke and delete key"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -379,16 +379,16 @@ export const KeysView: React.FC<KeysViewProps> = ({
       {/* Pi Agent Integration Helper Card */}
       <WobblyCard decoration="tack" variant="muted" className="p-5">
         <div className="flex items-center gap-2 mb-2">
-          <Terminal className="w-6 h-6 text-[#2d5da1]" />
-          <h3 className="text-2xl font-heading font-bold text-[#2d2d2d]">
+          <Terminal className="w-6 h-6 text-[var(--pen-blue)]" />
+          <h3 className="text-2xl font-heading font-bold text-[var(--ink)]">
             How to configure Pi Coding Agent with Kinetix
           </h3>
         </div>
-        <p className="text-base font-body text-[#2d2d2d]/80 mb-3">
+        <p className="text-base font-body text-[var(--ink)]/80 mb-3">
           Configure Pi to speak to Kinetix using standard OpenAI or Anthropic provider settings. Point the base URL at your Kinetix proxy:
         </p>
 
-        <div className="bg-[#2d2d2d] text-[#fdfbf7] p-4 rounded-lg font-mono text-sm overflow-x-auto sketch-shadow-sm border-2 border-[#2d2d2d]">
+        <div className="bg-[var(--code-bg)] text-[var(--code-fg)] p-4 rounded-lg font-mono text-sm overflow-x-auto sketch-shadow-sm border-2 border-[var(--ink)]">
           <pre>{`// ~/.pi/config.json
 {
   "providers": {
@@ -407,22 +407,22 @@ export const KeysView: React.FC<KeysViewProps> = ({
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
           <div className="w-full max-w-lg">
-            <WobblyCard decoration="tape" className="bg-[#fdfbf7] p-6 relative">
+            <WobblyCard decoration="tape" className="bg-[var(--paper)] p-6 relative">
               <button
                 onClick={() => setShowCreateModal(false)}
-                className="absolute top-4 right-4 text-[#2d2d2d] font-bold text-xl hover:text-[#ff4d4d] cursor-pointer"
+                className="absolute top-4 right-4 text-[var(--ink)] font-bold text-xl hover:text-[var(--marker-red)] cursor-pointer"
               >
                 ✕
               </button>
 
-              <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] mb-4 flex items-center gap-2">
-                <Key className="w-6 h-6 text-[#2d5da1]" />
+              <h3 className="text-2xl font-heading font-bold text-[var(--ink)] mb-4 flex items-center gap-2">
+                <Key className="w-6 h-6 text-[var(--pen-blue)]" />
                 Issue New Virtual Key
               </h3>
 
               <form onSubmit={handleCreateSubmit} className="space-y-4 font-body">
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Key Description / Name
                   </label>
                   <input
@@ -431,14 +431,14 @@ export const KeysView: React.FC<KeysViewProps> = ({
                     placeholder="e.g. Alice (Pi Coding Agent)"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Owner Name / Email
                     </label>
                     <input
@@ -447,13 +447,13 @@ export const KeysView: React.FC<KeysViewProps> = ({
                       placeholder="e.g. Alice Vance"
                       value={owner}
                       onChange={(e) => setOwner(e.target.value)}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                       style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Tag (Attribution)
                     </label>
                     <input
@@ -461,14 +461,14 @@ export const KeysView: React.FC<KeysViewProps> = ({
                       placeholder="e.g. dev-pi, ci, agent"
                       value={tag}
                       onChange={(e) => setTag(e.target.value)}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                       style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
                     />
                   </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Allowed Models / Routes
                   </label>
                   <input
@@ -476,15 +476,15 @@ export const KeysView: React.FC<KeysViewProps> = ({
                     placeholder="* or coder, free, gemini-*"
                     value={allowedModels}
                     onChange={(e) => setAllowedModels(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: '255px 25px 225px 25px / 25px 225px 25px 255px' }}
                   />
-                  <p className="text-xs text-[#2d2d2d]/60 mt-1">Use * to allow all configured models and routes.</p>
+                  <p className="text-xs text-[var(--ink)]/60 mt-1">Use * to allow all configured models and routes.</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Daily Budget (USD)
                     </label>
                     <input
@@ -493,13 +493,13 @@ export const KeysView: React.FC<KeysViewProps> = ({
                       min="1"
                       value={dailyBudget}
                       onChange={(e) => setDailyBudget(Number(e.target.value))}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                       style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Monthly Budget (USD)
                     </label>
                     <input
@@ -508,7 +508,7 @@ export const KeysView: React.FC<KeysViewProps> = ({
                       min="5"
                       value={monthlyBudget}
                       onChange={(e) => setMonthlyBudget(Number(e.target.value))}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                       style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
                     />
                   </div>
@@ -516,34 +516,34 @@ export const KeysView: React.FC<KeysViewProps> = ({
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       RPM Limit (Req/min)
                     </label>
                     <input
                       type="number"
                       value={rpmLimit}
                       onChange={(e) => setRpmLimit(Number(e.target.value))}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                       style={{ borderRadius: '15px 225px 255px 25px / 255px 25px 225px 15px' }}
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       TPM Limit (Tok/min)
                     </label>
                     <input
                       type="number"
                       value={tpmLimit}
                       onChange={(e) => setTpmLimit(Number(e.target.value))}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                       style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
                     />
                   </div>
                 </div>
 
                 <div className="pt-2 flex justify-end gap-3">
-                  {error && <span className="text-xs text-[#b71c1c] font-mono self-center">{error}</span>}
+                  {error && <span className="text-xs text-[var(--danger-text)] font-mono self-center">{error}</span>}
                   <SketchButton
                     type="button"
                     variant="ghost"

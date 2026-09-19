@@ -121,27 +121,27 @@ export const UsageView: React.FC<UsageViewProps> = ({
       {/* Top Banner */}
       <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
+          <h2 className="text-3xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
             <span>Usage, Attribution & Spend</span>
             <SketchBadge variant="green" rotation="1deg">
               Accurate per FR-6
             </SketchBadge>
           </h2>
-          <p className="text-base font-body text-[#2d2d2d]/80">
+          <p className="text-base font-body text-[var(--ink)]/80">
             Every request is attributed to a team member or project, tracking input, output, cached, and reasoning tokens.
           </p>
         </div>
 
         {/* Storage window selector */}
         <div className="flex items-center gap-2 shrink-0">
-          <CalendarRange className="w-5 h-5 text-[#2d2d2d]/70" />
-          <div className="flex border-2 border-[#2d2d2d] overflow-hidden sketch-shadow-sm bg-white">
+          <CalendarRange className="w-5 h-5 text-[var(--ink)]/70" />
+          <div className="flex border-2 border-[var(--ink)] overflow-hidden sketch-shadow-sm bg-[var(--surface)]">
             {RANGE_LABELS.map((r) => (
               <button
                 key={r.id}
                 onClick={() => setRange(r.id)}
-                className={`px-3 py-1.5 text-sm font-heading font-bold cursor-pointer transition-colors border-r-2 border-[#2d2d2d] last:border-r-0 ${
-                  range === r.id ? 'bg-[#2d5da1] text-white' : 'bg-white hover:bg-[#e5e0d8]'
+                className={`px-3 py-1.5 text-sm font-heading font-bold cursor-pointer transition-colors border-r-2 border-[var(--ink)] last:border-r-0 ${
+                  range === r.id ? 'bg-[var(--pen-blue)] text-[var(--surface)]' : 'bg-[var(--surface)] hover:bg-[var(--erased)]'
                 }`}
               >
                 {r.label}
@@ -153,54 +153,54 @@ export const UsageView: React.FC<UsageViewProps> = ({
 
       {/* Top metric overview cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <WobblyCard decoration="tack" className="p-4 bg-[#fff9c4]">
+        <WobblyCard decoration="tack" className="p-4 bg-[var(--postit)]">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-heading font-bold text-[#2d2d2d]">Total Spend (MTD)</span>
-            <DollarSign className="w-5 h-5 text-[#2d5da1]" />
+            <span className="text-sm font-heading font-bold text-[var(--ink)]">Total Spend (MTD)</span>
+            <DollarSign className="w-5 h-5 text-[var(--pen-blue)]" />
           </div>
-          <div className="text-3xl font-heading font-bold text-[#2d2d2d] mt-2">
+          <div className="text-3xl font-heading font-bold text-[var(--ink)] mt-2">
             {formatCurrency(totalSpend)}
           </div>
-          <span className="text-xs font-mono text-[#2d2d2d]/70 block mt-1">
+          <span className="text-xs font-mono text-[var(--ink)]/70 block mt-1">
             Across {keys.length} active virtual keys
           </span>
         </WobblyCard>
 
-        <WobblyCard decoration="tape" className="p-4 bg-white">
+        <WobblyCard decoration="tape" className="p-4 bg-[var(--surface)]">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-heading font-bold text-[#2d2d2d]">Tokens Processed</span>
-            <TrendingUp className="w-5 h-5 text-[#ff4d4d]" />
+            <span className="text-sm font-heading font-bold text-[var(--ink)]">Tokens Processed</span>
+            <TrendingUp className="w-5 h-5 text-[var(--marker-red)]" />
           </div>
-          <div className="text-3xl font-heading font-bold text-[#2d2d2d] mt-2">
+          <div className="text-3xl font-heading font-bold text-[var(--ink)] mt-2">
             {formatTokens(totalTokens)}
           </div>
-          <span className="text-xs font-mono text-[#2d2d2d]/70 block mt-1">
+          <span className="text-xs font-mono text-[var(--ink)]/70 block mt-1">
             Combined input &amp; output
           </span>
         </WobblyCard>
 
-        <WobblyCard className="p-4 bg-white">
+        <WobblyCard className="p-4 bg-[var(--surface)]">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-heading font-bold text-[#2d2d2d]">Context Cache Savings</span>
-            <Database className="w-5 h-5 text-[#2e7d32]" />
+            <span className="text-sm font-heading font-bold text-[var(--ink)]">Context Cache Savings</span>
+            <Database className="w-5 h-5 text-[var(--pen-green)]" />
           </div>
-          <div className="text-3xl font-heading font-bold text-[#2e7d32] mt-2">
+          <div className="text-3xl font-heading font-bold text-[var(--pen-green)] mt-2">
             {formatTokens(totalCachedTokens)}
           </div>
-          <span className="text-xs font-mono text-[#2d2d2d]/70 block mt-1">
+          <span className="text-xs font-mono text-[var(--ink)]/70 block mt-1">
             Cached tokens in window ({filtered.length} reqs)
           </span>
         </WobblyCard>
 
-        <WobblyCard decoration="tack-blue" className="p-4 bg-white">
+        <WobblyCard decoration="tack-blue" className="p-4 bg-[var(--surface)]">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-heading font-bold text-[#2d2d2d]">Reasoning (Thinking)</span>
-            <BrainCircuit className="w-5 h-5 text-[#2d5da1]" />
+            <span className="text-sm font-heading font-bold text-[var(--ink)]">Reasoning (Thinking)</span>
+            <BrainCircuit className="w-5 h-5 text-[var(--pen-blue)]" />
           </div>
-          <div className="text-3xl font-heading font-bold text-[#2d5da1] mt-2">
+          <div className="text-3xl font-heading font-bold text-[var(--pen-blue)] mt-2">
             {formatTokens(totalThinkingTokens)}
           </div>
-          <span className="text-xs font-mono text-[#2d2d2d]/70 block mt-1">
+          <span className="text-xs font-mono text-[var(--ink)]/70 block mt-1">
             Reasoning tokens in window
           </span>
         </WobblyCard>
@@ -208,8 +208,8 @@ export const UsageView: React.FC<UsageViewProps> = ({
 
       {/* Spend by Virtual Key & Budget Limits */}
       <WobblyCard decoration="tape" className="p-6">
-        <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] mb-4 flex items-center gap-2">
-          <BarChart3 className="w-6 h-6 text-[#ff4d4d]" />
+        <h3 className="text-2xl font-heading font-bold text-[var(--ink)] mb-4 flex items-center gap-2">
+          <BarChart3 className="w-6 h-6 text-[var(--marker-red)]" />
           Spend by Virtual Key vs. Configured Budgets
         </h3>
 
@@ -221,12 +221,12 @@ export const UsageView: React.FC<UsageViewProps> = ({
             return (
               <div
                 key={k.id}
-                className="p-4 bg-[#fdfbf7] border-2 border-[#2d2d2d] sketch-shadow-sm rounded-lg"
+                className="p-4 bg-[var(--paper)] border-2 border-[var(--ink)] sketch-shadow-sm rounded-lg"
               >
                 <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-2">
                   <div>
-                    <span className="font-heading font-bold text-lg text-[#2d2d2d]">{k.name}</span>
-                    <span className="text-xs font-mono text-[#2d2d2d]/60 ml-2">
+                    <span className="font-heading font-bold text-lg text-[var(--ink)]">{k.name}</span>
+                    <span className="text-xs font-mono text-[var(--ink)]/60 ml-2">
                       ({k.owner} • {k.tag})
                     </span>
                   </div>
@@ -244,16 +244,16 @@ export const UsageView: React.FC<UsageViewProps> = ({
                 </div>
 
                 {/* Hand-drawn progress bar */}
-                <div className="w-full h-4 bg-[#e5e0d8] border-2 border-[#2d2d2d] rounded-full overflow-hidden relative">
+                <div className="w-full h-4 bg-[var(--erased)] border-2 border-[var(--ink)] rounded-full overflow-hidden relative">
                   <div
-                    className={`h-full border-r-2 border-[#2d2d2d] transition-all duration-300 ${
-                      pct > 80 ? 'bg-[#ff4d4d]' : 'bg-[#2d5da1]'
+                    className={`h-full border-r-2 border-[var(--ink)] transition-all duration-300 ${
+                      pct > 80 ? 'bg-[var(--marker-red)]' : 'bg-[var(--pen-blue)]'
                     }`}
                     style={{ width: `${pct}%` }}
                   />
                 </div>
 
-                <div className="flex items-center justify-between text-xs font-mono text-[#2d2d2d]/70 mt-2">
+                <div className="flex items-center justify-between text-xs font-mono text-[var(--ink)]/70 mt-2">
                   <span>Daily spend: {formatCurrency(k.currentDailySpend)}</span>
                   <span>Requests: {k.totalRequests.toLocaleString()}</span>
                   <span>Total tokens: {formatTokens(k.totalTokens)}</span>
@@ -267,8 +267,8 @@ export const UsageView: React.FC<UsageViewProps> = ({
       {/* Usage exports to disk */}
       <WobblyCard decoration="tack-blue" className="p-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-3">
-          <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
-            <Download className="w-6 h-6 text-[#2e7d32]" />
+          <h3 className="text-2xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
+            <Download className="w-6 h-6 text-[var(--pen-green)]" />
             Usage Exports (JSONL + CSV)
           </h3>
           <div className="flex items-center gap-2">
@@ -285,14 +285,14 @@ export const UsageView: React.FC<UsageViewProps> = ({
           </div>
         </div>
 
-        <p className="text-sm font-body text-[#2d2d2d]/80 mb-3">
+        <p className="text-sm font-body text-[var(--ink)]/80 mb-3">
           Each closed day is written to <span className="font-mono">usage-&lt;day&gt;.jsonl</span> (one request per line),
           <span className="font-mono"> usage-&lt;day&gt;.csv</span>, and <span className="font-mono">summary-&lt;day&gt;.csv</span>.
           Files older than {exportRetentionDays ?? 30} days are pruned automatically; you can delete any file here or on disk.
         </p>
 
         {exportDir && (
-          <p className="text-xs font-mono text-[#2d2d2d]/60 mb-3 flex items-center gap-1.5 break-all">
+          <p className="text-xs font-mono text-[var(--ink)]/60 mb-3 flex items-center gap-1.5 break-all">
             <FolderOpen className="w-3.5 h-3.5 shrink-0" /> {exportDir}
           </p>
         )}
@@ -304,7 +304,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                 key={d.day}
                 onClick={() => handleExport(d.day)}
                 disabled={busy || !onExportDay}
-                className="px-2.5 py-1 bg-white border-2 border-[#2d2d2d] sketch-shadow-sm text-xs font-mono cursor-pointer hover:bg-[#e5e0d8] disabled:opacity-60"
+                className="px-2.5 py-1 bg-[var(--surface)] border-2 border-[var(--ink)] sketch-shadow-sm text-xs font-mono cursor-pointer hover:bg-[var(--erased)] disabled:opacity-60"
                 style={{ borderRadius: '10px 14px 10px 14px / 14px 10px 14px 10px' }}
                 title={`Export ${d.day} (${d.requests} requests)`}
               >
@@ -315,11 +315,11 @@ export const UsageView: React.FC<UsageViewProps> = ({
         )}
 
         {exportFiles.length === 0 ? (
-          <p className="text-sm font-body text-[#2d2d2d]/60 italic">No export files yet.</p>
+          <p className="text-sm font-body text-[var(--ink)]/60 italic">No export files yet.</p>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left font-mono text-xs bg-white border-2 border-[#2d2d2d] rounded">
-              <thead className="bg-[#e5e0d8] border-b-2 border-[#2d2d2d] font-heading text-sm">
+            <table className="w-full text-left font-mono text-xs bg-[var(--surface)] border-2 border-[var(--ink)] rounded">
+              <thead className="bg-[var(--erased)] border-b-2 border-[var(--ink)] font-heading text-sm">
                 <tr>
                   <th className="p-2">Day</th>
                   <th className="p-2">File</th>
@@ -328,7 +328,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                   <th className="p-2 text-right">Action</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[#2d2d2d]/20">
+              <tbody className="divide-y divide-[var(--ink)]/20">
                 {exportFiles.map((f) => (
                   <tr key={f.name}>
                     <td className="p-2">{f.day}</td>
@@ -339,7 +339,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                       <button
                         onClick={() => handleDelete(f.name)}
                         disabled={busy || !onDeleteExport}
-                        className="inline-flex items-center gap-1 px-2 py-1 border-2 border-[#2d2d2d] bg-white hover:bg-[#ffebee] text-[#ff4d4d] cursor-pointer disabled:opacity-60"
+                        className="inline-flex items-center gap-1 px-2 py-1 border-2 border-[var(--ink)] bg-[var(--surface)] hover:bg-[var(--tint-red)] text-[var(--marker-red)] cursor-pointer disabled:opacity-60"
                         style={{ borderRadius: '8px 12px 8px 12px / 12px 8px 12px 8px' }}
                         title="Delete this file"
                       >
@@ -356,16 +356,16 @@ export const UsageView: React.FC<UsageViewProps> = ({
 
       {/* Model Unit Cost Reference Sheet */}
       <WobblyCard variant="muted" className="p-5">
-        <h4 className="text-xl font-heading font-bold text-[#2d2d2d] mb-2">
+        <h4 className="text-xl font-heading font-bold text-[var(--ink)] mb-2">
           📌 Active Pricing Schema Reference (Versioned)
         </h4>
-        <p className="text-sm font-body text-[#2d2d2d]/80 mb-3">
+        <p className="text-sm font-body text-[var(--ink)]/80 mb-3">
           Kinetix bundles no vendor pricing assumptions. All costs are computed from your explicit rates configured in Provider settings:
         </p>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left font-mono text-xs bg-white border-2 border-[#2d2d2d] rounded">
-            <thead className="bg-[#e5e0d8] border-b-2 border-[#2d2d2d] font-heading text-sm">
+          <table className="w-full text-left font-mono text-xs bg-[var(--surface)] border-2 border-[var(--ink)] rounded">
+            <thead className="bg-[var(--erased)] border-b-2 border-[var(--ink)] font-heading text-sm">
               <tr>
                 <th className="p-2">Model Display Name</th>
                 <th className="p-2">Input / 1M</th>
@@ -374,7 +374,7 @@ export const UsageView: React.FC<UsageViewProps> = ({
                 <th className="p-2">Thinking / 1M</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-[#2d2d2d]/20">
+            <tbody className="divide-y divide-[var(--ink)]/20">
               {models.map((m) => (
                 <tr key={m.id}>
                   <td className="p-2 font-bold">{m.displayName}</td>

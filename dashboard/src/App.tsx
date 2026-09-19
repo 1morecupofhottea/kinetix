@@ -25,6 +25,7 @@ import { EMPTY_METRICS } from './lib/mappers';
 import { Kinetix, ExportFile, UsageDay } from './lib/resources';
 import { SettingsView } from './components/views/SettingsView';
 import { ApiError } from './lib/api';
+import { useTheme } from './lib/theme';
 import {
   VirtualKey,
   Route,
@@ -59,6 +60,7 @@ export default function App() {
   );
   const [isTesterOpen, setIsTesterOpen] = useState(false);
   const [navOpen, setNavOpen] = useState(false);
+  const { mode: themeMode, setTheme } = useTheme();
 
   // Reactive data, all sourced from the admin API.
   const [keys, setKeys] = useState<VirtualKey[]>([]);
@@ -339,7 +341,13 @@ export default function App() {
         enabled: model.enabled,
         context_window: model.contextWindow,
         max_output_tokens: model.maxOutputTokens,
-        capabilities: model.capabilities,
+        capabilities: {
+          text: model.capabilities.text,
+          vision: model.capabilities.vision,
+          reasoning: model.capabilities.reasoning,
+          tool_calling: model.capabilities.toolCalling,
+          audio: model.capabilities.audio,
+        },
         prices: {
           input_per_1m: model.prices.inputPer1M,
           output_per_1m: model.prices.outputPer1M,
@@ -361,7 +369,13 @@ export default function App() {
         enabled: model.enabled,
         context_window: model.contextWindow,
         max_output_tokens: model.maxOutputTokens,
-        capabilities: model.capabilities,
+        capabilities: {
+          text: model.capabilities.text,
+          vision: model.capabilities.vision,
+          reasoning: model.capabilities.reasoning,
+          tool_calling: model.capabilities.toolCalling,
+          audio: model.capabilities.audio,
+        },
         prices: {
           input_per_1m: model.prices.inputPer1M,
           output_per_1m: model.prices.outputPer1M,
@@ -414,7 +428,7 @@ export default function App() {
   // ---- render -------------------------------------------------------------
   if (auth === 'checking') {
     return (
-      <div className="min-h-screen bg-[#fdfbf7] flex items-center justify-center font-heading text-[#2d2d2d]">
+      <div className="min-h-screen bg-[var(--paper)] flex items-center justify-center font-heading text-[var(--ink)]">
         Checking gateway session…
       </div>
     );
@@ -425,7 +439,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-[#fdfbf7] text-[#2d2d2d] flex selection:bg-[#fff9c4] selection:text-[#2d2d2d]">
+    <div className="min-h-screen bg-[var(--paper)] text-[var(--ink)] flex selection:bg-[var(--postit)] selection:text-[var(--ink)]">
       <Sidebar
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
@@ -443,11 +457,13 @@ export default function App() {
           onOpenNav={() => setNavOpen(true)}
           onRefresh={refresh}
           isRefreshing={isRefreshing}
+          themeMode={themeMode}
+          onThemeChange={setTheme}
         />
 
         <main className="flex-1 w-full p-4 md:p-8">
         {loadError && (
-          <div className="mb-4 p-3 bg-[#ffebee] border-2 border-[#ff4d4d] rounded-lg text-sm font-mono text-[#b71c1c] flex items-center gap-2">
+          <div className="mb-4 p-3 bg-[var(--tint-red)] border-2 border-[var(--marker-red)] rounded-lg text-sm font-mono text-[var(--danger-text)] flex items-center gap-2">
             <AlertTriangle className="w-4 h-4" />
             <span className="flex-1">{loadError}</span>
             <button onClick={() => setLoadError(null)} className="font-bold cursor-pointer">
@@ -540,15 +556,15 @@ export default function App() {
           <SquiggleDivider />
         </div>
 
-        <footer className="w-full py-6 px-4 text-center font-body text-sm text-[#2d2d2d]/70">
+        <footer className="w-full py-6 px-4 text-center font-body text-sm text-[var(--ink)]/70">
           <p className="flex items-center justify-center gap-2 flex-wrap">
-            <strong className="font-heading text-base text-[#2d2d2d]">Kinetix</strong>
+            <strong className="font-heading text-base text-[var(--ink)]">Kinetix</strong>
             <span>•</span>
             <span>Zero-downtime LLM Multi-Protocol Proxy</span>
             <span>•</span>
-            <span className="underline decoration-wavy decoration-[#ff4d4d]">Hand-Drawn Design System</span>
+            <span className="underline decoration-wavy decoration-[var(--marker-red)]">Hand-Drawn Design System</span>
           </p>
-          <p className="text-xs text-[#2d2d2d]/50 font-mono mt-1">
+          <p className="text-xs text-[var(--ink)]/50 font-mono mt-1">
             OpenAI &amp; Anthropic streaming in • Gemini, OpenAI, &amp; Anthropic upstream out • SQLite WAL at rest
           </p>
         </footer>
@@ -561,7 +577,7 @@ export default function App() {
           onClick={() => setIsTesterOpen(true)}
           className="gap-2 font-heading font-bold shadow-lg shadow-black/10"
         >
-          <Play className="w-5 h-5 fill-white" />
+          <Play className="w-5 h-5 fill-[var(--surface)]" />
           Test Proxy Live
         </SketchButton>
       </div>

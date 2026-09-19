@@ -45,49 +45,49 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onLoginSucces
   };
 
   return (
-    <div className="min-h-screen bg-[#f4efe8] flex flex-col items-center justify-center p-4 relative overflow-hidden">
+    <div className="min-h-screen bg-[var(--erased-soft)] flex flex-col items-center justify-center p-4 relative overflow-hidden">
       {/* Background hand-drawn decorative graph lines */}
       <div
         className="absolute inset-0 pointer-events-none opacity-20"
         style={{
           backgroundImage:
-            'linear-gradient(#2d2d2d 1px, transparent 1px), linear-gradient(90deg, #2d2d2d 1px, transparent 1px)',
+            'linear-gradient(var(--ink) 1px, transparent 1px), linear-gradient(90deg, var(--ink) 1px, transparent 1px)',
           backgroundSize: '40px 40px',
         }}
       />
 
       {/* Decorative background badges / doodles */}
       <div className="absolute top-8 left-8 hidden md:block rotate-[-4deg]">
-        <div className="p-3 bg-[#fff9c4] border-2 border-[#2d2d2d] sketch-shadow-sm rounded-lg max-w-[200px] text-xs font-mono">
+        <div className="p-3 bg-[var(--postit)] border-2 border-[var(--ink)] sketch-shadow-sm rounded-lg max-w-[200px] text-xs font-mono">
           <span className="font-heading font-bold text-sm block mb-1">⚡ Gateway Rule #1</span>
           All upstream keys remain masked & stored securely in container memory.
         </div>
       </div>
 
       <div className="absolute bottom-8 right-8 hidden md:block rotate-[3deg]">
-        <div className="p-3 bg-[#e8f5e9] border-2 border-[#2d2d2d] sketch-shadow-sm rounded-lg max-w-[220px] text-xs font-mono">
-          <span className="font-heading font-bold text-sm text-[#1b5e20] block mb-1">🛡️ RBAC & Audit</span>
+        <div className="p-3 bg-[var(--tint-green)] border-2 border-[var(--ink)] sketch-shadow-sm rounded-lg max-w-[220px] text-xs font-mono">
+          <span className="font-heading font-bold text-sm text-[var(--success-text)] block mb-1">🛡️ RBAC & Audit</span>
           Every key mutation, route edit, and provider ping is cryptographically stamped.
         </div>
       </div>
 
       {/* Central Login Card */}
       <div className="w-full max-w-md relative z-10 my-8">
-        <WobblyCard decoration="tape" className="p-7 md:p-8 bg-[#fdfbf7]">
+        <WobblyCard decoration="tape" className="p-7 md:p-8 bg-[var(--paper)]">
           {/* Logo & Header */}
-          <div className="flex items-center justify-between mb-6 pb-4 border-b-2 border-dashed border-[#2d2d2d]/30">
+          <div className="flex items-center justify-between mb-6 pb-4 border-b-2 border-dashed border-[var(--ink)]/30">
             <div className="flex items-center gap-3">
               <div
-                className="w-12 h-12 bg-[#ff4d4d] text-white flex items-center justify-center font-heading font-bold text-3xl border-2 border-[#2d2d2d] sketch-shadow -rotate-2 select-none"
+                className="w-12 h-12 bg-[var(--marker-red)] text-[var(--surface)] flex items-center justify-center font-heading font-bold text-3xl border-2 border-[var(--ink)] sketch-shadow -rotate-2 select-none"
                 style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
               >
                 K
               </div>
               <div>
-                <h1 className="text-3xl font-heading font-bold tracking-tight text-[#2d2d2d]">
+                <h1 className="text-3xl font-heading font-bold tracking-tight text-[var(--ink)]">
                   Kinetix
                 </h1>
-                <p className="text-xs font-mono text-[#2d2d2d]/70 -mt-0.5">
+                <p className="text-xs font-mono text-[var(--ink)]/70 -mt-0.5">
                   LLM Proxy & Routing Gateway
                 </p>
               </div>
@@ -99,16 +99,16 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onLoginSucces
           </div>
 
           <div className="mb-5">
-            <h2 className="text-xl font-heading font-bold text-[#2d2d2d]">
+            <h2 className="text-xl font-heading font-bold text-[var(--ink)]">
               Sign in to Gateway
             </h2>
-            <p className="text-sm font-body text-[#2d2d2d]/80 mt-0.5">
+            <p className="text-sm font-body text-[var(--ink)]/80 mt-0.5">
               Enter your credentials to manage routing routes, key pools, and upstream providers.
             </p>
           </div>
 
           {error && (
-            <div className="mb-4 p-3 bg-[#ffebee] border-2 border-[#ff4d4d] rounded-lg text-xs font-mono text-[#b71c1c] flex items-center gap-2">
+            <div className="mb-4 p-3 bg-[var(--tint-red)] border-2 border-[var(--marker-red)] rounded-lg text-xs font-mono text-[var(--danger-text)] flex items-center gap-2">
               <span className="font-bold">⚠️ Error:</span>
               <span>{error}</span>
             </div>
@@ -119,12 +119,12 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onLoginSucces
             <div>
               <label
                 htmlFor="login-password"
-                className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1"
+                className="block text-sm font-heading font-bold text-[var(--ink)] mb-1"
               >
                 Admin Token
               </label>
               <div className="relative">
-                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[#2d2d2d]/60">
+                <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-[var(--ink)]/60">
                   <Lock className="w-4 h-4" />
                 </div>
                 <input
@@ -135,19 +135,19 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onLoginSucces
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   placeholder="KINETIX_ADMIN_TOKEN…"
-                  className="w-full bg-white border-2 border-[#2d2d2d] pl-9 pr-10 py-2 text-base font-mono sketch-shadow-sm focus:outline-none focus:bg-[#fffde7]"
+                  className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] pl-9 pr-10 py-2 text-base font-mono sketch-shadow-sm focus:outline-none focus:bg-[var(--tint-yellow)]"
                   style={{ borderRadius: DESIGN_TOKENS.radii.wobbly }}
                 />
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
-                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-[#2d2d2d]/60 hover:text-[#2d2d2d] cursor-pointer"
+                  className="absolute inset-y-0 right-0 pr-3 flex items-center text-[var(--ink)]/60 hover:text-[var(--ink)] cursor-pointer"
                   title={showPassword ? 'Hide token' : 'Show token'}
                 >
                   {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-              <p className="text-xs text-[#2d2d2d]/60 mt-1 font-body">
+              <p className="text-xs text-[var(--ink)]/60 mt-1 font-body">
                 The value of <code className="font-mono">KINETIX_ADMIN_TOKEN</code> configured on the server.
               </p>
             </div>
@@ -170,15 +170,15 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onLoginSucces
           </form>
 
           {/* Handwritten Sticky Note attached at bottom */}
-          <div className="mt-6 pt-4 border-t-2 border-dashed border-[#2d2d2d]/30">
-            <div className="p-3 bg-[#fdf2e9] border border-[#2d2d2d] rounded-md text-xs font-mono text-[#2d2d2d]/80 relative">
-              <span className="font-heading font-bold text-[#b45309] block mb-1">
+          <div className="mt-6 pt-4 border-t-2 border-dashed border-[var(--ink)]/30">
+            <div className="p-3 bg-[var(--tint-orange)] border border-[var(--ink)] rounded-md text-xs font-mono text-[var(--ink)]/80 relative">
+              <span className="font-heading font-bold text-[var(--warn-text)] block mb-1">
                 📌 Authentication Note:
               </span>
               <div>
                 Sessions are signed server-side and stored in an httpOnly cookie.
               </div>
-              <div className="mt-1 text-[11px] text-[#2d2d2d]/60">
+              <div className="mt-1 text-[11px] text-[var(--ink)]/60">
                 🔒 All audit logs record actions under the authenticated admin session.
               </div>
             </div>
@@ -186,8 +186,8 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onLoginSucces
         </WobblyCard>
       </div>
 
-      <div className="text-xs font-mono text-[#2d2d2d]/60 text-center relative z-10 flex items-center gap-1.5">
-        <ShieldCheck className="w-4 h-4 text-[#2e7d32]" />
+      <div className="text-xs font-mono text-[var(--ink)]/60 text-center relative z-10 flex items-center gap-1.5">
+        <ShieldCheck className="w-4 h-4 text-[var(--pen-green)]" />
         Kinetix LLM Gateway v0.1 • End-to-end Local Encryption
       </div>
     </div>

@@ -35,6 +35,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   const [confirmDeleteProviderId, setConfirmDeleteProviderId] = useState<string | null>(null);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [discoveryResults, setDiscoveryResults] = useState<DiscoveredModel[] | null>(null);
+  const [discoverySearch, setDiscoverySearch] = useState('');
   const [pingStatus, setPingStatus] = useState<Record<string, { ok: boolean; pingMs: number; error?: string }>>({});
 
   // New Provider Form State
@@ -90,6 +91,28 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   const activeProvider = providers.find((p) => p.id === selectedProviderId) || providers[0];
   const providerModels = models.filter((m) => m.providerId === activeProvider?.id);
 
+  // Fuzzy search over the discovered model list: case-insensitive, and every
+  // whitespace-separated term must match as a subsequence of the model id.
+  const discoveryMatches = (id: string, query: string) => {
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    const terms = q.split(/\s+/).filter(Boolean);
+    return terms.every((term) => {
+      const hay = id.toLowerCase();
+      if (hay.includes(term)) return true;
+      // subsequence match (typo/skip friendly)
+      let i = 0;
+      for (const ch of hay) {
+        if (ch === term[i]) i++;
+        if (i === term.length) return true;
+      }
+      return false;
+    });
+  };
+  const filteredDiscovery = (discoveryResults ?? []).filter((m) =>
+    discoveryMatches(m.id, discoverySearch),
+  );
+
   const handleTestPing = async (providerId: string) => {
     const firstModel = models.find((m) => m.providerId === providerId)?.upstreamModelId;
     try {
@@ -110,6 +133,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     if (!activeProvider) return;
     setIsDiscovering(true);
     setDiscoveryResults(null);
+    setDiscoverySearch('');
     try {
       const found = await Kinetix.discover(activeProvider.id);
       setDiscoveryResults(found);
@@ -266,9 +290,17 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     try {
       if (editingProviderId) {
         // api_key is omitted unless a new one was typed (rotating the pool key).
-        await onUpdateProvider(editingProviderId, { ...prov, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) });
+        await onUpdateProvider(editingProviderId, {
+          ...prov,
+          ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+          ...(accountLabel.trim() ? { accountLabel: accountLabel.trim() } : {}),
+        });
       } else {
-        await onAddProvider({ ...prov, ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}) });
+        await onAddProvider({
+          ...prov,
+          ...(apiKey.trim() ? { apiKey: apiKey.trim() } : {}),
+          ...(accountLabel.trim() ? { accountLabel: accountLabel.trim() } : {}),
+        });
         setSelectedProviderId(prov.id);
       }
       setShowAddProviderModal(false);
@@ -385,13 +417,13 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
       {/* Top Banner */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
+          <h2 className="text-3xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
             <span>Upstream Providers & Models</span>
             <SketchBadge variant="yellow" rotation="-1deg">
               No Vendor Presets (FR-10)
             </SketchBadge>
           </h2>
-          <p className="text-base font-body text-[#2d2d2d]/80">
+          <p className="text-base font-body text-[var(--ink)]/80">
             Configure upstream LLM APIs, fetch model lists, define parameter clamping, and map thinking controls.
           </p>
         </div>
@@ -412,10 +444,10 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
 
       {/* Main layout */}
       {providers.length === 0 ? (
-        <WobblyCard decoration="tack" className="p-10 text-center bg-white">
-          <Server className="w-12 h-12 text-[#2d5da1] mx-auto mb-3 opacity-60" />
-          <h3 className="text-2xl font-heading font-bold text-[#2d2d2d]">No Upstream Providers Configured</h3>
-          <p className="text-base font-body text-[#2d2d2d]/80 max-w-lg mx-auto mt-2 mb-6">
+        <WobblyCard decoration="tack" className="p-10 text-center bg-[var(--surface)]">
+          <Server className="w-12 h-12 text-[var(--pen-blue)] mx-auto mb-3 opacity-60" />
+          <h3 className="text-2xl font-heading font-bold text-[var(--ink)]">No Upstream Providers Configured</h3>
+          <p className="text-base font-body text-[var(--ink)]/80 max-w-lg mx-auto mt-2 mb-6">
             Register your upstream LLM providers (e.g. Gemini, OpenAI, Anthropic, DeepSeek, or local Ollama). Kinetix proxies client calls and maps protocols automatically.
           </p>
           <SketchButton
@@ -435,8 +467,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Left: Providers Selector */}
           <div className="space-y-4">
-            <h3 className="text-xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
-              <Server className="w-5 h-5 text-[#2d5da1]" />
+            <h3 className="text-xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
+              <Server className="w-5 h-5 text-[var(--pen-blue)]" />
               Configured Upstreams ({providers.length})
             </h3>
 
@@ -452,20 +484,20 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     setSelectedProviderId(prov.id);
                     setDiscoveryResults(null);
                   }}
-                  className={`p-4 border-2 border-[#2d2d2d] cursor-pointer transition-all ${tilt} ${
+                  className={`p-4 border-2 border-[var(--ink)] cursor-pointer transition-all ${tilt} ${
                     isSelected
-                      ? 'bg-[#fff9c4] sketch-shadow -translate-y-1 font-bold'
-                      : 'bg-white hover:bg-[#f4efe8] sketch-shadow-sm'
+                      ? 'bg-[var(--postit)] sketch-shadow -translate-y-1 font-bold'
+                      : 'bg-[var(--surface)] hover:bg-[var(--erased-soft)] sketch-shadow-sm'
                   }`}
                   style={{ borderRadius: DESIGN_TOKENS.radii.wobblyMd }}
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div>
-                      <span className="font-mono text-xs px-2 py-0.5 bg-white border border-[#2d2d2d] rounded uppercase">
+                      <span className="font-mono text-xs px-2 py-0.5 bg-[var(--surface)] border border-[var(--ink)] rounded uppercase">
                         {prov.wireFormat} wire
                       </span>
-                      <h4 className="font-heading text-lg mt-1 text-[#2d2d2d]">{prov.name}</h4>
-                      <p className="text-xs font-mono text-[#2d2d2d]/70 truncate max-w-[200px]">
+                      <h4 className="font-heading text-lg mt-1 text-[var(--ink)]">{prov.name}</h4>
+                      <p className="text-xs font-mono text-[var(--ink)]/70 truncate max-w-[200px]">
                         {prov.baseUrl}
                       </p>
                     </div>
@@ -475,21 +507,21 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                         {prov.status}
                       </SketchBadge>
                       {ping && (
-                        <span className={`text-xs font-mono ${ping.ok ? 'text-[#2e7d32]' : 'text-[#ff4d4d]'}`}>
+                        <span className={`text-xs font-mono ${ping.ok ? 'text-[var(--pen-green)]' : 'text-[var(--marker-red)]'}`}>
                           {ping.ok ? `${ping.pingMs}ms` : 'error'}
                         </span>
                       )}
                     </div>
                   </div>
 
-                  <div className="mt-3 pt-2 border-t border-[#2d2d2d]/20 flex items-center justify-between text-xs font-mono">
+                  <div className="mt-3 pt-2 border-t border-[var(--ink)]/20 flex items-center justify-between text-xs font-mono">
                     <span>Auth: <strong>{prov.authScheme}</strong></span>
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
                         handleTestPing(prov.id);
                       }}
-                      className="hover:underline text-[#2d5da1] cursor-pointer"
+                      className="hover:underline text-[var(--pen-blue)] cursor-pointer"
                     >
                       {pingStatus[prov.id] ? (pingStatus[prov.id].ok ? '⚡ OK' : '⚡ Failed') : '⚡ Test Ping'}
                     </button>
@@ -504,13 +536,13 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
             <div className="lg:col-span-2 space-y-6">
               <WobblyCard decoration="tape" className="p-6">
                 {/* Provider Info Header */}
-                <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b-2 border-dashed border-[#2d2d2d]/30 mb-4">
+                <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b-2 border-dashed border-[var(--ink)]/30 mb-4">
                   <div>
-                    <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
-                      <Globe className="w-6 h-6 text-[#2d5da1]" />
+                    <h3 className="text-2xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
+                      <Globe className="w-6 h-6 text-[var(--pen-blue)]" />
                       {activeProvider.name}
                     </h3>
-                    <code className="text-sm font-mono text-[#2d2d2d]/80 bg-[#e5e0d8] px-2 py-0.5 rounded border border-[#2d2d2d]/30 inline-block mt-1">
+                    <code className="text-sm font-mono text-[var(--ink)]/80 bg-[var(--erased)] px-2 py-0.5 rounded border border-[var(--ink)]/30 inline-block mt-1">
                       Base URL: {activeProvider.baseUrl}
                     </code>
                   </div>
@@ -546,20 +578,20 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     </SketchButton>
 
                     {confirmDeleteProviderId === activeProvider.id ? (
-                      <div className="flex items-center gap-1 bg-[#ffebee] px-2.5 py-1 border border-[#ff4d4d] rounded text-xs font-heading">
-                        <span className="text-[#b71c1c] font-bold">Delete {activeProvider.name}?</span>
+                      <div className="flex items-center gap-1 bg-[var(--tint-red)] px-2.5 py-1 border border-[var(--marker-red)] rounded text-xs font-heading">
+                        <span className="text-[var(--danger-text)] font-bold">Delete {activeProvider.name}?</span>
                         <button
                           onClick={() => {
                             onDeleteProvider(activeProvider.id);
                             setConfirmDeleteProviderId(null);
                           }}
-                          className="px-2 py-0.5 bg-[#ff4d4d] text-white rounded font-bold hover:bg-[#d32f2f] cursor-pointer"
+                          className="px-2 py-0.5 bg-[var(--marker-red)] text-[var(--surface)] rounded font-bold hover:brightness-90 cursor-pointer"
                         >
                           Confirm
                         </button>
                         <button
                           onClick={() => setConfirmDeleteProviderId(null)}
-                          className="px-2 py-0.5 bg-white border border-[#2d2d2d] rounded hover:bg-[#e5e0d8] cursor-pointer"
+                          className="px-2 py-0.5 bg-[var(--surface)] border border-[var(--ink)] rounded hover:bg-[var(--erased)] cursor-pointer"
                         >
                           Cancel
                         </button>
@@ -567,7 +599,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     ) : (
                       <button
                         onClick={() => setConfirmDeleteProviderId(activeProvider.id)}
-                        className="px-2.5 py-1 text-xs font-heading font-bold text-[#ff4d4d] hover:bg-[#ffebee] border border-[#ff4d4d]/50 hover:border-[#ff4d4d] rounded flex items-center gap-1 cursor-pointer transition-colors"
+                        className="px-2.5 py-1 text-xs font-heading font-bold text-[var(--marker-red)] hover:bg-[var(--tint-red)] border border-[var(--marker-red)]/50 hover:border-[var(--marker-red)] rounded flex items-center gap-1 cursor-pointer transition-colors"
                         title="Delete this upstream provider"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -579,40 +611,57 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
 
               {/* Model Discovery Results (if any) */}
               {discoveryResults && (
-                <div className="p-4 bg-[#fff9c4] border-2 border-[#2d2d2d] sketch-shadow-sm mb-6 rounded-lg">
-                  <h4 className="font-heading font-bold text-lg text-[#2d2d2d] mb-1">
+                <div className="p-4 bg-[var(--postit)] border-2 border-[var(--ink)] sketch-shadow-sm mb-6 rounded-lg">
+                  <h4 className="font-heading font-bold text-lg text-[var(--ink)] mb-1">
                     🔍 Discovered Upstream Models (Live Probe)
                   </h4>
-                  <p className="text-sm font-body text-[#2d2d2d]/80 mb-3">
+                  <p className="text-sm font-body text-[var(--ink)]/80 mb-3">
                     The endpoint returned the following model IDs. Select which models to import into Kinetix:
                   </p>
+                  {discoveryResults.length > 0 && (
+                    <div className="mb-3">
+                      <input
+                        type="text"
+                        value={discoverySearch}
+                        onChange={(e) => setDiscoverySearch(e.target.value)}
+                        placeholder={`Search ${discoveryResults.length} models… (fuzzy)`}
+                        className="w-full md:w-96 px-3 py-1.5 bg-[var(--surface)] border-2 border-[var(--ink)] font-mono text-sm rounded outline-none focus:border-[var(--pen-blue)]"
+                      />
+                    </div>
+                  )}
                   <div className="flex flex-wrap gap-2">
                     {discoveryResults.length === 0 && (
-                      <span className="text-sm font-mono text-[#b71c1c]">
+                      <span className="text-sm font-mono text-[var(--danger-text)]">
                         No models returned (check the credential or the error above).
                       </span>
                     )}
-                    {discoveryResults.map((m) => (
+                    {discoveryResults.length > 0 &&
+                      filteredDiscovery.map((m) => (
                       <div
                         key={m.id}
-                        className="bg-white border-2 border-[#2d2d2d] px-3 py-1.5 text-xs font-mono sketch-shadow-sm flex items-center gap-2 rounded"
+                        className="bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-1.5 text-xs font-mono sketch-shadow-sm flex items-center gap-2 rounded"
                       >
                         <span className="font-bold">{m.id}</span>
                         {m.context_window ? (
-                          <span className="text-[#2d2d2d]/50">{m.context_window.toLocaleString()} ctx</span>
+                          <span className="text-[var(--ink)]/50">{m.context_window.toLocaleString()} ctx</span>
                         ) : null}
                         {m.already_imported ? (
-                          <span className="text-[#2e7d32] font-bold">✓ imported</span>
+                          <span className="text-[var(--pen-green)] font-bold">✓ imported</span>
                         ) : (
                           <button
                             onClick={() => handleImportDiscoveredModel(m)}
-                            className="bg-[#2e7d32] text-white px-2 py-0.5 rounded hover:bg-[#1b5e20] cursor-pointer"
+                            className="bg-[var(--pen-green)] text-[var(--surface)] px-2 py-0.5 rounded hover:bg-[var(--success-text)] cursor-pointer"
                           >
                             + Import
                           </button>
                         )}
                       </div>
                     ))}
+                    {discoveryResults.length > 0 && filteredDiscovery.length === 0 && (
+                      <span className="text-sm font-mono text-[var(--ink)]/60">
+                        No models match “{discoverySearch}”.
+                      </span>
+                    )}
                   </div>
                 </div>
               )}
@@ -620,14 +669,14 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
               {/* Models List for this Provider */}
               <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                  <h4 className="text-xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
-                    <Cpu className="w-5 h-5 text-[#ff4d4d]" />
+                  <h4 className="text-xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
+                    <Cpu className="w-5 h-5 text-[var(--marker-red)]" />
                     Configured Models ({providerModels.length})
                   </h4>
                   {providerModels.length > 0 && (
                     <button
                       onClick={() => setShowAddModelModal(true)}
-                      className="text-xs font-heading font-bold text-[#2d5da1] hover:underline flex items-center gap-1 cursor-pointer"
+                      className="text-xs font-heading font-bold text-[var(--pen-blue)] hover:underline flex items-center gap-1 cursor-pointer"
                     >
                       <Plus className="w-3.5 h-3.5" />
                       Configure Another Model
@@ -636,10 +685,10 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                 </div>
 
                 {providerModels.length === 0 ? (
-                  <div className="p-8 text-center bg-white border-2 border-dashed border-[#2d2d2d]/30 rounded-lg">
-                    <Cpu className="w-10 h-10 text-[#2d2d2d]/40 mx-auto mb-2" />
-                    <p className="font-heading font-bold text-lg text-[#2d2d2d]">No Models Configured</p>
-                    <p className="text-sm font-body text-[#2d2d2d]/70 max-w-md mx-auto mt-1 mb-4">
+                  <div className="p-8 text-center bg-[var(--surface)] border-2 border-dashed border-[var(--ink)]/30 rounded-lg">
+                    <Cpu className="w-10 h-10 text-[var(--ink)]/40 mx-auto mb-2" />
+                    <p className="font-heading font-bold text-lg text-[var(--ink)]">No Models Configured</p>
+                    <p className="text-sm font-body text-[var(--ink)]/70 max-w-md mx-auto mt-1 mb-4">
                       Probe upstream models via live discovery or manually register custom upstream model IDs for this provider.
                     </p>
                     <div className="flex items-center justify-center gap-3">
@@ -665,19 +714,19 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     {providerModels.map((m) => (
                       <div
                         key={m.id}
-                        className="p-4 bg-white border-2 border-[#2d2d2d] sketch-shadow-sm rounded-lg"
+                        className="p-4 bg-[var(--surface)] border-2 border-[var(--ink)] sketch-shadow-sm rounded-lg"
                       >
-                        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-[#2d2d2d]/20 pb-2 mb-3">
+                        <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-3 border-b border-[var(--ink)]/20 pb-2 mb-3">
                           <div>
                             <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-heading font-bold text-lg text-[#2d2d2d]">
+                              <span className="font-heading font-bold text-lg text-[var(--ink)]">
                                 {m.displayName}
                               </span>
-                              <span className="text-xs font-mono bg-[#e5e0d8] px-1.5 py-0.5 rounded border border-[#2d2d2d]/40">
+                              <span className="text-xs font-mono bg-[var(--erased)] px-1.5 py-0.5 rounded border border-[var(--ink)]/40">
                                 id: {m.upstreamModelId}
                               </span>
                             </div>
-                            <span className="text-xs font-mono text-[#2d2d2d]/70">
+                            <span className="text-xs font-mono text-[var(--ink)]/70">
                               Context: {m.contextWindow.toLocaleString()} tokens • Max Output: {m.maxOutputTokens}
                             </span>
                           </div>
@@ -692,20 +741,20 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                             </div>
 
                             {confirmDeleteModelId === m.id ? (
-                              <div className="flex items-center gap-1 bg-[#ffebee] px-2 py-1 border border-[#ff4d4d] rounded text-xs font-heading">
-                                <span className="text-[#b71c1c] font-bold">Remove model?</span>
+                              <div className="flex items-center gap-1 bg-[var(--tint-red)] px-2 py-1 border border-[var(--marker-red)] rounded text-xs font-heading">
+                                <span className="text-[var(--danger-text)] font-bold">Remove model?</span>
                                 <button
                                   onClick={() => {
                                     onDeleteModel(m.id);
                                     setConfirmDeleteModelId(null);
                                   }}
-                                  className="px-2 py-0.5 bg-[#ff4d4d] text-white rounded font-bold hover:bg-[#d32f2f] cursor-pointer"
+                                  className="px-2 py-0.5 bg-[var(--marker-red)] text-[var(--surface)] rounded font-bold hover:brightness-90 cursor-pointer"
                                 >
                                   Delete
                                 </button>
                                 <button
                                   onClick={() => setConfirmDeleteModelId(null)}
-                                  className="px-2 py-0.5 bg-white border border-[#2d2d2d] rounded hover:bg-[#e5e0d8] cursor-pointer"
+                                  className="px-2 py-0.5 bg-[var(--surface)] border border-[var(--ink)] rounded hover:bg-[var(--erased)] cursor-pointer"
                                 >
                                   Cancel
                                 </button>
@@ -714,7 +763,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                               <div className="flex items-center gap-1">
                                 <button
                                   onClick={() => openEditModel(m)}
-                                  className="px-2 py-1 text-xs font-heading font-bold text-[#2d5da1] hover:bg-[#e3ecf7] border border-[#2d5da1]/40 hover:border-[#2d5da1] rounded flex items-center gap-1 cursor-pointer transition-colors"
+                                  className="px-2 py-1 text-xs font-heading font-bold text-[var(--pen-blue)] hover:bg-[var(--tint-blue)] border border-[var(--pen-blue)]/40 hover:border-[var(--pen-blue)] rounded flex items-center gap-1 cursor-pointer transition-colors"
                                   title="Edit model configuration"
                                 >
                                   <Pencil className="w-3.5 h-3.5" />
@@ -722,7 +771,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                                 </button>
                                 <button
                                   onClick={() => setConfirmDeleteModelId(m.id)}
-                                  className="px-2 py-1 text-xs font-heading font-bold text-[#ff4d4d] hover:bg-[#ffebee] border border-[#ff4d4d]/40 hover:border-[#ff4d4d] rounded flex items-center gap-1 cursor-pointer transition-colors"
+                                  className="px-2 py-1 text-xs font-heading font-bold text-[var(--marker-red)] hover:bg-[var(--tint-red)] border border-[var(--marker-red)]/40 hover:border-[var(--marker-red)] rounded flex items-center gap-1 cursor-pointer transition-colors"
                                   title="Remove model from provider"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
@@ -735,8 +784,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
 
                         {/* Prices & Parameter policies */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs font-mono">
-                          <div className="bg-[#fdfbf7] p-2 border border-[#2d2d2d] rounded">
-                            <strong className="font-heading text-sm text-[#2d2d2d] block mb-1">
+                          <div className="bg-[var(--paper)] p-2 border border-[var(--ink)] rounded">
+                            <strong className="font-heading text-sm text-[var(--ink)] block mb-1">
                               💵 Token Pricing (Admin Defined)
                             </strong>
                             <div>Input: ${m.prices.inputPer1M} / 1M</div>
@@ -747,14 +796,14 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                             )}
                           </div>
 
-                          <div className="bg-[#fdfbf7] p-2 border border-[#2d2d2d] rounded">
-                            <strong className="font-heading text-sm text-[#2d2d2d] block mb-1">
+                          <div className="bg-[var(--paper)] p-2 border border-[var(--ink)] rounded">
+                            <strong className="font-heading text-sm text-[var(--ink)] block mb-1">
                               ⚙️ Parameter & Thinking Controls
                             </strong>
                             <div>Temperature Policy: <strong>Clamp (0.0 - 2.0)</strong></div>
                             <div>
                               Thinking Scale:{' '}
-                              <strong className="text-[#2d5da1]">{m.thinkingMap.scale}</strong>
+                              <strong className="text-[var(--pen-blue)]">{m.thinkingMap.scale}</strong>
                             </div>
                             <div className="truncate">
                               Mapped Field: <code>{m.thinkingMap.mappedField}</code>
@@ -776,22 +825,22 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
       {showAddProviderModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
           <div className="w-full max-w-lg">
-            <WobblyCard decoration="tape" className="bg-[#fdfbf7] p-6 relative">
+            <WobblyCard decoration="tape" className="bg-[var(--paper)] p-6 relative">
               <button
                 onClick={() => setShowAddProviderModal(false)}
-                className="absolute top-4 right-4 text-[#2d2d2d] font-bold text-xl hover:text-[#ff4d4d] cursor-pointer"
+                className="absolute top-4 right-4 text-[var(--ink)] font-bold text-xl hover:text-[var(--marker-red)] cursor-pointer"
               >
                 ✕
               </button>
 
-              <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] mb-4 flex items-center gap-2">
-                <Server className="w-6 h-6 text-[#2d5da1]" />
+              <h3 className="text-2xl font-heading font-bold text-[var(--ink)] mb-4 flex items-center gap-2">
+                <Server className="w-6 h-6 text-[var(--pen-blue)]" />
                 {editingProviderId ? 'Edit Upstream Provider' : 'Add Upstream Provider (No Presets)'}
               </h3>
 
               <form onSubmit={handleCreateProvider} className="space-y-4 font-body">
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Provider Name
                   </label>
                   <input
@@ -800,13 +849,13 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     placeholder="e.g. Google Gemini, Mistral, Local vLLM"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: DESIGN_TOKENS.radii.wobblyMd }}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Endpoint Base URL
                   </label>
                   <input
@@ -815,20 +864,20 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     placeholder="https://api.openai.com/v1 or custom host"
                     value={baseUrl}
                     onChange={(e) => setBaseUrl(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: DESIGN_TOKENS.radii.wobbly }}
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Wire Format
                     </label>
                     <select
                       value={wireFormat}
                       onChange={(e) => setWireFormat(e.target.value as any)}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none font-mono"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none font-mono"
                       style={{ borderRadius: DESIGN_TOKENS.radii.wobblyMd }}
                     >
                       <option value="gemini">Gemini API</option>
@@ -838,13 +887,13 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                   </div>
 
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Auth Scheme
                     </label>
                     <select
                       value={authScheme}
                       onChange={(e) => setAuthScheme(e.target.value as any)}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none font-mono"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none font-mono"
                       style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
                     >
                       <option value="bearer">Bearer Header (Authorization)</option>
@@ -856,7 +905,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
 
                 {authScheme === 'custom_header' && (
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Custom Header Name
                     </label>
                     <input
@@ -864,14 +913,14 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                       placeholder="e.g. x-api-key"
                       value={customHeader}
                       onChange={(e) => setCustomHeader(e.target.value)}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     />
                   </div>
                 )}
 
                 {authScheme === 'query_param' && (
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Custom Query Parameter Name
                     </label>
                     <input
@@ -879,14 +928,14 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                       placeholder="e.g. key"
                       value={customParam}
                       onChange={(e) => setCustomParam(e.target.value)}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     />
                   </div>
                 )}
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Models Path
                     </label>
                     <input
@@ -894,11 +943,11 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                       placeholder="/models"
                       value={modelsPath}
                       onChange={(e) => setModelsPath(e.target.value)}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Extra Headers
                     </label>
                     <textarea
@@ -906,7 +955,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                       placeholder={'anthropic-version: 2023-06-01'}
                       value={extraHeaders}
                       onChange={(e) => setExtraHeaders(e.target.value)}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-sm font-mono sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-sm font-mono sketch-shadow-sm focus:outline-none"
                     />
                   </div>
                 </div>
@@ -914,12 +963,12 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                 {/* Credential — needed for authenticated model discovery, and to
                     create the provider's first account (FR-10.11). */}
                 <div
-                  className="p-3 bg-[#fff9c4]/60 border-2 border-dashed border-[#2d2d2d]/40"
+                  className="p-3 bg-[var(--postit)]/60 border-2 border-dashed border-[var(--ink)]/40"
                   style={{ borderRadius: DESIGN_TOKENS.radii.wobbly }}
                 >
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                      <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                         API Key {editingProviderId ? '(leave blank to keep)' : '(optional)'}
                       </label>
                       <input
@@ -928,11 +977,11 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                         placeholder={editingProviderId ? '•••••• (unchanged)' : 'sk-... or provider key'}
                         value={apiKey}
                         onChange={(e) => setApiKey(e.target.value)}
-                        className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                        className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                      <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                         Account Label
                       </label>
                       <input
@@ -940,22 +989,22 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                         placeholder="e.g. Primary key"
                         value={accountLabel}
                         onChange={(e) => setAccountLabel(e.target.value)}
-                        className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                        className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                       />
                     </div>
                   </div>
-                  <p className="text-xs font-body text-[#2d2d2d]/70 mt-2">
+                  <p className="text-xs font-body text-[var(--ink)]/70 mt-2">
                     Stored encrypted at rest. Required to fetch an authenticated upstream model list
                     and to create the first account for this provider.
                   </p>
                 </div>
 
                 <details className="text-sm font-body">
-                  <summary className="cursor-pointer font-heading font-bold text-[#2d5da1]">
+                  <summary className="cursor-pointer font-heading font-bold text-[var(--pen-blue)]">
                     Advanced (security & timeout)
                   </summary>
                   <div className="grid grid-cols-2 gap-3 mt-3">                    <div>
-                      <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                      <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                         Timeout (ms)
                       </label>
                       <input
@@ -963,24 +1012,24 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                         min={1000}
                         value={timeoutMs}
                         onChange={(e) => setTimeoutMs(Number(e.target.value) || 120000)}
-                        className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                        className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                      <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                         Capability Mode
                       </label>
                       <select
                         value={capabilityMode}
                         onChange={(e) => setCapabilityMode(e.target.value as any)}
-                        className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                        className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                       >
                         <option value="permissive">Permissive (never reject on caps)</option>
                         <option value="strict">Strict (reject unmet caps)</option>
                       </select>
                     </div>
                     <div className="col-span-2">
-                      <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                      <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                         Credential Host Binding (comma-separated, optional)
                       </label>
                       <input
@@ -988,7 +1037,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                         placeholder="e.g. api.example.com, uploads.example.com"
                         value={credentialHosts}
                         onChange={(e) => setCredentialHosts(e.target.value)}
-                        className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                        className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                       />
                     </div>
                     <label className="flex items-center gap-2 font-body text-sm">
@@ -1015,20 +1064,20 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     className="p-3 text-sm font-mono"
                     style={{
                       borderRadius: DESIGN_TOKENS.radii.wobbly,
-                      background: validation.valid ? '#e8f5e9' : '#fdecea',
-                      border: `2px solid ${validation.valid ? '#2e7d32' : '#ff4d4d'}`,
+                      background: validation.valid ? 'var(--tint-green)' : 'var(--tint-red)',
+                      border: `2px solid ${validation.valid ? 'var(--pen-green)' : 'var(--marker-red)'}`,
                     }}
                   >
                     <div className="font-bold mb-1">
                       {validation.valid ? 'Validate: passed' : 'Validate: problems found'}
                     </div>
                     {validation.problems.map((p, i) => (
-                      <div key={i} style={{ color: '#c62828' }}>
+                      <div key={i} style={{ color: 'var(--danger-text)' }}>
                         • {p}
                       </div>
                     ))}
                     {validation.warnings.map((w, i) => (
-                      <div key={i} style={{ color: '#d97706' }}>
+                      <div key={i} style={{ color: 'var(--marker-orange)' }}>
                         ⚠ {w}
                       </div>
                     ))}
@@ -1065,25 +1114,25 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
       {showAddModelModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
           <div className="w-full max-w-lg max-h-[90vh] overflow-y-auto">
-            <WobblyCard decoration="tack" className="bg-[#fdfbf7] p-6 relative">
+            <WobblyCard decoration="tack" className="bg-[var(--paper)] p-6 relative">
               <button
                 onClick={() => setShowAddModelModal(false)}
-                className="absolute top-4 right-4 text-[#2d2d2d] font-bold text-xl hover:text-[#ff4d4d] cursor-pointer"
+                className="absolute top-4 right-4 text-[var(--ink)] font-bold text-xl hover:text-[var(--marker-red)] cursor-pointer"
               >
                 ✕
               </button>
 
-              <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] mb-1 flex items-center gap-2">
-                <Cpu className="w-6 h-6 text-[#ff4d4d]" />
+              <h3 className="text-2xl font-heading font-bold text-[var(--ink)] mb-1 flex items-center gap-2">
+                <Cpu className="w-6 h-6 text-[var(--marker-red)]" />
                 {editingModelId ? `Edit Model for ${activeProvider.name}` : `Configure Model for ${activeProvider.name}`}
               </h3>
-              <p className="text-sm font-body text-[#2d2d2d]/80 mb-4">
+              <p className="text-sm font-body text-[var(--ink)]/80 mb-4">
                 Define the model identifier, token capabilities, and per-million token pricing.
               </p>
 
               <form onSubmit={handleCreateCustomModel} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Upstream Model ID (Wire Name)
                   </label>
                   <input
@@ -1092,13 +1141,13 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     placeholder="e.g. gemini-2.5-flash, claude-3-7-sonnet, gpt-4o"
                     value={modelUpstreamId}
                     onChange={(e) => setModelUpstreamId(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: DESIGN_TOKENS.radii.wobblyMd }}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Display Name
                   </label>
                   <input
@@ -1106,14 +1155,14 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     placeholder="e.g. Gemini 2.5 Flash (Production)"
                     value={modelDisplayName}
                     onChange={(e) => setModelDisplayName(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: DESIGN_TOKENS.radii.wobbly }}
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Context Window
                     </label>
                     <input
@@ -1123,12 +1172,12 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                       step={1000}
                       value={modelContextWindow}
                       onChange={(e) => setModelContextWindow(Number(e.target.value))}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     />
                   </div>
 
                   <div>
-                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                       Max Output
                     </label>
                     <input
@@ -1137,15 +1186,15 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                       min={100}
                       value={modelMaxOutput}
                       onChange={(e) => setModelMaxOutput(Number(e.target.value))}
-                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                      className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     />
                   </div>
                 </div>
 
                 {/* Token Pricing */}
-                <div className="grid grid-cols-2 gap-3 bg-[#f4efe8] p-3 border border-[#2d2d2d] rounded">
+                <div className="grid grid-cols-2 gap-3 bg-[var(--erased-soft)] p-3 border border-[var(--ink)] rounded">
                   <div>
-                    <label className="block text-xs font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-xs font-heading font-bold text-[var(--ink)] mb-1">
                       Input Price ($ / 1M)
                     </label>
                     <input
@@ -1154,11 +1203,11 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                       min={0}
                       value={modelInputPrice}
                       onChange={(e) => setModelInputPrice(Number(e.target.value))}
-                      className="w-full bg-white border border-[#2d2d2d] px-2 py-1 text-sm font-mono focus:outline-none rounded"
+                      className="w-full bg-[var(--surface)] border border-[var(--ink)] px-2 py-1 text-sm font-mono focus:outline-none rounded"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-heading font-bold text-[#2d2d2d] mb-1">
+                    <label className="block text-xs font-heading font-bold text-[var(--ink)] mb-1">
                       Output Price ($ / 1M)
                     </label>
                     <input
@@ -1167,14 +1216,14 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                       min={0}
                       value={modelOutputPrice}
                       onChange={(e) => setModelOutputPrice(Number(e.target.value))}
-                      className="w-full bg-white border border-[#2d2d2d] px-2 py-1 text-sm font-mono focus:outline-none rounded"
+                      className="w-full bg-[var(--surface)] border border-[var(--ink)] px-2 py-1 text-sm font-mono focus:outline-none rounded"
                     />
                   </div>
                 </div>
 
                 {/* Capabilities */}
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-2">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-2">
                     Model Capabilities
                   </label>
                   <div className="grid grid-cols-2 gap-2 text-sm font-body">
@@ -1183,7 +1232,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                         type="checkbox"
                         checked={capText}
                         onChange={(e) => setCapText(e.target.checked)}
-                        className="w-4 h-4 accent-[#ff4d4d]"
+                        className="w-4 h-4 accent-[var(--marker-red)]"
                       />
                       <span>Text Generation</span>
                     </label>
@@ -1192,7 +1241,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                         type="checkbox"
                         checked={capVision}
                         onChange={(e) => setCapVision(e.target.checked)}
-                        className="w-4 h-4 accent-[#ff4d4d]"
+                        className="w-4 h-4 accent-[var(--marker-red)]"
                       />
                       <span>Vision / Multimodal</span>
                     </label>
@@ -1201,7 +1250,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                         type="checkbox"
                         checked={capReasoning}
                         onChange={(e) => setCapReasoning(e.target.checked)}
-                        className="w-4 h-4 accent-[#ff4d4d]"
+                        className="w-4 h-4 accent-[var(--marker-red)]"
                       />
                       <span>Reasoning / Thinking</span>
                     </label>
@@ -1210,7 +1259,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                         type="checkbox"
                         checked={capTools}
                         onChange={(e) => setCapTools(e.target.checked)}
-                        className="w-4 h-4 accent-[#ff4d4d]"
+                        className="w-4 h-4 accent-[var(--marker-red)]"
                       />
                       <span>Tool Calling / JSON</span>
                     </label>
@@ -1242,18 +1291,18 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     className="mt-3 p-3 text-sm font-mono"
                     style={{
                       borderRadius: DESIGN_TOKENS.radii.wobbly,
-                      background: modelValidation.valid ? '#e8f5e9' : '#fdecea',
-                      border: `2px solid ${modelValidation.valid ? '#2e7d32' : '#ff4d4d'}`,
+                      background: modelValidation.valid ? 'var(--tint-green)' : 'var(--tint-red)',
+                      border: `2px solid ${modelValidation.valid ? 'var(--pen-green)' : 'var(--marker-red)'}`,
                     }}
                   >
                     <div className="font-bold mb-1">
                       {modelValidation.valid ? 'Validate: passed' : 'Validate: problems found'}
                     </div>
                     {modelValidation.problems.map((p, i) => (
-                      <div key={i} style={{ color: '#c62828' }}>• {p}</div>
+                      <div key={i} style={{ color: 'var(--danger-text)' }}>• {p}</div>
                     ))}
                     {modelValidation.warnings.map((w, i) => (
-                      <div key={i} style={{ color: '#d97706' }}>⚠ {w}</div>
+                      <div key={i} style={{ color: 'var(--marker-orange)' }}>⚠ {w}</div>
                     ))}
                   </div>
                 )}

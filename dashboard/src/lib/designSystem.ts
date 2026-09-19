@@ -1,15 +1,15 @@
 export const DESIGN_TOKENS = {
   colors: {
-    background: '#fdfbf7', // Warm Paper
-    foreground: '#2d2d2d', // Soft Pencil Black
-    muted: '#e5e0d8', // Old Paper / Erased Pencil
-    accent: '#ff4d4d', // Red Correction Marker
-    border: '#2d2d2d', // Pencil Lead
-    secondaryAccent: '#2d5da1', // Blue Ballpoint Pen
-    postit: '#fff9c4', // Post-it Yellow
-    postitBorder: '#ecd76e',
-    penGreen: '#2e7d32',
-    markerOrange: '#d97706',
+    background: 'var(--paper)',
+    foreground: 'var(--ink)',
+    muted: 'var(--erased)',
+    accent: 'var(--marker-red)',
+    border: 'var(--ink)',
+    secondaryAccent: 'var(--pen-blue)',
+    postit: 'var(--postit)',
+    postitBorder: 'var(--postit-border)',
+    penGreen: 'var(--pen-green)',
+    markerOrange: 'var(--marker-orange)',
   },
   radii: {
     wobbly: '255px 15px 225px 15px / 15px 225px 15px 255px',
@@ -21,12 +21,12 @@ export const DESIGN_TOKENS = {
     wobblyCircle: '50% 50% 50% 50% / 55% 45% 55% 45%',
   },
   shadows: {
-    standard: '4px 4px 0px 0px #2d2d2d',
-    emphasized: '8px 8px 0px 0px #2d2d2d',
-    subtle: '2px 2px 0px 0px #2d2d2d',
-    softPaper: '3px 3px 0px 0px rgba(45, 45, 45, 0.1)',
-    blue: '4px 4px 0px 0px #2d5da1',
-    red: '4px 4px 0px 0px #ff4d4d',
+    standard: '4px 4px 0px 0px var(--shadow-ink)',
+    emphasized: '8px 8px 0px 0px var(--shadow-ink)',
+    subtle: '2px 2px 0px 0px var(--shadow-ink)',
+    softPaper: '3px 3px 0px 0px color-mix(in srgb, var(--shadow-ink) 10%, transparent)',
+    blue: '4px 4px 0px 0px var(--pen-blue)',
+    red: '4px 4px 0px 0px var(--marker-red)',
   },
 };
 

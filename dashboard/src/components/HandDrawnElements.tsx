@@ -28,12 +28,12 @@ interface ThumbtackProps {
 
 export const Thumbtack: React.FC<ThumbtackProps> = ({ color = 'red', className = '' }) => (
   <div
-    className={`absolute pointer-events-none z-10 w-4 h-4 rounded-full border-2 border-[#2d2d2d] ${className}`}
+    className={`absolute pointer-events-none z-10 w-4 h-4 rounded-full border-2 border-[var(--ink)] ${className}`}
     style={{
       background:
         color === 'red'
-          ? 'radial-gradient(circle at 35% 35%, #ff7676, #ff4d4d 65%, #9a1a1a)'
-          : 'radial-gradient(circle at 35% 35%, #76a5ff, #2d5da1 65%, #153463)',
+          ? 'radial-gradient(circle at 35% 35%, #ff7676, var(--marker-red) 65%, #9a1a1a)'
+          : 'radial-gradient(circle at 35% 35%, #76a5ff, var(--pen-blue) 65%, #153463)',
       boxShadow: '2px 2px 0px 0px rgba(45, 45, 45, 0.6)',
     }}
   />
@@ -58,15 +58,15 @@ export const WobblyCard: React.FC<WobblyCardProps> = ({
 }) => {
   const bgStyle =
     variant === 'postit'
-      ? 'bg-[#fff9c4] text-[#2d2d2d]'
+      ? 'bg-[var(--postit)] text-[var(--ink)]'
       : variant === 'muted'
-      ? 'bg-[#f4efe8] text-[#2d2d2d]'
-      : 'bg-white text-[#2d2d2d]';
+      ? 'bg-[var(--erased-soft)] text-[var(--ink)]'
+      : 'bg-[var(--surface)] text-[var(--ink)]';
 
   return (
     <div
       id={id}
-      className={`relative border-2 border-[#2d2d2d] p-6 box-border sketch-shadow transition-transform duration-150 ${bgStyle} ${className}`}
+      className={`relative border-2 border-[var(--ink)] p-6 box-border sketch-shadow transition-transform duration-150 ${bgStyle} ${className}`}
       style={{
         borderRadius: DESIGN_TOKENS.radii.wobbly,
         transform: `rotate(${rotation})`,
@@ -101,13 +101,13 @@ export const SketchButton: React.FC<SketchButtonProps> = ({
       ? 'px-6 py-2.5 text-xl font-bold'
       : 'px-4 py-2 text-lg';
 
-  let colorStyles = 'bg-white text-[#2d2d2d] border-2 border-[#2d2d2d] hover:bg-[#ff4d4d] hover:text-white';
+  let colorStyles = 'bg-[var(--surface)] text-[var(--ink)] border-2 border-[var(--ink)] hover:bg-[var(--marker-red)] hover:text-[var(--surface)]';
   if (variant === 'secondary') {
-    colorStyles = 'bg-[#e5e0d8] text-[#2d2d2d] border-2 border-[#2d2d2d] hover:bg-[#2d5da1] hover:text-white';
+    colorStyles = 'bg-[var(--erased)] text-[var(--ink)] border-2 border-[var(--ink)] hover:bg-[var(--pen-blue)] hover:text-[var(--surface)]';
   } else if (variant === 'danger') {
-    colorStyles = 'bg-[#ff4d4d] text-white border-2 border-[#2d2d2d] hover:bg-[#d32f2f]';
+    colorStyles = 'bg-[var(--marker-red)] text-[var(--surface)] border-2 border-[var(--ink)] hover:brightness-90';
   } else if (variant === 'ghost') {
-    colorStyles = 'bg-transparent text-[#2d2d2d] border-2 border-dashed border-[#2d2d2d] hover:bg-[#e5e0d8]';
+    colorStyles = 'bg-transparent text-[var(--ink)] border-2 border-dashed border-[var(--ink)] hover:bg-[var(--erased)]';
   }
 
   return (
@@ -137,11 +137,11 @@ export const SketchBadge: React.FC<SketchBadgeProps> = ({
   className = '',
   rotation = '0deg',
 }) => {
-  let colors = 'bg-white text-[#2d2d2d] border-[#2d2d2d]';
-  if (variant === 'red') colors = 'bg-[#ffebee] text-[#b71c1c] border-[#ff4d4d]';
-  if (variant === 'blue') colors = 'bg-[#e8f0fe] text-[#1a3d7c] border-[#2d5da1]';
-  if (variant === 'green') colors = 'bg-[#e8f5e9] text-[#1b5e20] border-[#2e7d32]';
-  if (variant === 'yellow') colors = 'bg-[#fff9c4] text-[#826b00] border-[#ecd76e]';
+  let colors = 'bg-[var(--surface)] text-[var(--ink)] border-[var(--ink)]';
+  if (variant === 'red') colors = 'bg-[var(--tint-red)] text-[var(--danger-text)] border-[var(--marker-red)]';
+  if (variant === 'blue') colors = 'bg-[var(--tint-blue)] text-[var(--info-text)] border-[var(--pen-blue)]';
+  if (variant === 'green') colors = 'bg-[var(--tint-green)] text-[var(--success-text)] border-[var(--pen-green)]';
+  if (variant === 'yellow') colors = 'bg-[var(--postit)] text-[var(--warn-text)] border-[var(--postit-border)]';
 
   return (
     <span
@@ -158,7 +158,7 @@ export const SketchBadge: React.FC<SketchBadgeProps> = ({
 
 export const SquiggleDivider: React.FC<{ className?: string }> = ({ className = '' }) => (
   <div className={`w-full overflow-hidden py-3 select-none pointer-events-none opacity-70 ${className}`}>
-    <svg viewBox="0 0 1200 16" className="w-full h-4 stroke-[#2d2d2d] fill-none stroke-[2.5]" preserveAspectRatio="none">
+    <svg viewBox="0 0 1200 16" className="w-full h-4 stroke-[var(--ink)] fill-none stroke-[2.5]" preserveAspectRatio="none">
       <path d="M0,8 Q30,1 60,8 T120,8 T180,8 T240,8 T300,8 T360,8 T420,8 T480,8 T540,8 T600,8 T660,8 T720,8 T780,8 T840,8 T900,8 T960,8 T1020,8 T1080,8 T1140,8 T1200,8" />
     </svg>
   </div>

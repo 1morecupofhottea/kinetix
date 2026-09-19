@@ -91,13 +91,13 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       {/* Top Banner */}
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
-          <h2 className="text-3xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
+          <h2 className="text-3xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
             <span>Key Pool & Accounts Health</span>
             <SketchBadge variant="yellow" rotation="-1deg">
               FR-4 & FR-12
             </SketchBadge>
           </h2>
-          <p className="text-base font-body text-[#2d2d2d]/80">
+          <p className="text-base font-body text-[var(--ink)]/80">
             Accounts hold real upstream API keys securely. Individual keys cycle into cooldown on 429s or quota exhaustion without interrupting client requests.
           </p>
         </div>
@@ -115,10 +115,10 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
 
       {/* Account Cards Grid */}
       {accounts.length === 0 ? (
-        <WobblyCard decoration="tack" className="p-10 text-center bg-white">
-          <KeyRound className="w-12 h-12 text-[#2d5da1] mx-auto mb-3 opacity-60" />
-          <h3 className="text-2xl font-heading font-bold text-[#2d2d2d]">No Account Credentials or Pools Configured</h3>
-          <p className="text-base font-body text-[#2d2d2d]/80 max-w-lg mx-auto mt-2 mb-6">
+        <WobblyCard decoration="tack" className="p-10 text-center bg-[var(--surface)]">
+          <KeyRound className="w-12 h-12 text-[var(--pen-blue)] mx-auto mb-3 opacity-60" />
+          <h3 className="text-2xl font-heading font-bold text-[var(--ink)]">No Account Credentials or Pools Configured</h3>
+          <p className="text-base font-body text-[var(--ink)]/80 max-w-lg mx-auto mt-2 mb-6">
             Store multiple API keys and upstream accounts per provider. Kinetix groups them into active pools, tracks spend against soft quotas, and isolates keys from client applications.
           </p>
           <SketchButton
@@ -144,17 +144,17 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                 decoration={isCooldown ? 'tack' : idx % 2 === 0 ? 'tape' : 'none'}
                 rotation={rotation}
                 className={`p-5 flex flex-col justify-between ${
-                  isCooldown ? 'bg-[#fff0f0]' : isExhausted ? 'bg-[#fffde7]' : 'bg-white'
+                  isCooldown ? 'bg-[var(--tint-red)]' : isExhausted ? 'bg-[var(--tint-yellow)]' : 'bg-[var(--surface)]'
                 }`}
               >
                 <div>
                   <div className="flex items-start justify-between gap-2 mb-2">
                     <div>
-                      <span className="text-xs font-mono bg-[#e5e0d8] px-2 py-0.5 rounded border border-[#2d2d2d]/30 inline-block mb-1">
+                      <span className="text-xs font-mono bg-[var(--erased)] px-2 py-0.5 rounded border border-[var(--ink)]/30 inline-block mb-1">
                         {acc.providerName}
                       </span>
-                      <h3 className="text-xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
-                        <KeyRound className="w-5 h-5 text-[#2d5da1]" />
+                      <h3 className="text-xl font-heading font-bold text-[var(--ink)] flex items-center gap-2">
+                        <KeyRound className="w-5 h-5 text-[var(--pen-blue)]" />
                         {acc.label}
                       </h3>
                     </div>
@@ -175,14 +175,14 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   </div>
 
                   {/* Key masked preview */}
-                  <div className="flex items-center justify-between bg-[#fdfbf7] p-2 border-2 border-dashed border-[#2d2d2d] text-xs font-mono mb-4">
+                  <div className="flex items-center justify-between bg-[var(--paper)] p-2 border-2 border-dashed border-[var(--ink)] text-xs font-mono mb-4">
                     <span>Masked Secret: <strong>{acc.keyMasked}</strong></span>
-                    <span className="text-[#2e7d32] font-bold">🔒 Encrypted at rest</span>
+                    <span className="text-[var(--pen-green)] font-bold">🔒 Encrypted at rest</span>
                   </div>
 
                   {/* Cooldown / Quota warning notice */}
                   {isCooldown && (
-                    <div className="p-3 bg-[#ffebee] border-2 border-[#ff4d4d] sketch-shadow-sm mb-4 rounded text-xs font-mono text-[#b71c1c]">
+                    <div className="p-3 bg-[var(--tint-red)] border-2 border-[var(--marker-red)] sketch-shadow-sm mb-4 rounded text-xs font-mono text-[var(--danger-text)]">
                       <div className="flex items-center gap-1.5 font-bold mb-1">
                         <AlertTriangle className="w-4 h-4" />
                         <span>{acc.lastError || 'Rate Limit (HTTP 429)'}</span>
@@ -190,7 +190,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       <div>Cooling down: {acc.cooldownUntil || 'until Retry-After passes'}</div>
                       <button
                         onClick={() => handleResetCooldown(acc)}
-                        className="mt-2 px-2 py-1 bg-white border border-[#2d2d2d] text-[#2d2d2d] hover:bg-[#e5e0d8] rounded flex items-center gap-1 cursor-pointer font-bold"
+                        className="mt-2 px-2 py-1 bg-[var(--surface)] border border-[var(--ink)] text-[var(--ink)] hover:bg-[var(--erased)] rounded flex items-center gap-1 cursor-pointer font-bold"
                       >
                         <RefreshCw className="w-3 h-3" />
                         Clear Cooldown & Probe Upstream
@@ -199,7 +199,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   )}
 
                   {/* Soft Quotas & Statistics */}
-                  <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-white p-3 border border-[#2d2d2d] rounded mb-4">
+                  <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-[var(--surface)] p-3 border border-[var(--ink)] rounded mb-4">
                     <div>
                       Requests Served: <strong>{acc.requestsCount.toLocaleString()}</strong>
                     </div>
@@ -216,7 +216,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                       </strong>
                     </div>
                     {acc.quotaResetTime && (
-                      <div className="col-span-2 text-[#2d5da1] pt-1 border-t border-[#2d2d2d]/20">
+                      <div className="col-span-2 text-[var(--pen-blue)] pt-1 border-t border-[var(--ink)]/20">
                         Quota Reset: <strong>{acc.quotaResetTime}</strong>
                       </div>
                     )}
@@ -224,26 +224,26 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                 </div>
 
                 {/* Footer */}
-                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[#2d2d2d]/20 pt-3 text-xs font-mono">
-                  <div className="text-[#2d2d2d]/70">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--ink)]/20 pt-3 text-xs font-mono">
+                  <div className="text-[var(--ink)]/70">
                     <span>Priority: <strong>Tier #{acc.priority}</strong></span>
                   </div>
 
                   {confirmDeleteAccountId === acc.id ? (
-                    <div className="flex items-center gap-1 bg-[#ffebee] px-2 py-1 border border-[#ff4d4d] rounded text-xs font-heading">
-                      <span className="text-[#b71c1c] font-bold">Remove pool key?</span>
+                    <div className="flex items-center gap-1 bg-[var(--tint-red)] px-2 py-1 border border-[var(--marker-red)] rounded text-xs font-heading">
+                      <span className="text-[var(--danger-text)] font-bold">Remove pool key?</span>
                       <button
                         onClick={() => {
                           onDeleteAccount(acc.id);
                           setConfirmDeleteAccountId(null);
                         }}
-                        className="px-2 py-0.5 bg-[#ff4d4d] text-white rounded font-bold hover:bg-[#d32f2f] cursor-pointer"
+                        className="px-2 py-0.5 bg-[var(--marker-red)] text-[var(--surface)] rounded font-bold hover:brightness-90 cursor-pointer"
                       >
                         Confirm
                       </button>
                       <button
                         onClick={() => setConfirmDeleteAccountId(null)}
-                        className="px-2 py-0.5 bg-white border border-[#2d2d2d] rounded hover:bg-[#e5e0d8] cursor-pointer"
+                        className="px-2 py-0.5 bg-[var(--surface)] border border-[var(--ink)] rounded hover:bg-[var(--erased)] cursor-pointer"
                       >
                         Cancel
                       </button>
@@ -251,7 +251,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   ) : (
                     <button
                       onClick={() => setConfirmDeleteAccountId(acc.id)}
-                      className="px-2 py-1 text-xs font-heading font-bold text-[#ff4d4d] hover:bg-[#ffebee] border border-[#ff4d4d]/40 hover:border-[#ff4d4d] rounded flex items-center gap-1 cursor-pointer transition-colors"
+                      className="px-2 py-1 text-xs font-heading font-bold text-[var(--marker-red)] hover:bg-[var(--tint-red)] border border-[var(--marker-red)]/40 hover:border-[var(--marker-red)] rounded flex items-center gap-1 cursor-pointer transition-colors"
                       title="Remove this credential account from pool"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -269,28 +269,28 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
       {showAddModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
           <div className="w-full max-w-lg">
-            <WobblyCard decoration="tape" className="bg-[#fdfbf7] p-6 relative">
+            <WobblyCard decoration="tape" className="bg-[var(--paper)] p-6 relative">
               <button
                 onClick={() => setShowAddModal(false)}
-                className="absolute top-4 right-4 text-[#2d2d2d] font-bold text-xl hover:text-[#ff4d4d] cursor-pointer"
+                className="absolute top-4 right-4 text-[var(--ink)] font-bold text-xl hover:text-[var(--marker-red)] cursor-pointer"
               >
                 ✕
               </button>
 
-              <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] mb-4 flex items-center gap-2">
-                <KeyRound className="w-6 h-6 text-[#2d5da1]" />
+              <h3 className="text-2xl font-heading font-bold text-[var(--ink)] mb-4 flex items-center gap-2">
+                <KeyRound className="w-6 h-6 text-[var(--pen-blue)]" />
                 Add Upstream Provider Credential
               </h3>
 
               <form onSubmit={handleCreateSubmit} className="space-y-4 font-body">
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Provider
                   </label>
                   <select
                     value={providerId}
                     onChange={(e) => setProviderId(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: DESIGN_TOKENS.radii.wobblyMd }}
                   >
                     {providers.map((p) => (
@@ -302,7 +302,7 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                 </div>
 
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Account Label / Identification
                   </label>
                   <input
@@ -311,13 +311,13 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                     placeholder="e.g. Gemini Team Pay-as-you-go #2"
                     value={label}
                     onChange={(e) => setLabel(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: DESIGN_TOKENS.radii.wobbly }}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Raw API Key (Encrypted immediately on storage)
                   </label>
                   <input
@@ -326,23 +326,23 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                     placeholder="AIzaSy... or sk-..."
                     value={apiKey}
                     onChange={(e) => setApiKey(e.target.value)}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: DESIGN_TOKENS.radii.wobblyMd }}
                   />
-                  <p className="text-xs text-[#2d2d2d]/60 mt-1">
+                  <p className="text-xs text-[var(--ink)]/60 mt-1">
                     Upstream keys never leave the server or appear in client responses.
                   </p>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                  <label className="block text-sm font-heading font-bold text-[var(--ink)] mb-1">
                     Soft Quota Spend Limit (USD/month)
                   </label>
                   <input
                     type="number"
                     value={softQuota}
                     onChange={(e) => setSoftQuota(Number(e.target.value))}
-                    className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
+                    className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: DESIGN_TOKENS.radii.wobblyBtn }}
                   />
                 </div>
@@ -372,15 +372,15 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                     className="mt-3 p-3 text-sm font-mono"
                     style={{
                       borderRadius: DESIGN_TOKENS.radii.wobbly,
-                      background: accountValidation.valid ? '#e8f5e9' : '#fdecea',
-                      border: `2px solid ${accountValidation.valid ? '#2e7d32' : '#ff4d4d'}`,
+                      background: accountValidation.valid ? 'var(--tint-green)' : 'var(--tint-red)',
+                      border: `2px solid ${accountValidation.valid ? 'var(--pen-green)' : 'var(--marker-red)'}`,
                     }}
                   >
                     <div className="font-bold mb-1">
                       {accountValidation.valid ? 'Validate: passed' : 'Validate: problems found'}
                     </div>
                     {accountValidation.problems.map((p, i) => (
-                      <div key={i} style={{ color: '#c62828' }}>• {p}</div>
+                      <div key={i} style={{ color: 'var(--danger-text)' }}>• {p}</div>
                     ))}
                   </div>
                 )}
