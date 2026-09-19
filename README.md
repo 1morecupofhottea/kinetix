@@ -179,7 +179,12 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   while the data plane is serviceable (it reports `control_plane: degraded` in
   the body rather than dropping out of rotation); admin login fails closed when
   the store is down, while inference keeps serving from the in-memory snapshot
-  and `/metrics` reports `kinetix_control_plane_degraded`.
+  and `/metrics` reports `kinetix_control_plane_degraded`. A failed initial
+  config load no longer aborts startup (the background reload loop retries).
+- Accounting truthfulness (FR-6.2/6.8): unknown token counts are never coerced
+  to zero, and `/metrics` exposes `kinetix_usage_unknown_total`,
+  `kinetix_usage_estimated_total`, and `kinetix_usage_unknown_cost_total` so
+  non-provider-reported usage/cost is never read as exact.
 - Dashboard request inspector renders the Route Trace (candidate/skip/attempt/
   commit/result steps with timings) and the flight-recorder diagnostics inline
   (NFR-4.3/4.4); the Routes editor exposes the opaque-state portability policy
