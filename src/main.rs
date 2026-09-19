@@ -76,9 +76,16 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Registry + usage log queue.
+    // Registry + usage log queue. A reload failure at startup must not take
+    // down serving: an empty snapshot still answers /healthz, and the background
+    // reload loop (below) keeps retrying. Log loudly and continue (NFR-2.6/2.7).
     let registry = Arc::new(Registry::new());
-    registry.reload(&pool).await?;
+    if let Err(e) = registry.reload(&pool).await {
+        tracing::error!(
+            error = %e,
+            "initial registry reload failed; starting with an empty snapshot and retrying in the background"
+        );
+    }
     let log_queue = UsageLogQueue::new(pool.clone(), 4096);
 
     // HTTP client for upstreams: pooled, HTTP/2, bounded connect timeout.
