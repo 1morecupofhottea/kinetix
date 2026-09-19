@@ -84,6 +84,8 @@ pub fn build(state: AppState) -> Router {
         )
         .route("/routes/dry-run", post(admin::dry_run_route))
         .route("/validate", post(admin::validate_endpoint))
+        .route("/config/export", get(admin::export_config))
+        .route("/config/import", post(admin::import_config))
         // aliases
         .route(
             "/aliases",

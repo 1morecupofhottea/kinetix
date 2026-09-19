@@ -183,8 +183,13 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   against trusted ingress headers (`CF-Connecting-IP`, then the first
   `X-Forwarded-For` hop, then `X-Real-IP`); fails closed when an allowlist is set
   but no client IP can be determined.
+- User-authored configuration export/import (FR-10.12):
+  `GET /admin/api/config/export` (secret-free by default; `?include_secrets=true`
+  carries encrypted blobs) and `POST /admin/api/config/import` with a two-phase
+  `apply:false` Validate/Dry Run (schema + outbound-security checks, no writes)
+  then `apply:true` (upsert by name, never deletes, never overwrites an existing
+  credential).
 
 **Deferred** (documented, not silently dropped): local response caching (removed
-from v1, FR-7.6), budget reservation (FR-6.9), and the M4 polish items
-(config export/import FR-10.12, webhook alerts FR-6.6/12.17). See the r4
-requirements document for the full delta.
+from v1, FR-7.6), budget reservation (FR-6.9), and webhook alerts
+(FR-6.6/12.17). See the r4 requirements document for the full delta.

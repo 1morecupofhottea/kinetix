@@ -2188,3 +2188,604 @@ pub fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
         std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
     }
 }
+
+// ===========================================================================
+// Configuration export / import (FR-10.12)
+//
+// User-authored, secret-free by default. Export produces a portable JSON
+// document; import is a two-phase Validate/Dry Run + Apply so an operator can
+// see the plan before touching production (FR-8.6). Import matches by name and
+// never deletes: a name that already exists is updated, a new name is created.
+// Secrets are excluded unless `include_secrets` is set, in which case the
+// AES-GCM encrypted `secret_enc` blobs are carried so a restore is possible
+// without re-entering keys.
+// ===========================================================================
+
+#[derive(Deserialize)]
+pub struct ExportQuery {
+    /// Include encrypted credential blobs (still ciphertext, still keyed by the
+    /// master key). Off by default so exports are safe to share.
+    #[serde(default)]
+    pub include_secrets: bool,
+}
+
+pub async fn export_config(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Query(q): Query<ExportQuery>,
+) -> ApiResult {
+    let providers = db::list_providers(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let mut accounts = Vec::new();
+    let mut models = Vec::new();
+    for p in &providers {
+        for a in db::accounts_for_provider(&state.pool, &p.id)
+            .await
+            .map_err(ApiError::internal)?
+        {
+            accounts.push(a);
+        }
+        for m in db::models_for_provider(&state.pool, &p.id)
+            .await
+            .map_err(ApiError::internal)?
+        {
+            models.push(m);
+        }
+    }
+    let routes = db::list_routes(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let aliases = db::list_aliases(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+
+    let provider_name = |id: &str| -> String {
+        providers
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| p.name.clone())
+            .unwrap_or_default()
+    };
+    let model_label = |id: &str| -> String {
+        models
+            .iter()
+            .find(|m| m.id == id)
+            .map(|m| format!("{}/{}", provider_name(&m.provider_id), m.upstream_id))
+            .unwrap_or_default()
+    };
+
+    let providers_json: Vec<Value> = providers
+        .iter()
+        .map(|p| {
+            json!({
+                "name": p.name,
+                "base_url": p.base_url,
+                "wire_format": p.wire_format,
+                "auth_scheme": p.auth_scheme,
+                "custom_header_name": p.custom_header_name,
+                "custom_param_name": p.custom_param_name,
+                "extra_headers": serde_json::from_str::<Value>(&p.extra_headers).unwrap_or(json!({})),
+                "timeout_ms": p.timeout_ms,
+                "capability_mode": p.capability_mode,
+                "models_path": p.models_path,
+                "rate_limit_rules": serde_json::from_str::<Value>(&p.rate_limit_rules).unwrap_or(json!({})),
+                "follow_redirects": p.follow_redirects != 0,
+                "credential_hosts": p.credential_hosts,
+                "allow_insecure_tls": p.allow_insecure_tls != 0,
+                "enabled": p.enabled != 0,
+            })
+        })
+        .collect();
+
+    let accounts_json: Vec<Value> = accounts
+        .iter()
+        .map(|a| {
+            let mut v = json!({
+                "provider": provider_name(&a.provider_id),
+                "label": a.label,
+                "key_mask": a.key_mask,
+                "status": a.status,
+                "quota_type": a.quota_type,
+                "soft_quota_usd": a.soft_quota_usd,
+                "priority": a.priority,
+                "weight": a.weight,
+            });
+            if q.include_secrets {
+                v["secret_enc"] = json!(a.secret_enc);
+            }
+            v
+        })
+        .collect();
+
+    let models_json: Vec<Value> = models
+        .iter()
+        .map(|m| {
+            json!({
+                "provider": provider_name(&m.provider_id),
+                "upstream_id": m.upstream_id,
+                "display_name": m.display_name,
+                "enabled": m.enabled != 0,
+                "context_window": m.context_window,
+                "max_output_tokens": m.max_output_tokens,
+                "capabilities": serde_json::from_str::<Value>(&m.capabilities).unwrap_or(json!({})),
+                "prices": serde_json::from_str::<Value>(&m.prices).unwrap_or(json!({})),
+                "parameters": serde_json::from_str::<Value>(&m.parameters).unwrap_or(json!({})),
+                "thinking_map": serde_json::from_str::<Value>(&m.thinking_map).unwrap_or(json!({})),
+                "extra_request": serde_json::from_str::<Value>(&m.extra_request).unwrap_or(json!({})),
+            })
+        })
+        .collect();
+
+    let mut routes_json = Vec::new();
+    for r in &routes {
+        let targets = db::route_targets(&state.pool, &r.id)
+            .await
+            .map_err(ApiError::internal)?;
+        let targets_json: Vec<Value> = targets
+            .iter()
+            .map(|t| {
+                json!({
+                    "model": model_label(&t.model_id),
+                    "account_id": t.account_id,
+                    "priority": t.priority,
+                    "weight": t.weight,
+                    "predicate": serde_json::from_str::<Value>(&t.predicate).unwrap_or(json!({})),
+                    "param_overrides": serde_json::from_str::<Value>(&t.param_overrides).unwrap_or(json!({})),
+                })
+            })
+            .collect();
+        routes_json.push(json!({
+            "name": r.name,
+            "description": r.description,
+            "strategy": r.strategy,
+            "fallback_triggers": serde_json::from_str::<Value>(&r.fallback_triggers).unwrap_or(json!({})),
+            "continuity_policy": r.continuity_policy,
+            "portability_policy": r.portability_policy,
+            "sticky_routing": r.sticky_routing != 0,
+            "cache_affinity": r.cache_affinity != 0,
+            "max_attempts": r.max_attempts,
+            "enabled": r.enabled != 0,
+            "targets": targets_json,
+        }));
+    }
+
+    let aliases_json: Vec<Value> = aliases
+        .iter()
+        .map(|a| {
+            json!({
+                "alias": a.alias,
+                "target_type": a.target_type,
+                "target": if a.target_type == "route" {
+                    routes.iter().find(|r| r.id == a.target_id).map(|r| r.name.clone()).unwrap_or_default()
+                } else {
+                    model_label(&a.target_id)
+                },
+                "description": a.description,
+            })
+        })
+        .collect();
+
+    Ok(Json(json!({
+        "kinetix_config_version": 1,
+        "exported_at": db::now_iso(),
+        "secrets_included": q.include_secrets,
+        "providers": providers_json,
+        "accounts": accounts_json,
+        "models": models_json,
+        "routes": routes_json,
+        "aliases": aliases_json,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct ImportBody {
+    pub config: Value,
+    /// When false (default) only plan the changes and return them.
+    #[serde(default)]
+    pub apply: bool,
+}
+
+pub async fn import_config(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Json(body): Json<ImportBody>,
+) -> ApiResult {
+    let cfg = &body.config;
+    let mut plan: Vec<Value> = Vec::new();
+    let mut problems: Vec<String> = Vec::new();
+
+    let empty = Vec::new();
+    let providers = cfg["providers"].as_array().unwrap_or(&empty);
+    let accounts = cfg["accounts"].as_array().unwrap_or(&empty);
+    let models = cfg["models"].as_array().unwrap_or(&empty);
+    let routes = cfg["routes"].as_array().unwrap_or(&empty);
+    let aliases = cfg["aliases"].as_array().unwrap_or(&empty);
+
+    if providers.is_empty() && models.is_empty() && routes.is_empty() {
+        return Err(ApiError::bad(
+            "config has no providers, models, or routes to import",
+        ));
+    }
+
+    // ---- Validate phase (FR-8.6): schema + outbound security, no writes ----
+    for p in providers {
+        let name = p["name"].as_str().unwrap_or("");
+        let base_url = p["base_url"].as_str().unwrap_or("");
+        if name.is_empty() || base_url.is_empty() {
+            problems.push("a provider entry is missing name or base_url".into());
+            continue;
+        }
+        if let Err(e) = validate_outbound_url(&state, base_url) {
+            problems.push(format!("provider '{name}': {}", e.1));
+        }
+        if WireFormat::parse(p["wire_format"].as_str().unwrap_or("")).is_none() {
+            problems.push(format!(
+                "provider '{name}': invalid wire_format '{}'",
+                p["wire_format"].as_str().unwrap_or("")
+            ));
+        }
+        let existing = db::list_providers(&state.pool)
+            .await
+            .map_err(ApiError::internal)?
+            .into_iter()
+            .any(|x| x.name == name);
+        plan.push(json!({
+            "kind": "provider",
+            "name": name,
+            "action": if existing { "update" } else { "create" },
+        }));
+    }
+    for m in models {
+        let provider = m["provider"].as_str().unwrap_or("");
+        let upstream = m["upstream_id"].as_str().unwrap_or("");
+        if provider.is_empty() || upstream.is_empty() {
+            problems.push("a model entry is missing provider or upstream_id".into());
+        }
+        plan.push(
+            json!({"kind": "model", "name": format!("{provider}/{upstream}"), "action": "upsert"}),
+        );
+    }
+    for r in routes {
+        let name = r["name"].as_str().unwrap_or("");
+        if name.is_empty() {
+            problems.push("a route entry is missing a name".into());
+        }
+        let targets = r["targets"].as_array().map(|a| a.len()).unwrap_or(0);
+        if targets == 0 {
+            problems.push(format!("route '{name}' has no targets"));
+        }
+        plan.push(json!({"kind": "route", "name": name, "action": "upsert", "targets": targets}));
+    }
+
+    if !body.apply {
+        return Ok(Json(json!({
+            "valid": problems.is_empty(),
+            "problems": problems,
+            "plan": plan,
+            "note": "dry run: no changes were applied",
+        })));
+    }
+    if !problems.is_empty() {
+        return Err(ApiError::bad(format!(
+            "config validation failed: {}",
+            problems.join("; ")
+        )));
+    }
+
+    // ---- Apply phase ----
+    let mut provider_ids: std::collections::HashMap<String, String> = Default::default();
+    for p in &db::list_providers(&state.pool)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        provider_ids.insert(p.name.clone(), p.id.clone());
+    }
+
+    for p in providers {
+        let name = p["name"].as_str().unwrap_or("");
+        let base_url = p["base_url"].as_str().unwrap_or("");
+        let wire = WireFormat::parse(p["wire_format"].as_str().unwrap_or(""))
+            .ok_or_else(|| ApiError::bad("invalid wire_format"))?;
+        let auth = AuthScheme::parse(p["auth_scheme"].as_str().unwrap_or("bearer"))
+            .unwrap_or(AuthScheme::Bearer);
+        let extra_headers = p["extra_headers"].clone();
+        let rate_limit_rules = p["rate_limit_rules"].clone();
+        let timeout_ms = p["timeout_ms"].as_i64().unwrap_or(120_000);
+        let capability_mode = p["capability_mode"].as_str().unwrap_or("permissive");
+        let models_path = p["models_path"].as_str();
+        let follow_redirects = p["follow_redirects"].as_bool().unwrap_or(false);
+        let credential_hosts = p["credential_hosts"].as_str().unwrap_or("");
+        let allow_insecure_tls = p["allow_insecure_tls"].as_bool().unwrap_or(false);
+        let custom_header = p["custom_header_name"].as_str();
+        let custom_param = p["custom_param_name"].as_str();
+        if let Some(existing) = provider_ids.get(name) {
+            db::update_provider(
+                &state.pool,
+                existing,
+                name,
+                base_url,
+                wire,
+                auth,
+                custom_header,
+                custom_param,
+                extra_headers,
+                timeout_ms,
+                capability_mode,
+                models_path,
+                follow_redirects,
+                credential_hosts,
+                allow_insecure_tls,
+            )
+            .await
+            .map_err(ApiError::internal)?;
+        } else {
+            let id = db::insert_provider(
+                &state.pool,
+                &db::NewProvider {
+                    name,
+                    base_url,
+                    wire_format: wire,
+                    auth_scheme: auth,
+                    custom_header_name: custom_header,
+                    custom_param_name: custom_param,
+                    extra_headers,
+                    timeout_ms,
+                    capability_mode,
+                    models_path,
+                    rate_limit_rules,
+                    follow_redirects,
+                    credential_hosts,
+                    allow_insecure_tls,
+                },
+            )
+            .await
+            .map_err(ApiError::internal)?;
+            provider_ids.insert(name.to_string(), id);
+        }
+    }
+
+    // Accounts: only created when they carry an encrypted secret blob; an
+    // account without a secret cannot be materialized (FR-3.4 write-only).
+    for a in accounts {
+        let provider = a["provider"].as_str().unwrap_or("");
+        let Some(pid) = provider_ids.get(provider) else {
+            continue;
+        };
+        let Some(secret_enc) = a["secret_enc"].as_str() else {
+            continue;
+        };
+        let label = a["label"].as_str().unwrap_or("Default key");
+        let exists = db::accounts_for_provider(&state.pool, pid)
+            .await
+            .map_err(ApiError::internal)?
+            .into_iter()
+            .any(|x| x.label == label);
+        if exists {
+            continue; // never overwrite an existing credential
+        }
+        db::insert_account(
+            &state.pool,
+            pid,
+            label,
+            secret_enc,
+            a["key_mask"].as_str().unwrap_or("••••"),
+            a["priority"].as_i64().unwrap_or(1),
+            a["weight"].as_i64().unwrap_or(1),
+            a["soft_quota_usd"].as_f64(),
+            a["quota_type"].as_str().unwrap_or("none"),
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    }
+
+    let mut model_ids: std::collections::HashMap<String, String> = Default::default();
+    for m in &db::list_models(&state.pool)
+        .await
+        .map_err(ApiError::internal)?
+    {
+        let pname = db::list_providers(&state.pool)
+            .await
+            .map_err(ApiError::internal)?
+            .into_iter()
+            .find(|p| p.id == m.provider_id)
+            .map(|p| p.name)
+            .unwrap_or_default();
+        model_ids.insert(format!("{}/{}", pname, m.upstream_id), m.id.clone());
+    }
+
+    for m in models {
+        let provider = m["provider"].as_str().unwrap_or("");
+        let upstream = m["upstream_id"].as_str().unwrap_or("");
+        let Some(pid) = provider_ids.get(provider) else {
+            continue;
+        };
+        let caps: Capabilities =
+            serde_json::from_value(m["capabilities"].clone()).unwrap_or_default();
+        let prices: Prices = serde_json::from_value(m["prices"].clone()).unwrap_or_default();
+        let display = m["display_name"].as_str().unwrap_or(upstream);
+        let enabled = m["enabled"].as_bool().unwrap_or(true);
+        let context_window = m["context_window"].as_i64();
+        let max_output_tokens = m["max_output_tokens"].as_i64();
+        if let Some(existing) = model_ids.get(&format!("{provider}/{upstream}")) {
+            db::update_model(
+                &state.pool,
+                existing,
+                display,
+                enabled,
+                context_window,
+                max_output_tokens,
+                serde_json::to_value(&caps).unwrap(),
+                serde_json::to_value(&prices).unwrap(),
+                m["parameters"].clone(),
+                m["thinking_map"].clone(),
+                m["extra_request"].clone(),
+            )
+            .await
+            .map_err(ApiError::internal)?;
+        } else {
+            let id = db::insert_model(
+                &state.pool,
+                &db::NewModel {
+                    provider_id: pid,
+                    upstream_id: upstream,
+                    display_name: display,
+                    enabled,
+                    context_window,
+                    max_output_tokens,
+                    capabilities: serde_json::to_value(&caps).unwrap(),
+                    prices: serde_json::to_value(&prices).unwrap(),
+                    parameters: m["parameters"].clone(),
+                    thinking_map: m["thinking_map"].clone(),
+                    extra_request: m["extra_request"].clone(),
+                    discovery: json!({}),
+                },
+            )
+            .await
+            .map_err(ApiError::internal)?;
+            model_ids.insert(format!("{provider}/{upstream}"), id);
+        }
+    }
+
+    // Routes (upsert by name) + targets.
+    for r in routes {
+        let name = r["name"].as_str().unwrap_or("");
+        let body = RouteBody {
+            name: name.to_string(),
+            description: r["description"].as_str().unwrap_or("").to_string(),
+            strategy: r["strategy"].as_str().unwrap_or("priority").to_string(),
+            fallback_triggers: r["fallback_triggers"].clone(),
+            continuity_policy: r["continuity_policy"]
+                .as_str()
+                .unwrap_or("strip")
+                .to_string(),
+            portability_policy: r["portability_policy"]
+                .as_str()
+                .unwrap_or("strip_with_warning")
+                .to_string(),
+            sticky_routing: r["sticky_routing"].as_bool().unwrap_or(false),
+            cache_affinity: r["cache_affinity"].as_bool().unwrap_or(false),
+            max_attempts: r["max_attempts"].as_i64(),
+            targets: Vec::new(),
+        };
+        let mut target_bodies = Vec::new();
+        for t in r["targets"].as_array().unwrap_or(&empty) {
+            let model_key = t["model"].as_str().unwrap_or("");
+            let Some(mid) = model_ids.get(model_key) else {
+                continue;
+            };
+            target_bodies.push(RouteTargetBody {
+                account_id: t["account_id"].as_str().map(|s| s.to_string()),
+                model_id: mid.clone(),
+                priority: t["priority"].as_i64().unwrap_or(1),
+                weight: t["weight"].as_i64().unwrap_or(1),
+                predicate: t["predicate"].clone(),
+                param_overrides: t["param_overrides"].clone(),
+            });
+        }
+        let existing = db::get_route_by_name(&state.pool, name)
+            .await
+            .map_err(ApiError::internal)?;
+        let rid = match existing {
+            Some(route) => {
+                let mut body = body;
+                body.targets = target_bodies;
+                db::update_route(
+                    &state.pool,
+                    &route.id,
+                    &body.description,
+                    &body.strategy,
+                    body.fallback_triggers.clone(),
+                    &body.continuity_policy,
+                    &body.portability_policy,
+                    body.sticky_routing,
+                    body.cache_affinity,
+                    body.max_attempts,
+                )
+                .await
+                .map_err(ApiError::internal)?;
+                db::clear_route_targets(&state.pool, &route.id)
+                    .await
+                    .map_err(ApiError::internal)?;
+                write_route_targets(&state.pool, &route.id, &body.targets).await?;
+                route.id
+            }
+            None => {
+                let id = db::insert_route(
+                    &state.pool,
+                    &db::NewRoute {
+                        name,
+                        description: &body.description,
+                        strategy: &body.strategy,
+                        fallback_triggers: if body.fallback_triggers.is_null() {
+                            json!({"on429": true, "onQuota": true, "on5xx": true, "onTimeout": true})
+                        } else {
+                            body.fallback_triggers.clone()
+                        },
+                        continuity_policy: &body.continuity_policy,
+                        portability_policy: &body.portability_policy,
+                        sticky_routing: body.sticky_routing,
+                        cache_affinity: body.cache_affinity,
+                        max_attempts: body.max_attempts,
+                    },
+                )
+                .await
+                .map_err(ApiError::internal)?;
+                write_route_targets(&state.pool, &id, &target_bodies).await?;
+                id
+            }
+        };
+        let _ = rid;
+    }
+
+    // Aliases (upsert by alias name).
+    for a in aliases {
+        let alias = a["alias"].as_str().unwrap_or("");
+        if alias.is_empty() {
+            continue;
+        }
+        let ttype = a["target_type"].as_str().unwrap_or("model");
+        let target = a["target"].as_str().unwrap_or("");
+        let tid = if ttype == "route" {
+            db::get_route_by_name(&state.pool, target)
+                .await
+                .map_err(ApiError::internal)?
+                .map(|r| r.id)
+        } else {
+            model_ids.get(target).cloned()
+        };
+        let Some(tid) = tid else { continue };
+        db::upsert_alias(
+            &state.pool,
+            alias,
+            ttype,
+            &tid,
+            a["description"].as_str().unwrap_or(""),
+        )
+        .await
+        .map_err(ApiError::internal)?;
+    }
+
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "config_imported",
+        "system",
+        "config",
+        "config",
+        &format!(
+            "Imported {} providers, {} models, {} routes, {} aliases.",
+            providers.len(),
+            models.len(),
+            routes.len(),
+            aliases.len()
+        ),
+    )
+    .await;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "ok": true, "applied": plan })))
+}
