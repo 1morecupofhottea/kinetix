@@ -1701,7 +1701,7 @@ async fn drive_aggregate(
         status_code,
         usage.clone(),
         error_message.clone(),
-        key,
+        key.clone(),
         trace,
         committed,
     )
@@ -1716,7 +1716,23 @@ async fn drive_aggregate(
         });
     }
 
-    frontends::aggregate(format, &model_name, &encoder_ctx.request_id, events, &usage)
+    let body = frontends::aggregate(format, &model_name, &encoder_ctx.request_id, events, &usage);
+    // Non-streaming responses are fully materialized here, so they can be
+    // logged (redacted, short retention) when the key opts in (FR-6.5).
+    if let Some(k) = &key {
+        if k.body_logging != 0 {
+            let _ = db::insert_body_log(
+                &state.pool,
+                &meta.request_id,
+                &k.id,
+                "response",
+                &crate::crypto::redact(&body.to_string()),
+                7,
+            )
+            .await;
+        }
+    }
+    body
 }
 
 /// Compute cost and enqueue the usage row (never blocks the request path),
@@ -1832,15 +1848,27 @@ async fn finalize_log(
         usage.output,
     );
 
-    // Optional per-key body logging (FR-6.5).
+    // Optional per-key body logging (FR-6.5): off unless the key opts in, the
+    // body is redacted, and retention is short (7 days). Request bodies are
+    // logged here for every path; non-streaming responses are additionally
+    // logged by drive_aggregate. Streaming responses are not buffered (NFR-1.3),
+    // so only their request is retained.
     if let Some(k) = &key {
         if k.body_logging != 0 {
+            let request_body = match &req.raw_body {
+                Some(raw) => crate::crypto::redact(raw),
+                None => serde_json::json!({
+                    "model": model_display,
+                    "messages": req.messages.len(),
+                })
+                .to_string(),
+            };
             let _ = db::insert_body_log(
                 &state.pool,
                 &meta.request_id,
                 &k.id,
-                "response",
-                &serde_json::json!({"model": model_display, "status": status}).to_string(),
+                "request",
+                &request_body,
                 7,
             )
             .await;

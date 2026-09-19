@@ -190,6 +190,11 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   then `apply:true` (upsert by name, never deletes, never overwrites an existing
   credential).
 
+- Optional per-key body logging (FR-6.5): off unless a key sets `body_logging`;
+  stored rows are redacted (`crypto::redact`) with short (7-day) retention and
+  purged hourly. Request bodies are captured for every path; non-streaming
+  responses are captured too. Streaming responses are deliberately not buffered
+  (NFR-1.3), so only their request is retained.
 - Webhook alerting (FR-6.6/FR-12.17): a background loop watches recent usage and
   account/route health and POSTs edge-triggered JSON alerts (high fallback rate,
   high error rate, an account exhausted/circuit-open, a route with no healthy
