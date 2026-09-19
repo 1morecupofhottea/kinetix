@@ -781,6 +781,10 @@ pub async fn discover_models(
         .credentials
         .resolve(&account)
         .await
+        .map(|c| {
+            crate::alerts::record_credential_success();
+            c
+        })
         .map_err(|e| {
             crate::alerts::record_credential_failure();
             ApiError::internal(e)
@@ -926,6 +930,10 @@ pub async fn test_provider(
         .credentials
         .resolve(&account)
         .await
+        .map(|c| {
+            crate::alerts::record_credential_success();
+            c
+        })
         .map_err(|e| {
             crate::alerts::record_credential_failure();
             ApiError::internal(e)

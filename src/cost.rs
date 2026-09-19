@@ -6,6 +6,16 @@
 use crate::types::{Prices, TokenUsage};
 
 /// Compute USD cost for a request. Returns `None` when prices are not configured.
+/// Format a USD amount for human-facing messages, keeping precision for tiny
+/// amounts so a budget of $0.0001 does not read as "0.00".
+pub fn format_usd(v: f64) -> String {
+    if v != 0.0 && v.abs() < 0.01 {
+        format!("{v:.6}")
+    } else {
+        format!("{v:.2}")
+    }
+}
+
 pub fn compute_cost(prices: &Prices, usage: &TokenUsage) -> Option<f64> {
     if !prices.is_configured() {
         return None;
@@ -63,5 +73,12 @@ mod tests {
         // 500k*1 + 500k*0.1 + 1M*2 + 100k*2 = 0.5 + 0.05 + 2.0 + 0.2 = 2.75
         let cost = compute_cost(&p, &u).unwrap();
         assert!((cost - 2.75).abs() < 1e-9, "got {cost}");
+    }
+
+    #[test]
+    fn formats_tiny_amounts_with_precision() {
+        assert_eq!(format_usd(0.0001), "0.000100");
+        assert_eq!(format_usd(2.5), "2.50");
+        assert_eq!(format_usd(0.0), "0.00");
     }
 }

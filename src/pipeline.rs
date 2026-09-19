@@ -419,7 +419,10 @@ pub async fn run(
 
         // Credential.
         let credential = match state.credentials.resolve(&target.account).await {
-            Ok(c) => c.secret,
+            Ok(c) => {
+                crate::alerts::record_credential_success();
+                c.secret
+            }
             Err(e) => {
                 tracing::error!(account = %target.account.id, error = %e, "credential resolution failed");
                 crate::alerts::record_credential_failure();

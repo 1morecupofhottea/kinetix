@@ -39,8 +39,16 @@ static CREDENTIAL_FAILURE_ALERTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// Record a credential-strategy failure (never blocks; data-plane safe).
+/// The counter is cleared by [`record_credential_success`] so the alert can
+/// resolve once resolution works again.
 pub fn record_credential_failure() {
     CREDENTIAL_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Record a successful credential resolution, clearing the failure count so the
+/// `credential_refresh_failed` alert resolves when credentials recover.
+pub fn record_credential_success() {
+    CREDENTIAL_FAILURES.store(0, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Number of credential failures seen since the process started.
@@ -347,7 +355,9 @@ async fn evaluate(state: &AppState, alerts: &AlertState, url: &str) -> anyhow::R
                         url,
                         &key,
                         &format!(
-                            "virtual key '{name}' has spent {spend:.2} of its {budget:.2} monthly budget"
+                            "virtual key '{name}' has spent {} of its {} monthly budget",
+                            crate::cost::format_usd(spend),
+                            crate::cost::format_usd(budget)
                         ),
                         json!({"key": name, "spend_usd": spend, "budget_usd": budget}),
                     )
