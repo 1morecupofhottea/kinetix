@@ -28,8 +28,14 @@ pub struct Config {
     pub bootstrap_file: Option<PathBuf>,
     /// Allow outbound requests to private/loopback ranges (NFR-3.9). Off by default.
     pub allow_private_upstreams: bool,
+    /// Global dev override that permits plain-HTTP upstreams. This is a visibly
+    /// marked development mode (NFR-3.12); TLS is mandatory otherwise.
+    pub allow_insecure_tls: bool,
     /// Directory for the embedded dashboard override (dev mode) + db backups.
     pub data_dir: PathBuf,
+    /// Graceful-shutdown drain window before in-flight streams are dropped
+    /// (NFR-2.3). Default 30s.
+    pub shutdown_grace_secs: u64,
 }
 
 impl Config {
@@ -50,8 +56,14 @@ impl Config {
         }
 
         let log_json = env_or("KINETIX_LOG_JSON", "false") == "true";
-        let allow_private_upstreams =
-            env_or("KINETIX_ALLOW_PRIVATE_UPSTREAMS", "false") == "true";
+        let allow_private_upstreams = env_or("KINETIX_ALLOW_PRIVATE_UPSTREAMS", "false") == "true";
+        let allow_insecure_tls = env_or("KINETIX_ALLOW_INSECURE_TLS", "false") == "true";
+        if allow_insecure_tls {
+            tracing::warn!(
+                "KINETIX_ALLOW_INSECURE_TLS=true: plain-HTTP upstreams are permitted. \
+                 This is a development-only mode (NFR-3.12) and must not be used in production."
+            );
+        }
 
         let bootstrap_file = std::env::var("KINETIX_BOOTSTRAP_FILE")
             .ok()
@@ -59,6 +71,9 @@ impl Config {
             .map(PathBuf::from);
 
         let data_dir = PathBuf::from(env_or("KINETIX_DATA_DIR", "."));
+        let shutdown_grace_secs = env_or("KINETIX_SHUTDOWN_GRACE_SECS", "30")
+            .parse::<u64>()
+            .unwrap_or(30);
 
         Ok(Config {
             bind,
@@ -66,14 +81,18 @@ impl Config {
             database_url,
             master_key,
             admin_token,
-            cf_access_aud: std::env::var("KINETIX_CF_ACCESS_AUD").ok().filter(|s| !s.is_empty()),
+            cf_access_aud: std::env::var("KINETIX_CF_ACCESS_AUD")
+                .ok()
+                .filter(|s| !s.is_empty()),
             cf_access_team_domain: std::env::var("KINETIX_CF_ACCESS_TEAM_DOMAIN")
                 .ok()
                 .filter(|s| !s.is_empty()),
             log_json,
             bootstrap_file,
             allow_private_upstreams,
+            allow_insecure_tls,
             data_dir,
+            shutdown_grace_secs,
         })
     }
 }

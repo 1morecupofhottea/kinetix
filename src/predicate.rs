@@ -244,9 +244,7 @@ fn fact_value(fact: &FactRef, req: &RequestFacts<'_>, t: &TargetFacts<'_>) -> Op
         "key_tag" => req.key_tag.map(|t| Value::String(t.to_string())),
         "input_tokens" => Some(Value::Number(req.input_tokens.into())),
         "target_model" | "target_model_id" => Some(Value::String(t.model_id.to_string())),
-        "target_provider" | "target_provider_id" => {
-            Some(Value::String(t.provider_id.to_string()))
-        }
+        "target_provider" | "target_provider_id" => Some(Value::String(t.provider_id.to_string())),
         "target_capability" => {
             let cap = fact.arg()?;
             let declared = capabilities_declared(t.capabilities_raw, cap);
@@ -294,7 +292,10 @@ pub fn eval(pred: &Predicate, req: &RequestFacts<'_>, t: &TargetFacts<'_>) -> Ev
                 match e.result {
                     Tri::False => {
                         parts.push(format!("[{}]", e.explanation));
-                        return Eval::known(false, format!("and: false because {}", parts.join(" ")));
+                        return Eval::known(
+                            false,
+                            format!("and: false because {}", parts.join(" ")),
+                        );
                     }
                     Tri::Unknown => saw_unknown = true,
                     Tri::True => {}
@@ -522,7 +523,10 @@ mod tests {
         let caps = Capabilities::default();
         let raw = json!({});
         assert!(eval(&p, &req(true), &target(&caps, &raw)).result.is_true());
-        assert_eq!(eval(&p, &req(false), &target(&caps, &raw)).result, Tri::False);
+        assert_eq!(
+            eval(&p, &req(false), &target(&caps, &raw)).result,
+            Tri::False
+        );
     }
 
     #[test]
@@ -558,7 +562,10 @@ mod tests {
             ),
             when_unknown: WhenUnknown::Skip,
         };
-        let caps = Capabilities { vision: true, ..Default::default() };
+        let caps = Capabilities {
+            vision: true,
+            ..Default::default()
+        };
         let raw = json!({"vision": true});
         let e = eligibility(&pred, &req(true), &target(&caps, &raw));
         assert!(e.eligible);

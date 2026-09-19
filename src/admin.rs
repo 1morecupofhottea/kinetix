@@ -114,9 +114,7 @@ pub async fn logout(State(state): State<AppState>, jar: CookieJar) -> (CookieJar
         "Administrator session ended.",
     )
     .await;
-    let cookie = Cookie::build((SESSION_COOKIE, ""))
-        .path("/")
-        .build();
+    let cookie = Cookie::build((SESSION_COOKIE, "")).path("/").build();
     (jar.add(cookie), Json(json!({ "ok": true })))
 }
 
@@ -184,7 +182,17 @@ pub async fn test_stream(
         return crate::api::error_response(format, &request_id, e);
     }
 
-    match pipeline::run(&state, format, Some(key), req, request_id.clone(), true, None).await {
+    match pipeline::run(
+        &state,
+        format,
+        Some(key),
+        req,
+        request_id.clone(),
+        true,
+        None,
+    )
+    .await
+    {
         Ok(resp) => resp,
         Err(e) => crate::api::error_response(format, &request_id, e),
     }
@@ -436,7 +444,10 @@ pub async fn update_key(
         .allowed_providers
         .map(|v| serde_json::to_string(&v).unwrap())
         .unwrap_or(existing.allowed_providers.clone());
-    let body_logging = body.body_logging.map(|b| b as i64).unwrap_or(existing.body_logging);
+    let body_logging = body
+        .body_logging
+        .map(|b| b as i64)
+        .unwrap_or(existing.body_logging);
 
     sqlx::query(
         "UPDATE virtual_keys SET name=?, owner=?, tag=?, allowed_models=?, allowed_providers=?,
@@ -479,7 +490,16 @@ pub async fn delete_key(
     db::delete_virtual_key(&state.pool, &id)
         .await
         .map_err(ApiError::internal)?;
-    let _ = db::insert_audit(&state.pool, "admin", "key_deleted", "key", &id, "", "Deleted key.").await;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "key_deleted",
+        "key",
+        &id,
+        "",
+        "Deleted key.",
+    )
+    .await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -491,8 +511,12 @@ pub async fn list_providers(State(state): State<AppState>, _auth: AdminAuth) -> 
     let providers = db::list_providers(&state.pool)
         .await
         .map_err(ApiError::internal)?;
-    let accounts = db::list_accounts(&state.pool).await.map_err(ApiError::internal)?;
-    let models = db::list_models(&state.pool).await.map_err(ApiError::internal)?;
+    let accounts = db::list_accounts(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let models = db::list_models(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     let out: Vec<Value> = providers
         .iter()
         .map(|p| {
@@ -564,8 +588,10 @@ pub async fn create_provider(
     Json(body): Json<ProviderBody>,
 ) -> ApiResult {
     validate_outbound_url(&state, &body.base_url)?;
-    let wire = WireFormat::parse(&body.wire_format).ok_or_else(|| ApiError::bad("invalid wire_format"))?;
-    let auth = AuthScheme::parse(&body.auth_scheme).ok_or_else(|| ApiError::bad("invalid auth_scheme"))?;
+    let wire =
+        WireFormat::parse(&body.wire_format).ok_or_else(|| ApiError::bad("invalid wire_format"))?;
+    let auth =
+        AuthScheme::parse(&body.auth_scheme).ok_or_else(|| ApiError::bad("invalid auth_scheme"))?;
 
     let id = db::insert_provider(
         &state.pool,
@@ -613,10 +639,17 @@ pub async fn create_provider(
         "provider",
         &id,
         &body.name,
-        &format!("Added {} upstream ({} wire format at {}).", body.name, body.wire_format, body.base_url),
+        &format!(
+            "Added {} upstream ({} wire format at {}).",
+            body.name, body.wire_format, body.base_url
+        ),
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -627,8 +660,10 @@ pub async fn update_provider(
     Json(body): Json<ProviderBody>,
 ) -> ApiResult {
     validate_outbound_url(&state, &body.base_url)?;
-    let wire = WireFormat::parse(&body.wire_format).ok_or_else(|| ApiError::bad("invalid wire_format"))?;
-    let auth = AuthScheme::parse(&body.auth_scheme).ok_or_else(|| ApiError::bad("invalid auth_scheme"))?;
+    let wire =
+        WireFormat::parse(&body.wire_format).ok_or_else(|| ApiError::bad("invalid wire_format"))?;
+    let auth =
+        AuthScheme::parse(&body.auth_scheme).ok_or_else(|| ApiError::bad("invalid auth_scheme"))?;
     db::update_provider(
         &state.pool,
         &id,
@@ -674,7 +709,11 @@ pub async fn update_provider(
         "Updated provider configuration.",
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -696,7 +735,11 @@ pub async fn delete_provider(
         "Deleted provider and its models/accounts.",
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -759,13 +802,21 @@ pub async fn discover_models(
         model: &dummy_model,
         credential,
     };
-    let mut req = state.http.get(&url).timeout(std::time::Duration::from_millis(provider.timeout_ms as u64));
+    let mut req = state
+        .http
+        .get(&url)
+        .timeout(std::time::Duration::from_millis(provider.timeout_ms as u64));
     req = adapter.apply_auth(&ctx, req);
     for (k, v) in provider.extra_headers_map() {
         req = req.header(k, v);
     }
 
-    let resp = req.send().await.map_err(|e| ApiError::bad(format!("discovery request failed: {}", crate::crypto::redact(&e.to_string()))))?;
+    let resp = req.send().await.map_err(|e| {
+        ApiError::bad(format!(
+            "discovery request failed: {}",
+            crate::crypto::redact(&e.to_string())
+        ))
+    })?;
     let status = resp.status();
     let body_text = resp.text().await.unwrap_or_default();
     if !status.is_success() {
@@ -857,7 +908,9 @@ pub async fn test_provider(
         system: vec![],
         messages: vec![crate::types::Message {
             role: crate::types::Role::User,
-            parts: vec![crate::types::Part::Text("Reply with the single word: ok".into())],
+            parts: vec![crate::types::Part::Text(
+                "Reply with the single word: ok".into(),
+            )],
         }],
         tools: vec![],
         tool_choice: None,
@@ -873,7 +926,9 @@ pub async fn test_provider(
     };
     internal.stream = false;
 
-    let url = adapter.build_url(&ctx).map_err(|e| ApiError::bad(e.message))?;
+    let url = adapter
+        .build_url(&ctx)
+        .map_err(|e| ApiError::bad(e.message))?;
     let outbound = adapter.build_body(&ctx, &internal);
     let mut req = state
         .http
@@ -922,8 +977,12 @@ pub struct TestBody {
 // ===========================================================================
 
 pub async fn list_models(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
-    let models = db::list_models(&state.pool).await.map_err(ApiError::internal)?;
-    let providers = db::list_providers(&state.pool).await.map_err(ApiError::internal)?;
+    let models = db::list_models(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let providers = db::list_providers(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     let out: Vec<Value> = models.iter().map(|m| model_json(m, &providers)).collect();
     Ok(Json(json!({ "models": out })))
 }
@@ -1020,7 +1079,11 @@ pub async fn create_model(
         "Configured upstream model.",
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -1060,7 +1123,11 @@ pub async fn update_model(
         "Updated model configuration.",
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1069,9 +1136,24 @@ pub async fn delete_model(
     _auth: AdminAuth,
     Path(id): Path<String>,
 ) -> ApiResult {
-    db::delete_model(&state.pool, &id).await.map_err(ApiError::internal)?;
-    let _ = db::insert_audit(&state.pool, "admin", "model_deleted", "model", &id, "", "Removed model.").await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    db::delete_model(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "model_deleted",
+        "model",
+        &id,
+        "",
+        "Removed model.",
+    )
+    .await;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1080,8 +1162,12 @@ pub async fn delete_model(
 // ===========================================================================
 
 pub async fn list_accounts(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
-    let accounts = db::list_accounts(&state.pool).await.map_err(ApiError::internal)?;
-    let providers = db::list_providers(&state.pool).await.map_err(ApiError::internal)?;
+    let accounts = db::list_accounts(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let providers = db::list_providers(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     let (_, by_account) = db::lifetime_totals(&state.pool)
         .await
         .map_err(ApiError::internal)?;
@@ -1182,7 +1268,11 @@ pub async fn create_account(
         "Enrolled a new credential into the pool.",
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -1225,7 +1315,11 @@ pub async fn update_account(
         "Updated account configuration.",
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1249,7 +1343,11 @@ pub async fn reset_account(
         "Cleared cooldown/exhaustion/circuit state.",
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1258,7 +1356,9 @@ pub async fn delete_account(
     _auth: AdminAuth,
     Path(id): Path<String>,
 ) -> ApiResult {
-    db::delete_account(&state.pool, &id).await.map_err(ApiError::internal)?;
+    db::delete_account(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
     let _ = db::insert_audit(
         &state.pool,
         "admin",
@@ -1269,7 +1369,11 @@ pub async fn delete_account(
         "Removed credential from the pool.",
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1278,12 +1382,20 @@ pub async fn delete_account(
 // ===========================================================================
 
 pub async fn list_routes(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
-    let routes = db::list_routes(&state.pool).await.map_err(ApiError::internal)?;
-    let accounts = db::list_accounts(&state.pool).await.map_err(ApiError::internal)?;
-    let models = db::list_models(&state.pool).await.map_err(ApiError::internal)?;
+    let routes = db::list_routes(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let accounts = db::list_accounts(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let models = db::list_models(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     let mut out = Vec::new();
     for c in &routes {
-        let targets = db::route_targets(&state.pool, &c.id).await.map_err(ApiError::internal)?;
+        let targets = db::route_targets(&state.pool, &c.id)
+            .await
+            .map_err(ApiError::internal)?;
         let targets_json: Vec<Value> = targets
             .iter()
             .map(|t| {
@@ -1407,7 +1519,11 @@ pub async fn create_route(
         &format!("Created route with {} targets.", body.targets.len()),
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -1431,7 +1547,9 @@ pub async fn update_route(
     )
     .await
     .map_err(ApiError::internal)?;
-    db::clear_route_targets(&state.pool, &id).await.map_err(ApiError::internal)?;
+    db::clear_route_targets(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
     write_route_targets(&state.pool, &id, &body.targets).await?;
     let _ = db::insert_audit(
         &state.pool,
@@ -1443,11 +1561,19 @@ pub async fn update_route(
         "Updated route configuration.",
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn write_route_targets(pool: &Pool, route_id: &str, targets: &[RouteTargetBody]) -> Result<(), ApiError> {
+async fn write_route_targets(
+    pool: &Pool,
+    route_id: &str,
+    targets: &[RouteTargetBody],
+) -> Result<(), ApiError> {
     for t in targets {
         let predicate = if t.predicate.is_null() {
             "{}".to_string()
@@ -1480,9 +1606,24 @@ pub async fn delete_route(
     _auth: AdminAuth,
     Path(id): Path<String>,
 ) -> ApiResult {
-    db::delete_route(&state.pool, &id).await.map_err(ApiError::internal)?;
-    let _ = db::insert_audit(&state.pool, "admin", "route_deleted", "route", &id, "", "Deleted route.").await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    db::delete_route(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "route_deleted",
+        "route",
+        &id,
+        "",
+        "Deleted route.",
+    )
+    .await;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1522,7 +1663,8 @@ pub async fn validate_endpoint(
     Json(body): Json<ValidateBody>,
 ) -> ApiResult {
     validate_outbound_url(&state, &body.base_url)?;
-    let parsed = url::Url::parse(&body.base_url).map_err(|e| ApiError::bad(format!("invalid URL: {e}")))?;
+    let parsed =
+        url::Url::parse(&body.base_url).map_err(|e| ApiError::bad(format!("invalid URL: {e}")))?;
     let host = parsed.host_str().unwrap_or("").to_string();
     let mut resolved: Vec<String> = Vec::new();
     let mut asn: Value = Value::String("unknown".into());
@@ -1560,9 +1702,15 @@ pub async fn validate_endpoint(
 // ===========================================================================
 
 pub async fn list_aliases(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
-    let aliases = db::list_aliases(&state.pool).await.map_err(ApiError::internal)?;
-    let models = db::list_models(&state.pool).await.map_err(ApiError::internal)?;
-    let routes = db::list_routes(&state.pool).await.map_err(ApiError::internal)?;
+    let aliases = db::list_aliases(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let models = db::list_models(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let routes = db::list_routes(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     let out: Vec<Value> = aliases
         .iter()
         .map(|a| {
@@ -1623,7 +1771,11 @@ pub async fn create_alias(
         "Upserted model alias.",
     )
     .await;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "id": id })))
 }
 
@@ -1632,8 +1784,14 @@ pub async fn delete_alias(
     _auth: AdminAuth,
     Path(id): Path<String>,
 ) -> ApiResult {
-    db::delete_alias(&state.pool, &id).await.map_err(ApiError::internal)?;
-    state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
+    db::delete_alias(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1651,11 +1809,17 @@ fn default_limit() -> i64 {
     200
 }
 
-pub async fn usage(State(state): State<AppState>, _auth: AdminAuth, Query(q): Query<LimitQuery>) -> ApiResult {
+pub async fn usage(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Query(q): Query<LimitQuery>,
+) -> ApiResult {
     let rows = db::recent_usage(&state.pool, q.limit.min(2000))
         .await
         .map_err(ApiError::internal)?;
-    let summary = db::usage_summary(&state.pool).await.map_err(ApiError::internal)?;
+    let summary = db::usage_summary(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
     let out: Vec<Value> = rows.iter().map(usage_json).collect();
     Ok(Json(json!({ "usage": out, "summary": summary })))
 }
@@ -1756,7 +1920,11 @@ fn route_trace_json(t: &db::RouteTraceRow) -> Value {
     })
 }
 
-pub async fn audit(State(state): State<AppState>, _auth: AdminAuth, Query(q): Query<LimitQuery>) -> ApiResult {
+pub async fn audit(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Query(q): Query<LimitQuery>,
+) -> ApiResult {
     let rows = db::recent_audit(&state.pool, q.limit.min(2000))
         .await
         .map_err(ApiError::internal)?;
@@ -1799,7 +1967,9 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
         Vec::new()
     };
     let mut body = String::new();
-    body.push_str("# HELP kinetix_control_plane_degraded 1 when the control-plane store is unavailable\n");
+    body.push_str(
+        "# HELP kinetix_control_plane_degraded 1 when the control-plane store is unavailable\n",
+    );
     body.push_str("# TYPE kinetix_control_plane_degraded gauge\n");
     body.push_str(&format!(
         "kinetix_control_plane_degraded {}\n",
@@ -1819,7 +1989,10 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
     ));
     body.push_str("# HELP kinetix_log_queue_depth Pending usage-log rows\n");
     body.push_str("# TYPE kinetix_log_queue_depth gauge\n");
-    body.push_str(&format!("kinetix_log_queue_depth {}\n", state.log_queue.depth()));
+    body.push_str(&format!(
+        "kinetix_log_queue_depth {}\n",
+        state.log_queue.depth()
+    ));
     body.push_str("# HELP kinetix_log_queue_dropped_total Dropped usage-log rows\n");
     body.push_str("# TYPE kinetix_log_queue_dropped_total counter\n");
     body.push_str(&format!(
@@ -1875,20 +2048,27 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
         "kinetix_fallback_hops_total {}\n",
         summary["fallback_hops"].as_i64().unwrap_or(0)
     ));
-    body.push_str("# HELP kinetix_flight_recorder_requests Requests tracked by the flight recorder\n");
+    body.push_str(
+        "# HELP kinetix_flight_recorder_requests Requests tracked by the flight recorder\n",
+    );
     body.push_str("# TYPE kinetix_flight_recorder_requests gauge\n");
     body.push_str(&format!(
         "kinetix_flight_recorder_requests {}\n",
         state.flight.request_count()
     ));
-    body.push_str("# HELP kinetix_flight_recorder_dropped_total Diagnostics dropped when saturated\n");
+    body.push_str(
+        "# HELP kinetix_flight_recorder_dropped_total Diagnostics dropped when saturated\n",
+    );
     body.push_str("# TYPE kinetix_flight_recorder_dropped_total counter\n");
     body.push_str(&format!(
         "kinetix_flight_recorder_dropped_total {}\n",
         state.flight.dropped_requests() + state.flight.dropped_events()
     ));
     (
-        [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4",
+        )],
         body,
     )
         .into_response()
@@ -1910,13 +2090,17 @@ fn truncate(s: &str, max: usize) -> String {
 /// loopback/link-local/private/metadata ranges blocked unless explicitly allowed.
 fn validate_outbound_url(state: &AppState, url: &str) -> Result<(), ApiError> {
     let parsed = url::Url::parse(url).map_err(|e| ApiError::bad(format!("invalid URL: {e}")))?;
-    let host = parsed.host_str().ok_or_else(|| ApiError::bad("URL must have a host"))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| ApiError::bad("URL must have a host"))?;
     if state.config.allow_private_upstreams {
         return Ok(());
     }
-    if parsed.scheme() != "https" {
+    // TLS is mandatory except in the explicit, visibly-marked dev mode
+    // (NFR-3.12). KINETIX_ALLOW_INSECURE_TLS is that override.
+    if parsed.scheme() != "https" && !state.config.allow_insecure_tls {
         return Err(ApiError::bad(
-            "endpoint must use https (set KINETIX_ALLOW_PRIVATE_UPSTREAMS=true to override for local development)",
+            "endpoint must use https (set KINETIX_ALLOW_INSECURE_TLS=true to override for local development)",
         ));
     }
     if is_blocked_host(host) {

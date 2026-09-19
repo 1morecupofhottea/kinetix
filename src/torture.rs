@@ -9,6 +9,7 @@
 use crate::adapters::Adapter;
 use crate::sse::SseFramer;
 use crate::types::StreamEvent;
+use serde_json::Value;
 
 /// Feed `input` to `framer` in fixed-size chunks and collect all frames.
 fn frames_in_chunks(input: &str, size: usize) -> Vec<String> {
@@ -192,5 +193,186 @@ fn fuzz_bounded_resources() {
             }
         }
         assert_eq!(text, expected_text);
+    }
+}
+
+#[test]
+fn interleaved_parallel_tool_calls() {
+    // Two tool calls whose argument fragments interleave across frames
+    // (FR-9.4). Reassembly must key on the tool-call index, not arrival order.
+    let input = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"c0\",\"function\":{\"name\":\"f0\",\"arguments\":\"{\\\"a\\\":\"}},{\"index\":1,\"id\":\"c1\",\"function\":{\"name\":\"f1\",\"arguments\":\"{\\\"b\\\":\"}}]}}]}\n\n\
+                 data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":1,\"function\":{\"arguments\":\"2}\"}},{\"index\":0,\"function\":{\"arguments\":\"1}\"}}]}}]}\n\n\
+                 data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n\
+                 data: [DONE]\n\n";
+    for size in 1..=40 {
+        let evs = openai_events(input, size);
+        let mut names = std::collections::BTreeMap::new();
+        let mut args: std::collections::BTreeMap<u32, String> = Default::default();
+        for e in &evs {
+            match e {
+                StreamEvent::ToolCallStart { index, name, .. } => {
+                    names.insert(*index, name.clone());
+                }
+                StreamEvent::ToolCallArgsDelta { index, args: a } => {
+                    args.entry(*index).or_default().push_str(a);
+                }
+                _ => {}
+            }
+        }
+        assert_eq!(names.get(&0).map(String::as_str), Some("f0"), "size {size}");
+        assert_eq!(names.get(&1).map(String::as_str), Some("f1"), "size {size}");
+        assert_eq!(
+            args.get(&0).map(String::as_str),
+            Some("{\"a\":1}"),
+            "size {size}"
+        );
+        assert_eq!(
+            args.get(&1).map(String::as_str),
+            Some("{\"b\":2}"),
+            "size {size}"
+        );
+    }
+}
+
+#[test]
+fn reasoning_and_text_interleaving() {
+    // Reasoning and visible text may alternate; both streams must be preserved
+    // in order (FR-9.4).
+    let input = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"think \"}}]}\n\n\
+                 data: {\"choices\":[{\"delta\":{\"content\":\"a\"}}]}\n\n\
+                 data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"more\"}}]}\n\n\
+                 data: {\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n\n\
+                 data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n";
+    for size in 1..=32 {
+        let evs = openai_events(input, size);
+        let mut text = String::new();
+        let mut think = String::new();
+        for e in &evs {
+            match e {
+                StreamEvent::TextDelta(t) => text.push_str(t),
+                StreamEvent::ThinkingDelta { text: t, .. } => think.push_str(t),
+                _ => {}
+            }
+        }
+        assert_eq!(text, "ab", "size {size}");
+        assert_eq!(think, "think more", "size {size}");
+    }
+}
+
+#[test]
+fn zero_token_response_is_not_invented() {
+    // A model that emits no content and reports zero completion tokens must not
+    // produce fabricated text or coerced usage (FR-6.2).
+    let input = "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\
+                 \"usage\":{\"prompt_tokens\":7,\"completion_tokens\":0}}\n\n\
+                 data: [DONE]\n\n";
+    for size in [1usize, 3, 500] {
+        let evs = openai_events(input, size);
+        assert!(
+            !evs.iter().any(|e| matches!(e, StreamEvent::TextDelta(_))),
+            "size {size}"
+        );
+        let usage = evs
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::Usage(u) => Some(u.clone()),
+                _ => None,
+            })
+            .expect("usage present");
+        assert_eq!(usage.input, Some(7));
+        assert_eq!(usage.output, Some(0));
+    }
+}
+
+#[test]
+fn large_tool_call_reassembles_across_many_frames() {
+    // A large tool-call argument delivered in many small fragments (FR-9.4).
+    let payload: String = "x".repeat(4000);
+    let mut stream = String::new();
+    stream.push_str("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"big\",\"function\":{\"name\":\"f\",\"arguments\":\"{\\\"d\\\":\\\"\"}}]}}]}\n\n");
+    for chunk in payload.as_bytes().chunks(97) {
+        let frag = std::str::from_utf8(chunk).unwrap();
+        stream.push_str(&format!(
+            "data: {{\"choices\":[{{\"delta\":{{\"tool_calls\":[{{\"index\":0,\"function\":{{\"arguments\":\"{frag}\"}}}}]}}}}]}}\n\n"
+        ));
+    }
+    stream.push_str("data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"\\\"}\"}}]}}]}\n\n");
+    stream.push_str("data: [DONE]\n\n");
+
+    let evs = openai_events(&stream, 64);
+    let args: String = evs
+        .iter()
+        .filter_map(|e| match e {
+            StreamEvent::ToolCallArgsDelta { args, .. } => Some(args.clone()),
+            _ => None,
+        })
+        .collect();
+    let v: Value = serde_json::from_str(&args).expect("valid JSON");
+    assert_eq!(v["d"].as_str().unwrap().len(), 4000);
+}
+
+#[test]
+fn anthropic_tool_args_split_across_frames() {
+    // Anthropic input_json_delta fragments split at arbitrary byte boundaries.
+    let input = "event: content_block_start\n\
+                 data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"tu_1\",\"name\":\"f\"}}\n\n\
+                 event: content_block_delta\n\
+                 data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"a\\\":\"}}\n\n\
+                 event: content_block_delta\n\
+                 data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"1}\"}}\n\n";
+    for size in 1..=48 {
+        let adapter = crate::adapters::anthropic::AnthropicAdapter;
+        let mut name = None;
+        let mut args = String::new();
+        for frame in frames_in_chunks(input, size) {
+            if let Some(p) = crate::sse::extract_data(&frame) {
+                for ev in adapter.parse_stream_chunk(&p).unwrap_or_default() {
+                    match ev {
+                        StreamEvent::ToolCallStart { name: n, .. } => name = Some(n),
+                        StreamEvent::ToolCallArgsDelta { args: a, .. } => args.push_str(&a),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        assert_eq!(name.as_deref(), Some("f"), "size {size}");
+        assert_eq!(args, "{\"a\":1}", "size {size}");
+    }
+}
+
+#[test]
+fn keepalive_cadence_well_under_cloudflare_idle_timeout() {
+    // FR-9.4: silent-thinking phases must be kept alive under the ~100s idle
+    // window that Cloudflare enforces on proxied connections.
+    assert!(
+        crate::pipeline::KEEPALIVE_INTERVAL_SECS >= 1
+            && crate::pipeline::KEEPALIVE_INTERVAL_SECS < 100,
+        "keepalive interval must fit inside the ~100s Cloudflare idle timeout"
+    );
+}
+
+/// A synthetic upstream that emits keepalive comments while it "thinks" for
+/// longer than the Cloudflare idle window, then produces a final answer. The
+/// framer must pass the comments through and still deliver the answer.
+#[test]
+fn long_silent_thinking_with_keepalives() {
+    let mut stream = String::new();
+    // ~125s of silent thinking represented as keepalive comments, emitted at the
+    // production keepalive cadence.
+    let ticks = 125 / crate::pipeline::KEEPALIVE_INTERVAL_SECS;
+    for _ in 0..ticks {
+        stream.push_str(": keepalive\n\n");
+    }
+    stream.push_str("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}]}\n\n");
+    for size in [1usize, 7, 4096] {
+        let evs = gemini_events(&stream, size);
+        let text: String = evs
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::TextDelta(t) => Some(t.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text, "done", "size {size}");
     }
 }

@@ -32,10 +32,14 @@ pub async fn seed_if_empty(
     let mut account_ids: std::collections::HashMap<String, String> = Default::default();
 
     for p in &cfg.providers {
-        let wire = WireFormat::parse(&p.wire_format)
-            .ok_or_else(|| anyhow::anyhow!("invalid wire_format '{}' for provider '{}'", p.wire_format, p.name))?;
-        let auth = AuthScheme::parse(&p.auth_scheme)
-            .unwrap_or(AuthScheme::Bearer);
+        let wire = WireFormat::parse(&p.wire_format).ok_or_else(|| {
+            anyhow::anyhow!(
+                "invalid wire_format '{}' for provider '{}'",
+                p.wire_format,
+                p.name
+            )
+        })?;
+        let auth = AuthScheme::parse(&p.auth_scheme).unwrap_or(AuthScheme::Bearer);
 
         let id = db::insert_provider(
             pool,
@@ -133,10 +137,28 @@ pub async fn seed_if_empty(
             let account_id = account_ids.get(&t.account).cloned();
             let model_id = model_ids.get(&t.model).cloned();
             if let Some(model_id) = model_id {
-                let predicate = t.predicate.as_ref().map(|v| v.to_string()).unwrap_or_else(|| "{}".into());
-                db::insert_route_target(pool, &route_id, account_id.as_deref(), &model_id, t.priority, t.weight.unwrap_or(1), &predicate, "{}").await?;
+                let predicate = t
+                    .predicate
+                    .as_ref()
+                    .map(|v| v.to_string())
+                    .unwrap_or_else(|| "{}".into());
+                db::insert_route_target(
+                    pool,
+                    &route_id,
+                    account_id.as_deref(),
+                    &model_id,
+                    t.priority,
+                    t.weight.unwrap_or(1),
+                    &predicate,
+                    "{}",
+                )
+                .await?;
             } else {
-                tracing::warn!("route '{}' target references unknown model '{}'", c.name, t.model);
+                tracing::warn!(
+                    "route '{}' target references unknown model '{}'",
+                    c.name,
+                    t.model
+                );
             }
         }
         route_ids.insert(c.name.clone(), route_id);
@@ -149,9 +171,20 @@ pub async fn seed_if_empty(
             _ => model_ids.get(&a.target).cloned(),
         };
         if let Some(target_id) = target_id {
-            db::upsert_alias(pool, &a.alias, &a.target_type, &target_id, "Seeded from bootstrap config").await?;
+            db::upsert_alias(
+                pool,
+                &a.alias,
+                &a.target_type,
+                &target_id,
+                "Seeded from bootstrap config",
+            )
+            .await?;
         } else {
-            tracing::warn!("alias '{}' references unknown target '{}'", a.alias, a.target);
+            tracing::warn!(
+                "alias '{}' references unknown target '{}'",
+                a.alias,
+                a.target
+            );
         }
     }
 

@@ -10,7 +10,9 @@ use std::sync::Arc;
 use anyhow::Result;
 use parking_lot::RwLock;
 
-use crate::db::{self, AccountRow, AliasRow, RouteRow, RouteTargetRow, ModelRow, Pool, ProviderRow};
+use crate::db::{
+    self, AccountRow, AliasRow, ModelRow, Pool, ProviderRow, RouteRow, RouteTargetRow,
+};
 
 /// An immutable runtime configuration snapshot (FR-10.13, NFR-2.10).
 ///
@@ -39,7 +41,10 @@ pub struct Snapshot {
 #[derive(Debug, Clone)]
 pub enum Resolved {
     /// A single (provider, model) target.
-    Single { provider_id: String, model_id: String },
+    Single {
+        provider_id: String,
+        model_id: String,
+    },
     /// A route with an ordered list of targets.
     Route {
         route: RouteRow,
@@ -209,7 +214,8 @@ impl Registry {
                 priority: t.priority,
                 weight: t.weight,
                 predicate: crate::predicate::TargetPredicate::parse(&t.predicate),
-                param_overrides: serde_json::from_str(&t.param_overrides).unwrap_or(serde_json::Value::Null),
+                param_overrides: serde_json::from_str(&t.param_overrides)
+                    .unwrap_or(serde_json::Value::Null),
             });
         }
         if targets.is_empty() {
@@ -221,7 +227,11 @@ impl Registry {
     /// All enabled models the registry knows, for `/v1/models`.
     pub fn enabled_models(&self) -> Vec<ModelRow> {
         let snap = self.snapshot();
-        snap.models.values().filter(|m| m.enabled != 0).cloned().collect()
+        snap.models
+            .values()
+            .filter(|m| m.enabled != 0)
+            .cloned()
+            .collect()
     }
 
     /// Provider by id.

@@ -44,9 +44,15 @@ pub fn build(state: AppState) -> Router {
         .route("/test-stream", post(admin::test_stream))
         // keys
         .route("/keys", get(admin::list_keys).post(admin::create_key))
-        .route("/keys/{id}", put(admin::update_key).delete(admin::delete_key))
+        .route(
+            "/keys/{id}",
+            put(admin::update_key).delete(admin::delete_key),
+        )
         // providers
-        .route("/providers", get(admin::list_providers).post(admin::create_provider))
+        .route(
+            "/providers",
+            get(admin::list_providers).post(admin::create_provider),
+        )
         .route(
             "/providers/{id}",
             put(admin::update_provider).delete(admin::delete_provider),
@@ -56,9 +62,15 @@ pub fn build(state: AppState) -> Router {
         // models
         .route("/models", get(admin::list_models))
         .route("/providers/{id}/models", post(admin::create_model))
-        .route("/models/{id}", put(admin::update_model).delete(admin::delete_model))
+        .route(
+            "/models/{id}",
+            put(admin::update_model).delete(admin::delete_model),
+        )
         // accounts
-        .route("/accounts", get(admin::list_accounts).post(admin::create_account))
+        .route(
+            "/accounts",
+            get(admin::list_accounts).post(admin::create_account),
+        )
         .route(
             "/accounts/{id}",
             put(admin::update_account).delete(admin::delete_account),
@@ -73,13 +85,22 @@ pub fn build(state: AppState) -> Router {
         .route("/routes/dry-run", post(admin::dry_run_route))
         .route("/validate", post(admin::validate_endpoint))
         // aliases
-        .route("/aliases", get(admin::list_aliases).post(admin::create_alias))
+        .route(
+            "/aliases",
+            get(admin::list_aliases).post(admin::create_alias),
+        )
         .route("/aliases/{id}", delete(admin::delete_alias))
         // usage / requests / audit / metrics
         .route("/usage", get(admin::usage))
         .route("/requests", get(admin::usage))
-        .route("/requests/{id}/route-trace", get(admin::request_route_trace))
-        .route("/requests/{id}/diagnostics", get(admin::request_diagnostics))
+        .route(
+            "/requests/{id}/route-trace",
+            get(admin::request_route_trace),
+        )
+        .route(
+            "/requests/{id}/diagnostics",
+            get(admin::request_diagnostics),
+        )
         .route("/audit", get(admin::audit))
         .route("/metrics", get(admin::metrics));
 

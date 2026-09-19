@@ -195,10 +195,7 @@ pub fn soonest_recovery(accounts: &[AccountRow]) -> Option<DateTime<Utc>> {
 }
 
 /// Whether a soft quota (FR-12.5) is reached for an account.
-pub async fn soft_quota_reached(
-    pool: &Pool,
-    account: &AccountRow,
-) -> anyhow::Result<bool> {
+pub async fn soft_quota_reached(pool: &Pool, account: &AccountRow) -> anyhow::Result<bool> {
     let Some(limit) = account.soft_quota_usd else {
         return Ok(false);
     };
@@ -214,10 +211,17 @@ pub async fn soft_quota_reached(
 pub fn window_start(quota_type: &str, window_secs: Option<i64>) -> String {
     let now = Utc::now();
     let start = match quota_type {
-        "daily" => now.date_naive().and_hms_opt(0, 0, 0).map(|d| d.and_utc()).unwrap_or(now),
+        "daily" => now
+            .date_naive()
+            .and_hms_opt(0, 0, 0)
+            .map(|d| d.and_utc())
+            .unwrap_or(now),
         "monthly" => {
             let first = now.date_naive().with_day(1).unwrap_or(now.date_naive());
-            first.and_hms_opt(0, 0, 0).map(|d| d.and_utc()).unwrap_or(now)
+            first
+                .and_hms_opt(0, 0, 0)
+                .map(|d| d.and_utc())
+                .unwrap_or(now)
         }
         "rolling" => now - Duration::seconds(window_secs.unwrap_or(86400)),
         _ => now - Duration::days(1),
@@ -232,7 +236,11 @@ mod tests {
     use super::*;
     use chrono::Duration;
 
-    fn account(status: &str, circuit_until: Option<String>, last_probe: Option<String>) -> AccountRow {
+    fn account(
+        status: &str,
+        circuit_until: Option<String>,
+        last_probe: Option<String>,
+    ) -> AccountRow {
         AccountRow {
             id: "acc".into(),
             provider_id: "p".into(),
@@ -274,7 +282,10 @@ mod tests {
         let past = (Utc::now() - Duration::seconds(30)).to_rfc3339();
         let just_probed = Utc::now().to_rfc3339();
         let a = account("healthy", Some(past.clone()), Some(just_probed));
-        assert!(!should_probe(&a), "a recent probe must throttle the next one");
+        assert!(
+            !should_probe(&a),
+            "a recent probe must throttle the next one"
+        );
 
         let old = (Utc::now() - Duration::seconds(HALF_OPEN_PROBE_MIN_GAP_SECS + 1)).to_rfc3339();
         let b = account("healthy", Some(past), Some(old));

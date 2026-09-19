@@ -19,9 +19,7 @@ impl OpenAiAdapter {
     }
 
     fn content_value(parts: &[Part]) -> Value {
-        let has_non_text = parts
-            .iter()
-            .any(|p| matches!(p, Part::Image(_)));
+        let has_non_text = parts.iter().any(|p| matches!(p, Part::Image(_)));
         if !has_non_text {
             // Plain string content.
             let text: String = parts
@@ -393,9 +391,8 @@ fn openai_events(v: &Value) -> Vec<StreamEvent> {
                         let index = tc.get("index").and_then(|i| i.as_u64()).unwrap_or(0) as u32;
                         let id = tc.get("id").and_then(|i| i.as_str()).map(String::from);
                         let func = tc.get("function");
-                        if let Some(name) = func
-                            .and_then(|f| f.get("name"))
-                            .and_then(|n| n.as_str())
+                        if let Some(name) =
+                            func.and_then(|f| f.get("name")).and_then(|n| n.as_str())
                         {
                             if !name.is_empty() {
                                 events.push(StreamEvent::ToolCallStart {

@@ -34,6 +34,10 @@ use crate::types::{
 const STICKY_TTL: Duration = Duration::from_secs(30 * 60);
 const MAX_PRE_COMMIT_DEADLINE: Duration = Duration::from_secs(30);
 const CIRCUIT_THRESHOLD: i64 = 4;
+/// SSE keepalive cadence. Cloudflare drops proxied connections that are idle
+/// for ~100s (HTTP 524), so a silent thinking phase must be kept alive well
+/// within that window (NFR-1 / FR-9.4). Exposed for tests.
+pub const KEEPALIVE_INTERVAL_SECS: u64 = 15;
 const CIRCUIT_OPEN_SECS: i64 = 30;
 
 /// Request-scoped metadata carried into the usage log and Route Trace.
@@ -131,14 +135,13 @@ pub async fn run(
     );
 
     // 1. Resolve the route against the request's snapshot.
-    let resolved = crate::registry::Registry::resolve_in(&snap, &req.requested_model).ok_or_else(
-        || {
+    let resolved =
+        crate::registry::Registry::resolve_in(&snap, &req.requested_model).ok_or_else(|| {
             ProxyError::not_found(format!(
                 "model '{}' is not configured. Use GET /v1/models to list available models.",
                 req.requested_model
             ))
-        },
-    )?;
+        })?;
     trace.step(
         "resolve",
         None,
@@ -233,7 +236,10 @@ pub async fn run(
     }
 
     // Filter by key provider restrictions (FR-12.19) and compatibility (FR-12.11).
-    let allowed_providers = key.as_ref().map(|k| k.allowed_providers()).unwrap_or_default();
+    let allowed_providers = key
+        .as_ref()
+        .map(|k| k.allowed_providers())
+        .unwrap_or_default();
     let before = targets.len();
     targets.retain(|t| {
         if !allowed_providers.is_empty() && !allowed_providers.contains(&t.provider.id) {
@@ -286,7 +292,10 @@ pub async fn run(
     if let (Some(route), Some(session)) = (&route, &session) {
         if route.cache_affinity != 0 {
             if let Some(sticky_key) = state.sticky_lookup(session, STICKY_TTL) {
-                if let Some(pos) = targets.iter().position(|t| target_key(route, t) == sticky_key) {
+                if let Some(pos) = targets
+                    .iter()
+                    .position(|t| target_key(route, t) == sticky_key)
+                {
                     targets.rotate_left(pos);
                     trace.step(
                         "candidate",
@@ -398,8 +407,8 @@ pub async fn run(
         }
 
         // Same-format passthrough (FR-2.7).
-        let use_passthrough = req.raw_body.is_some()
-            && passthrough::is_passthrough(format, target.provider.wire());
+        let use_passthrough =
+            req.raw_body.is_some() && passthrough::is_passthrough(format, target.provider.wire());
 
         attempts_done += 1;
         state.flight.record(
@@ -410,7 +419,11 @@ pub async fn run(
                 "{} via {}{}",
                 target.model.upstream_id,
                 target.provider.wire_format,
-                if use_passthrough { " (passthrough)" } else { "" }
+                if use_passthrough {
+                    " (passthrough)"
+                } else {
+                    ""
+                }
             ),
         );
 
@@ -424,14 +437,17 @@ pub async fn run(
                 if resp.status().is_success() {
                     meta.fallback_hops = (attempts_done - 1) as i64;
                     meta.retry_count = (attempts_done - 1) as i64;
-                    meta.fallback_path.push(format!("{}:200", target.account.label));
+                    meta.fallback_path
+                        .push(format!("{}:200", target.account.label));
                     trace.step(
                         "attempt",
                         Some(target.account.label.clone()),
                         format!("HTTP 200 (attempt {attempts_done})"),
                     );
-                    trace.final_target =
-                        Some(format!("{} @ {}", target.model.display_name, target.account.label));
+                    trace.final_target = Some(format!(
+                        "{} @ {}",
+                        target.model.display_name, target.account.label
+                    ));
                     state.flight.record(
                         &meta.request_id,
                         started.elapsed().as_millis() as u64,
@@ -542,15 +558,13 @@ async fn send_upstream(
     req: &InternalRequest,
     use_passthrough: bool,
 ) -> Result<reqwest::Response, UpstreamFailure> {
-    let url = adapter
-        .build_url(ctx)
-        .map_err(|e| UpstreamFailure {
-            kind: FailureKind::BadRequest,
-            status: None,
-            retry_after_secs: None,
-            message: e.message,
-            quota_reset_at: None,
-        })?;
+    let url = adapter.build_url(ctx).map_err(|e| UpstreamFailure {
+        kind: FailureKind::BadRequest,
+        status: None,
+        retry_after_secs: None,
+        message: e.message,
+        quota_reset_at: None,
+    })?;
 
     // Credential host binding (NFR-3.11): never send the credential elsewhere.
     if let Ok(parsed) = url::Url::parse(&url) {
@@ -563,6 +577,22 @@ async fn send_upstream(
                     message: format!(
                         "credential host binding: '{host}' is not an authorized host for provider '{}'",
                         ctx.provider.name
+                    ),
+                    quota_reset_at: None,
+                });
+            }
+            // TLS is mandatory except in the explicit dev mode (NFR-3.12).
+            if parsed.scheme() != "https"
+                && !state.config.allow_insecure_tls
+                && !ctx.provider.insecure_tls()
+            {
+                return Err(UpstreamFailure {
+                    kind: FailureKind::ConnectionError,
+                    status: None,
+                    retry_after_secs: None,
+                    message: format!(
+                        "plain-HTTP upstream '{url}' refused: TLS is mandatory \
+                         (set KINETIX_ALLOW_INSECURE_TLS=true for local development)"
                     ),
                     quota_reset_at: None,
                 });
@@ -678,7 +708,8 @@ async fn handle_key_failure(
     let detail = match failure.kind {
         FailureKind::RateLimit => {
             let cooldown = failure.retry_after_secs.unwrap_or(30).min(3600);
-            let _ = pool::mark_rate_limited(&state.pool, account_id, cooldown, &failure.message).await;
+            let _ =
+                pool::mark_rate_limited(&state.pool, account_id, cooldown, &failure.message).await;
             let d = format!("{label}:429(cooldown {cooldown}s)");
             meta.fallback_path.push(d.clone());
             d
@@ -727,9 +758,14 @@ async fn handle_key_failure(
         FailureKind::BadRequest => format!("{label}:bad_request"),
     };
     // Circuit breaker (FR-4.7).
-    let n = pool::record_failure(&state.pool, account_id, CIRCUIT_THRESHOLD, CIRCUIT_OPEN_SECS)
-        .await
-        .unwrap_or(0);
+    let n = pool::record_failure(
+        &state.pool,
+        account_id,
+        CIRCUIT_THRESHOLD,
+        CIRCUIT_OPEN_SECS,
+    )
+    .await
+    .unwrap_or(0);
     trace.step("attempt", Some(label), detail);
     if n >= CIRCUIT_THRESHOLD {
         trace.step(
@@ -887,7 +923,8 @@ fn apply_continuity(
 
     // strip_with_warning
     for msg in &mut req.messages {
-        msg.parts.retain(|p| !matches!(p, crate::types::Part::Thinking { .. }));
+        msg.parts
+            .retain(|p| !matches!(p, crate::types::Part::Thinking { .. }));
         for part in &mut msg.parts {
             if let crate::types::Part::ToolCall { signature, .. } = part {
                 *signature = None;
@@ -914,7 +951,9 @@ fn check_param_policy(target: &ResolvedTarget, req: &InternalRequest) -> Result<
     ];
     for (name, value) in checks {
         let Some(v) = value else { continue };
-        let Some(spec) = params.get(name) else { continue };
+        let Some(spec) = params.get(name) else {
+            continue;
+        };
         if !spec.supported && spec.policy == crate::types::ParamPolicy::Reject {
             return Err(ProxyError::unsupported(format!(
                 "parameter '{name}' is not supported by model '{}'",
@@ -1016,14 +1055,36 @@ fn stream_response(
         tokio::spawn(async move {
             if passthrough {
                 drive_stream_passthrough(
-                    state, snap, format, meta, req, attempt, encoder_ctx, started, key, tx,
-                    model_display, trace, notify,
+                    state,
+                    snap,
+                    format,
+                    meta,
+                    req,
+                    attempt,
+                    encoder_ctx,
+                    started,
+                    key,
+                    tx,
+                    model_display,
+                    trace,
+                    notify,
                 )
                 .await;
             } else {
                 drive_stream(
-                    state, snap, format, meta, req, attempt, encoder_ctx, started, key, tx,
-                    model_display, trace, notify,
+                    state,
+                    snap,
+                    format,
+                    meta,
+                    req,
+                    attempt,
+                    encoder_ctx,
+                    started,
+                    key,
+                    tx,
+                    model_display,
+                    trace,
+                    notify,
                 )
                 .await;
             }
@@ -1047,7 +1108,16 @@ fn stream_response(
         req.stream = true;
         tokio::spawn(async move {
             let result = drive_aggregate(
-                state, snap, format, meta, req, attempt, encoder_ctx, started, key, model_name,
+                state,
+                snap,
+                format,
+                meta,
+                req,
+                attempt,
+                encoder_ctx,
+                started,
+                key,
+                model_name,
                 trace,
             )
             .await;
@@ -1094,7 +1164,7 @@ async fn drive_stream(
     let mut upstream = attempt.stream.take().expect("stream present");
     let adapter = attempt.adapter.clone();
     let mut framer = crate::sse::SseFramer::new();
-    let mut keepalive = tokio::time::interval(Duration::from_secs(15));
+    let mut keepalive = tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
@@ -1116,6 +1186,8 @@ async fn drive_stream(
                 }
             }
             _ = keepalive.tick() => {
+                // Keepalive comment (FR-9.4): keeps Cloudflare's ~100s idle
+                // timeout from dropping a long silent thinking phase.
                 if tx.send(Ok(frontends::sse_comment("keepalive"))).await.is_err() {
                     // Client disconnected: cancel upstream (FR-2.9).
                     record_cancel(&state, &meta, started);
@@ -1252,7 +1324,7 @@ async fn drive_stream_passthrough(
     let mut upstream = attempt.stream.take().expect("stream present");
     let adapter = attempt.adapter.clone();
     let mut framer = crate::sse::SseFramer::new();
-    let mut keepalive = tokio::time::interval(Duration::from_secs(15));
+    let mut keepalive = tokio::time::interval(Duration::from_secs(KEEPALIVE_INTERVAL_SECS));
     keepalive.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
@@ -1272,6 +1344,8 @@ async fn drive_stream_passthrough(
                 }
             }
             _ = keepalive.tick() => {
+                // Keepalive comment (FR-9.4): keeps Cloudflare's ~100s idle
+                // timeout from dropping a long silent thinking phase.
                 if tx.send(Ok(frontends::sse_comment("keepalive"))).await.is_err() {
                     record_cancel(&state, &meta, started);
                     status = "client_disconnect";
@@ -1523,13 +1597,20 @@ async fn finalize_log(
             if route.cache_affinity != 0 && status == "success" {
                 state.sticky_remember(
                     session,
-                    format!("{}|{}|{}", route_id, attempt.target.account.id, attempt.target.model.id),
+                    format!(
+                        "{}|{}|{}",
+                        route_id, attempt.target.account.id, attempt.target.model.id
+                    ),
                 );
             }
         }
     }
 
-    meta.commit_state = if committed { "post_commit" } else { "pre_commit" };
+    meta.commit_state = if committed {
+        "post_commit"
+    } else {
+        "pre_commit"
+    };
     trace.finish(match status {
         "success" => "success",
         "client_disconnect" => "cancelled",
@@ -1628,9 +1709,10 @@ pub async fn dry_run(
     descriptor: &DryRunRequest,
 ) -> Result<serde_json::Value, ProxyError> {
     let snap = state.registry.snapshot();
-    let resolved = crate::registry::Registry::resolve_in(&snap, requested_model).ok_or_else(|| {
-        ProxyError::not_found(format!("model '{requested_model}' is not configured"))
-    })?;
+    let resolved =
+        crate::registry::Registry::resolve_in(&snap, requested_model).ok_or_else(|| {
+            ProxyError::not_found(format!("model '{requested_model}' is not configured"))
+        })?;
 
     let frontend = descriptor.frontend.as_deref().unwrap_or("openai");
     let needs = crate::types::CapabilityNeeds {

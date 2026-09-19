@@ -283,7 +283,9 @@ impl InternalRequest {
                 chars += match p {
                     Part::Text(t) => t.len() as u64,
                     Part::Thinking { text, .. } => text.len() as u64,
-                    Part::ToolCall { name, arguments, .. } => (name.len() + arguments.len()) as u64,
+                    Part::ToolCall {
+                        name, arguments, ..
+                    } => (name.len() + arguments.len()) as u64,
                     Part::ToolResult { content, .. } => content.len() as u64,
                     Part::Image(_) => 1000, // rough fixed cost for images
                 };

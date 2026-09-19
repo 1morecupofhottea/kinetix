@@ -184,7 +184,11 @@ impl Adapter for AnthropicAdapter {
 
         let params = ctx.model.params();
         if let Some(t) = req.params.temperature {
-            if params.get("temperature").map(|s| s.supported).unwrap_or(true) {
+            if params
+                .get("temperature")
+                .map(|s| s.supported)
+                .unwrap_or(true)
+            {
                 body.insert("temperature".to_string(), json!(t));
             }
         }
@@ -261,12 +265,18 @@ impl Adapter for AnthropicAdapter {
             400 | 404 | 422 => FailureKind::BadRequest,
             401 | 403 => FailureKind::AuthError,
             429 => {
-                if etype.contains("rate_limit") {
-                    FailureKind::RateLimit
+                // Anthropic uses `rate_limit_error` for throttling; a quota /
+                // credit exhaustion surfaces in the message. Distinguish them so
+                // a quota problem benches the account until reset while a plain
+                // rate limit only cools it down briefly (FR-12.7).
+                let lower = message.to_ascii_lowercase();
+                if lower.contains("quota") || lower.contains("credit") {
+                    FailureKind::QuotaExhausted
                 } else {
                     FailureKind::RateLimit
                 }
             }
+            529 => FailureKind::ServerError,
             s if s >= 500 => FailureKind::ServerError,
             _ => FailureKind::ServerError,
         };
@@ -355,7 +365,9 @@ impl Adapter for AnthropicAdapter {
                     events.push(StreamEvent::Usage(TokenUsage {
                         input: usage.get("input_tokens").and_then(|v| v.as_u64()),
                         output: usage.get("output_tokens").and_then(|v| v.as_u64()),
-                        cached: usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()),
+                        cached: usage
+                            .get("cache_read_input_tokens")
+                            .and_then(|v| v.as_u64()),
                         thinking: None,
                     }));
                 }
@@ -373,7 +385,9 @@ impl Adapter for AnthropicAdapter {
                     events.push(StreamEvent::Usage(TokenUsage {
                         input: usage.get("input_tokens").and_then(|v| v.as_u64()),
                         output: usage.get("output_tokens").and_then(|v| v.as_u64()),
-                        cached: usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()),
+                        cached: usage
+                            .get("cache_read_input_tokens")
+                            .and_then(|v| v.as_u64()),
                         thinking: None,
                     }));
                 }
@@ -398,7 +412,10 @@ impl Adapter for AnthropicAdapter {
                         if let Some(t) = b.get("thinking").and_then(|x| x.as_str()) {
                             events.push(StreamEvent::ThinkingDelta {
                                 text: t.to_string(),
-                                signature: b.get("signature").and_then(|s| s.as_str()).map(String::from),
+                                signature: b
+                                    .get("signature")
+                                    .and_then(|s| s.as_str())
+                                    .map(String::from),
                             });
                         }
                     }
@@ -430,7 +447,9 @@ impl Adapter for AnthropicAdapter {
             events.push(StreamEvent::Usage(TokenUsage {
                 input: usage.get("input_tokens").and_then(|v| v.as_u64()),
                 output: usage.get("output_tokens").and_then(|v| v.as_u64()),
-                cached: usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()),
+                cached: usage
+                    .get("cache_read_input_tokens")
+                    .and_then(|v| v.as_u64()),
                 thinking: None,
             }));
         }

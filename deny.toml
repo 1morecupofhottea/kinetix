@@ -1,0 +1,50 @@
+# cargo-deny configuration (NFR-3.7).
+#
+# Kinetix keeps a small dependency surface. This file pins the license allowlist
+# and bans duplicate/unwanted crates; run `cargo deny check` (or scripts/ci.sh).
+
+[graph]
+all-features = true
+
+[advisories]
+# Fail CI on vulnerabilities. Unmaintained/yanked crates are warnings so a
+# transitive dependency cannot silently block a release without review.
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "warn"
+notice = "warn"
+
+[licenses]
+# Only permissive, OSI-approved licenses are accepted. Anything else must be
+# reviewed and explicitly added here.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "MPL-2.0",
+    "CC0-1.0",
+    "Unlicense",
+]
+confidence-threshold = 0.9
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# The product explicitly ships no bundled provider templates or a plugin runtime
+# (FR-11.4, non-goals); keep the data path free of a local response-cache crate
+# (FR-7.6).
+deny = [
+    { name = "moka", reason = "local response caching is out of committed v1 scope (FR-7.6)" },
+    { name = "openssl", reason = "use rustls; avoid a system OpenSSL dependency" },
+]
+skip = []
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

@@ -20,7 +20,10 @@ pub const SESSION_COOKIE: &str = "kinetix_admin";
 /// Extract the presented virtual key from either auth style.
 pub fn extract_virtual_key(headers: &HeaderMap) -> Option<String> {
     if let Some(v) = headers.get("authorization").and_then(|h| h.to_str().ok()) {
-        if let Some(token) = v.strip_prefix("Bearer ").or_else(|| v.strip_prefix("bearer ")) {
+        if let Some(token) = v
+            .strip_prefix("Bearer ")
+            .or_else(|| v.strip_prefix("bearer "))
+        {
             return Some(token.trim().to_string());
         }
     }
@@ -90,9 +93,8 @@ impl FromRequestParts<AppState> for AdminAuth {
                 .and_then(|h| h.to_str().ok());
             match jwt {
                 Some(token) => {
-                    validate_cf_access(state, token, aud).map_err(|e| {
-                        ProxyError::new(crate::types::ErrorKind::Forbidden, e)
-                    })?;
+                    validate_cf_access(state, token, aud)
+                        .map_err(|e| ProxyError::new(crate::types::ErrorKind::Forbidden, e))?;
                 }
                 None => {
                     return Err(ProxyError::new(
@@ -117,9 +119,7 @@ impl FromRequestParts<AppState> for AdminAuth {
             Some(t) if verify_session(state, &t) => Ok(AdminAuth {
                 actor: "admin".to_string(),
             }),
-            _ => Err(ProxyError::unauthorized(
-                "admin authentication required",
-            )),
+            _ => Err(ProxyError::unauthorized("admin authentication required")),
         }
     }
 }
@@ -168,7 +168,9 @@ fn validate_cf_access(state: &AppState, token: &str, aud: &str) -> Result<(), St
         .json()
         .map_err(|e| format!("invalid Access certs: {e}"))?;
 
-    let kid = header.kid.ok_or_else(|| "Access token missing kid".to_string())?;
+    let kid = header
+        .kid
+        .ok_or_else(|| "Access token missing kid".to_string())?;
     let keys = jwks
         .get("keys")
         .and_then(|k| k.as_array())

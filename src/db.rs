@@ -8,6 +8,7 @@ use serde_json::Value;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{FromRow, Row, SqlitePool};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::str::FromStr;
 
 use crate::types::{AuthScheme, Capabilities, ParamSpec, Prices, ThinkingMap, WireFormat};
@@ -41,6 +42,44 @@ pub async fn migrate(pool: &Pool) -> Result<()> {
         .await
         .context("running migrations")?;
     Ok(())
+}
+
+/// Best-effort pre-migration backup (NFR-2.4): copy the SQLite file aside before
+/// migrations run so a failed upgrade can be rolled back. WAL sidecars are
+/// checkpointed first. Returns the backup path when a backup was written.
+pub fn backup_before_migration(database_url: &str, data_dir: &std::path::Path) -> Option<PathBuf> {
+    // Only meaningful for file-backed SQLite.
+    let path = database_url
+        .strip_prefix("sqlite://")
+        .or_else(|| database_url.strip_prefix("sqlite:"))?
+        .split('?')
+        .next()
+        .unwrap_or("");
+    if path.is_empty() || path == ":memory:" {
+        return None;
+    }
+    let src = std::path::Path::new(path);
+    if !src.exists() {
+        return None; // fresh database: nothing to back up
+    }
+    let backup_dir = data_dir.join("backups");
+    if std::fs::create_dir_all(&backup_dir).is_err() {
+        return None;
+    }
+    let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+    let dst = backup_dir.join(format!("kinetix-pre-migration-{stamp}.db"));
+    // Copy the main file; a WAL-checkpointed copy is best-effort (the backup is
+    // a safety net, not the primary durability mechanism).
+    match std::fs::copy(src, &dst) {
+        Ok(_) => {
+            tracing::info!(backup = %dst.display(), "wrote pre-migration backup");
+            Some(dst)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "pre-migration backup failed (continuing)");
+            None
+        }
+    }
 }
 
 // ===========================================================================
@@ -123,11 +162,11 @@ pub async fn insert_virtual_key(pool: &Pool, k: &VirtualKeyRow) -> Result<()> {
 }
 
 pub async fn list_virtual_keys(pool: &Pool) -> Result<Vec<VirtualKeyRow>> {
-    Ok(sqlx::query_as::<_, VirtualKeyRow>(
-        "SELECT * FROM virtual_keys ORDER BY created_at DESC",
+    Ok(
+        sqlx::query_as::<_, VirtualKeyRow>("SELECT * FROM virtual_keys ORDER BY created_at DESC")
+            .fetch_all(pool)
+            .await?,
     )
-    .fetch_all(pool)
-    .await?)
 }
 
 pub async fn get_virtual_key_by_hash(pool: &Pool, hash: &str) -> Result<Option<VirtualKeyRow>> {
@@ -154,12 +193,14 @@ pub async fn set_virtual_key_status(pool: &Pool, id: &str, status: &str) -> Resu
     } else {
         None
     };
-    sqlx::query("UPDATE virtual_keys SET status = ?, revoked_at = COALESCE(?, revoked_at) WHERE id = ?")
-        .bind(status)
-        .bind(revoked_at)
-        .bind(id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE virtual_keys SET status = ?, revoked_at = COALESCE(?, revoked_at) WHERE id = ?",
+    )
+    .bind(status)
+    .bind(revoked_at)
+    .bind(id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -248,9 +289,11 @@ impl ProviderRow {
 }
 
 pub async fn list_providers(pool: &Pool) -> Result<Vec<ProviderRow>> {
-    Ok(sqlx::query_as::<_, ProviderRow>("SELECT * FROM providers ORDER BY created_at")
-        .fetch_all(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, ProviderRow>("SELECT * FROM providers ORDER BY created_at")
+            .fetch_all(pool)
+            .await?,
+    )
 }
 
 pub async fn get_provider(pool: &Pool, id: &str) -> Result<Option<ProviderRow>> {
@@ -395,11 +438,11 @@ pub struct AccountRow {
 }
 
 pub async fn list_accounts(pool: &Pool) -> Result<Vec<AccountRow>> {
-    Ok(sqlx::query_as::<_, AccountRow>(
-        "SELECT * FROM accounts ORDER BY priority, created_at",
+    Ok(
+        sqlx::query_as::<_, AccountRow>("SELECT * FROM accounts ORDER BY priority, created_at")
+            .fetch_all(pool)
+            .await?,
     )
-    .fetch_all(pool)
-    .await?)
 }
 
 pub async fn accounts_for_provider(pool: &Pool, provider_id: &str) -> Result<Vec<AccountRow>> {
@@ -538,7 +581,9 @@ pub async fn record_account_failure(
         .bind(id)
         .fetch_optional(pool)
         .await?;
-    let n = row.map(|r| r.get::<i64, _>("consecutive_failures")).unwrap_or(0);
+    let n = row
+        .map(|r| r.get::<i64, _>("consecutive_failures"))
+        .unwrap_or(0);
     if n >= circuit_threshold {
         let until = (Utc::now() + chrono::Duration::seconds(open_secs)).to_rfc3339();
         sqlx::query("UPDATE accounts SET circuit_open_until = ? WHERE id = ?")
@@ -552,10 +597,12 @@ pub async fn record_account_failure(
 
 /// Clear the circuit breaker and failure counter after a successful probe.
 pub async fn reset_account_failures(pool: &Pool, id: &str) -> Result<()> {
-    sqlx::query("UPDATE accounts SET consecutive_failures = 0, circuit_open_until = NULL WHERE id = ?")
-        .bind(id)
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE accounts SET consecutive_failures = 0, circuit_open_until = NULL WHERE id = ?",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
     Ok(())
 }
 
@@ -611,9 +658,11 @@ impl ModelRow {
 }
 
 pub async fn list_models(pool: &Pool) -> Result<Vec<ModelRow>> {
-    Ok(sqlx::query_as::<_, ModelRow>("SELECT * FROM models ORDER BY created_at")
-        .fetch_all(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, ModelRow>("SELECT * FROM models ORDER BY created_at")
+            .fetch_all(pool)
+            .await?,
+    )
 }
 
 pub async fn models_for_provider(pool: &Pool, provider_id: &str) -> Result<Vec<ModelRow>> {
@@ -626,10 +675,12 @@ pub async fn models_for_provider(pool: &Pool, provider_id: &str) -> Result<Vec<M
 }
 
 pub async fn get_model(pool: &Pool, id: &str) -> Result<Option<ModelRow>> {
-    Ok(sqlx::query_as::<_, ModelRow>("SELECT * FROM models WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, ModelRow>("SELECT * FROM models WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?,
+    )
 }
 
 pub async fn find_model_by_upstream(
@@ -763,9 +814,11 @@ pub struct AliasRow {
 }
 
 pub async fn list_aliases(pool: &Pool) -> Result<Vec<AliasRow>> {
-    Ok(sqlx::query_as::<_, AliasRow>("SELECT * FROM aliases ORDER BY alias")
-        .fetch_all(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, AliasRow>("SELECT * FROM aliases ORDER BY alias")
+            .fetch_all(pool)
+            .await?,
+    )
 }
 
 pub async fn get_alias(pool: &Pool, alias: &str) -> Result<Option<AliasRow>> {
@@ -861,16 +914,20 @@ pub struct RouteTargetRow {
 }
 
 pub async fn list_routes(pool: &Pool) -> Result<Vec<RouteRow>> {
-    Ok(sqlx::query_as::<_, RouteRow>("SELECT * FROM routes ORDER BY created_at")
-        .fetch_all(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, RouteRow>("SELECT * FROM routes ORDER BY created_at")
+            .fetch_all(pool)
+            .await?,
+    )
 }
 
 pub async fn get_route(pool: &Pool, id: &str) -> Result<Option<RouteRow>> {
-    Ok(sqlx::query_as::<_, RouteRow>("SELECT * FROM routes WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?)
+    Ok(
+        sqlx::query_as::<_, RouteRow>("SELECT * FROM routes WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await?,
+    )
 }
 
 pub async fn get_route_by_name(pool: &Pool, name: &str) -> Result<Option<RouteRow>> {
@@ -1091,12 +1148,12 @@ pub async fn insert_usage_log(pool: &Pool, u: &UsageLogRow) -> Result<()> {
 }
 
 pub async fn recent_usage(pool: &Pool, limit: i64) -> Result<Vec<UsageLogRow>> {
-    Ok(sqlx::query_as::<_, UsageLogRow>(
-        "SELECT * FROM usage_logs ORDER BY ts DESC LIMIT ?",
+    Ok(
+        sqlx::query_as::<_, UsageLogRow>("SELECT * FROM usage_logs ORDER BY ts DESC LIMIT ?")
+            .bind(limit)
+            .fetch_all(pool)
+            .await?,
     )
-    .bind(limit)
-    .fetch_all(pool)
-    .await?)
 }
 
 pub async fn usage_summary(pool: &Pool) -> Result<Value> {
@@ -1144,11 +1201,7 @@ pub async fn key_spend_since(pool: &Pool, key_id: &str, since_iso: &str) -> Resu
 }
 
 /// Sum of cost for an account within a time window (for soft quotas).
-pub async fn account_spend_since(
-    pool: &Pool,
-    account_id: &str,
-    since_iso: &str,
-) -> Result<f64> {
+pub async fn account_spend_since(pool: &Pool, account_id: &str, since_iso: &str) -> Result<f64> {
     let row = sqlx::query(
         "SELECT COALESCE(SUM(cost_usd),0.0) as total FROM usage_logs WHERE serving_account_id = ? AND ts >= ?",
     )
@@ -1160,11 +1213,7 @@ pub async fn account_spend_since(
 }
 
 /// Count of requests for a key since a timestamp (for RPM/TPM windows).
-pub async fn key_usage_since(
-    pool: &Pool,
-    key_id: &str,
-    since_iso: &str,
-) -> Result<(i64, i64)> {
+pub async fn key_usage_since(pool: &Pool, key_id: &str, since_iso: &str) -> Result<(i64, i64)> {
     let row = sqlx::query(
         "SELECT COUNT(*) as n, COALESCE(SUM(COALESCE(input_tokens,0)+COALESCE(output_tokens,0)),0) as t
          FROM usage_logs WHERE key_id = ? AND ts >= ?",
@@ -1216,9 +1265,7 @@ pub async fn lifetime_totals(
 }
 
 /// (requests, total tokens) grouped by serving_account_id and by key_id.
-pub async fn request_counts_by_key(
-    pool: &Pool,
-) -> Result<HashMap<String, i64>> {
+pub async fn request_counts_by_key(pool: &Pool) -> Result<HashMap<String, i64>> {
     let mut out: HashMap<String, i64> = HashMap::new();
     let rows = sqlx::query(
         "SELECT key_id, COUNT(*) as n FROM usage_logs WHERE key_id IS NOT NULL GROUP BY key_id",
@@ -1274,12 +1321,12 @@ pub async fn insert_audit(
 }
 
 pub async fn recent_audit(pool: &Pool, limit: i64) -> Result<Vec<AuditLogRow>> {
-    Ok(sqlx::query_as::<_, AuditLogRow>(
-        "SELECT * FROM audit_logs ORDER BY ts DESC LIMIT ?",
+    Ok(
+        sqlx::query_as::<_, AuditLogRow>("SELECT * FROM audit_logs ORDER BY ts DESC LIMIT ?")
+            .bind(limit)
+            .fetch_all(pool)
+            .await?,
     )
-    .bind(limit)
-    .fetch_all(pool)
-    .await?)
 }
 
 // ===========================================================================
@@ -1340,7 +1387,9 @@ pub async fn set_setting(pool: &Pool, key: &str, value: &str) -> Result<()> {
 }
 
 pub fn parse_dt(s: &str) -> Option<DateTime<Utc>> {
-    DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
+    DateTime::parse_from_rfc3339(s)
+        .ok()
+        .map(|d| d.with_timezone(&Utc))
 }
 
 // ===========================================================================

@@ -9,7 +9,7 @@ use axum::Json;
 use serde_json::Value;
 
 use crate::app::AppState;
-use crate::auth::{extract_virtual_key, authenticate_virtual_key};
+use crate::auth::{authenticate_virtual_key, extract_virtual_key};
 use crate::frontends::{self, FrontendFormat};
 use crate::limits;
 use crate::pipeline;
@@ -76,7 +76,17 @@ async fn handle(
 
     // 4. Run the pipeline.
     let session = extract_session(&headers);
-    match pipeline::run(&state, format, Some(key), req, request_id.clone(), true, session).await {
+    match pipeline::run(
+        &state,
+        format,
+        Some(key),
+        req,
+        request_id.clone(),
+        true,
+        session,
+    )
+    .await
+    {
         Ok(resp) => resp,
         Err(e) => error_response(format, &request_id, e),
     }
@@ -100,11 +110,7 @@ pub async fn chat_completions(
     handle(state, FrontendFormat::OpenAi, headers, json, body).await
 }
 
-pub async fn messages(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    body: String,
-) -> Response {
+pub async fn messages(State(state): State<AppState>, headers: HeaderMap, body: String) -> Response {
     let json: Value = match serde_json::from_str(&body) {
         Ok(v) => v,
         Err(e) => {
@@ -155,7 +161,11 @@ pub async fn list_models(State(state): State<AppState>, headers: HeaderMap) -> R
 pub async fn healthz(State(state): State<AppState>) -> Response {
     // Lightweight process + database check (Monitoring section).
     let db_ok = sqlx::query("SELECT 1").fetch_one(&state.pool).await.is_ok();
-    let status = if db_ok { StatusCode::OK } else { StatusCode::SERVICE_UNAVAILABLE };
+    let status = if db_ok {
+        StatusCode::OK
+    } else {
+        StatusCode::SERVICE_UNAVAILABLE
+    };
     let body = serde_json::json!({
         "status": if db_ok { "ok" } else { "degraded" },
         "uptime_secs": state.uptime_secs(),
@@ -171,7 +181,8 @@ pub async fn healthz(State(state): State<AppState>) -> Response {
 
 /// Build a format-correct error response with the standard Kinetix headers.
 pub fn error_response(format: FrontendFormat, request_id: &str, err: ProxyError) -> Response {
-    let status = StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+    let status =
+        StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let body = frontends::models::error_body(format, &err);
 
     let mut builder = Response::builder()

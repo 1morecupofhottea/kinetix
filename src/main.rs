@@ -49,8 +49,9 @@ async fn main() -> Result<()> {
 
     tracing::info!(version = env!("CARGO_PKG_VERSION"), "starting Kinetix");
 
-    // Database + migrations.
+    // Database + migrations (with a pre-migration backup, NFR-2.4).
     let pool = db::connect(&config.database_url).await?;
+    db::backup_before_migration(&config.database_url, &config.data_dir);
     db::migrate(&pool).await?;
 
     let crypto = Arc::new(Crypto::new(&config.master_key));
@@ -121,8 +122,12 @@ async fn main() -> Result<()> {
         .with_context(|| format!("binding {}", config.bind))?;
 
     tracing::info!(addr = %config.bind, "Kinetix is listening");
+    // Drain in-flight requests on shutdown, bounded by a configurable window
+    // (NFR-2.3, default 30s). axum stops accepting new connections and waits
+    // for existing responses to finish; the drain is capped so a stuck stream
+    // cannot block termination forever.
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown_signal(config.shutdown_grace_secs))
         .await
         .context("server error")?;
 
@@ -136,9 +141,13 @@ fn init_tracing(json: bool) {
 
     let registry = tracing_subscriber::registry().with(filter);
     if json {
-        registry.with(tracing_subscriber::fmt::layer().json()).init();
+        registry
+            .with(tracing_subscriber::fmt::layer().json())
+            .init();
     } else {
-        registry.with(tracing_subscriber::fmt::layer().compact()).init();
+        registry
+            .with(tracing_subscriber::fmt::layer().compact())
+            .init();
     }
 }
 
@@ -185,7 +194,7 @@ fn spawn_background_tasks(state: AppState) {
     // `effective_status` back to healthy automatically once the window passes.
 }
 
-async fn shutdown_signal() {
+async fn shutdown_signal(grace_secs: u64) {
     let ctrl_c = async {
         tokio::signal::ctrl_c()
             .await
@@ -207,5 +216,8 @@ async fn shutdown_signal() {
         _ = ctrl_c => {},
         _ = terminate => {},
     }
-    tracing::info!("shutdown signal received; draining in-flight requests");
+    tracing::info!(
+        grace_secs,
+        "shutdown signal received; draining in-flight requests (bounded)"
+    );
 }

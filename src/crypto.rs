@@ -88,8 +88,18 @@ pub fn mask_secret(secret: &str) -> String {
 pub fn redact(text: &str) -> String {
     // Replace known API key prefixes and long token-like substrings.
     let mut out = String::with_capacity(text.len());
-    for token in text.split_inclusive(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '=') {
-        let trimmed = token.trim_matches(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',' || c == '{' || c == '}' || c == '=');
+    for token in
+        text.split_inclusive(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '=')
+    {
+        let trimmed = token.trim_matches(|c: char| {
+            c.is_whitespace()
+                || c == '"'
+                || c == '\''
+                || c == ','
+                || c == '{'
+                || c == '}'
+                || c == '='
+        });
         if looks_like_secret(trimmed) {
             out.push_str("[REDACTED]");
             // preserve trailing delimiter

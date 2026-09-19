@@ -3,8 +3,8 @@
 //! static key does. Built-ins only do static API keys today; plugins can add
 //! login-session strategies later without touching the pool logic.
 
-use async_trait::async_trait;
 use anyhow::Result;
+use async_trait::async_trait;
 
 use crate::crypto::Crypto;
 use crate::db::AccountRow;

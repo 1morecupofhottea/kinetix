@@ -102,14 +102,15 @@ impl GeminiAdapter {
         let params = model.params();
         let mut cfg = serde_json::Map::new();
 
-        let put_number = |key: &str, client_val: Option<f64>, cfg: &mut serde_json::Map<String, Value>| {
-            if let Some(v) = client_val {
-                let (value, keep) = apply_param_spec(params.get(key), v);
-                if keep {
-                    cfg.insert(key.to_string(), json!(value));
+        let put_number =
+            |key: &str, client_val: Option<f64>, cfg: &mut serde_json::Map<String, Value>| {
+                if let Some(v) = client_val {
+                    let (value, keep) = apply_param_spec(params.get(key), v);
+                    if keep {
+                        cfg.insert(key.to_string(), json!(value));
+                    }
                 }
-            }
-        };
+            };
 
         put_number("temperature", req.params.temperature, &mut cfg);
         put_number("topP", req.params.top_p, &mut cfg);
@@ -240,9 +241,7 @@ fn insert_rec(obj: &mut serde_json::Map<String, Value>, path: &[&str], value: Va
         obj.insert(path[0].to_string(), value);
         return;
     }
-    let entry = obj
-        .entry(path[0].to_string())
-        .or_insert_with(|| json!({}));
+    let entry = obj.entry(path[0].to_string()).or_insert_with(|| json!({}));
     if !entry.is_object() {
         *entry = json!({});
     }
@@ -439,9 +438,7 @@ impl Adapter for GeminiAdapter {
                     .and_then(|v| v.as_array())
                     .map(|a| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>())
                     .unwrap_or_default();
-                if !methods.is_empty()
-                    && !methods.iter().any(|x| x.contains("generateContent"))
-                {
+                if !methods.is_empty() && !methods.iter().any(|x| x.contains("generateContent")) {
                     continue;
                 }
                 out.push(DiscoveredModel {
@@ -528,7 +525,9 @@ fn events_from_gemini(v: &Value) -> Vec<StreamEvent> {
         events.push(StreamEvent::Usage(TokenUsage {
             input: usage.get("promptTokenCount").and_then(|v| v.as_u64()),
             output: usage.get("candidatesTokenCount").and_then(|v| v.as_u64()),
-            cached: usage.get("cachedContentTokenCount").and_then(|v| v.as_u64()),
+            cached: usage
+                .get("cachedContentTokenCount")
+                .and_then(|v| v.as_u64()),
             thinking: usage.get("thoughtsTokenCount").and_then(|v| v.as_u64()),
         }));
     }
@@ -554,7 +553,8 @@ fn classify_429(status: &str, message: &str) -> FailureKind {
         || lower.contains("billing")
         || status == "RESOURCE_EXHAUSTED" && lower.contains("free_tier");
     // Rate limits are short-lived; quota exhaustion resets on a schedule.
-    if quota_like && (lower.contains("per_day") || lower.contains("per day") || lower.contains("free_tier"))
+    if quota_like
+        && (lower.contains("per_day") || lower.contains("per day") || lower.contains("free_tier"))
     {
         FailureKind::QuotaExhausted
     } else if lower.contains("rate limit") || lower.contains("requests per minute") {
@@ -596,7 +596,10 @@ fn merge_extra(body: &mut serde_json::Map<String, Value>, extra: &Value) {
         // set-if-absent semantics by default.
         if !body.contains_key(k) {
             body.insert(k.clone(), v.clone());
-        } else if let (Some(existing), Some(new)) = (body.get_mut(k).and_then(|x| x.as_object_mut()), v.as_object()) {
+        } else if let (Some(existing), Some(new)) = (
+            body.get_mut(k).and_then(|x| x.as_object_mut()),
+            v.as_object(),
+        ) {
             for (k2, v2) in new {
                 existing.entry(k2.clone()).or_insert_with(|| v2.clone());
             }

@@ -93,9 +93,13 @@ Tech: Rust + Tokio, Axum 0.8, reqwest (rustls, HTTP/2), SQLite in WAL mode via s
 
 ## Testing
 
+- `scripts/ci.sh` runs the full gate (fmt, clippy, tests, release build,
+  `cargo deny` when installed).
 - `cargo test` runs the unit + protocol-torture/fuzz suite (SSE framing across
-  arbitrary chunk boundaries, UTF-8 splits, tool-argument fragmentation, usage
-  only in the final event, malformed/unknown frames, bounded fuzzing).
+  arbitrary chunk boundaries, UTF-8 splits, tool-argument fragmentation,
+  interleaved parallel tool calls, reasoning/text interleaving, usage only in
+  the final event, zero-token responses, large tool calls, malformed/unknown
+  frames, bounded fuzzing, and a >120s silent-thinking keepalive stream).
 - `scripts/bench.sh [concurrency-list] [requests-per-level]` runs the synthetic
   benchmark matrix (passthrough / translation / tools / large) against a
   deterministic local upstream, measuring added latency and TTFT versus NFR-1.
@@ -157,6 +161,15 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   `scripts/synthetic_upstream.py`, `scripts/bench_client.py`,
   `scripts/cancel_bench.py`) covering passthrough, translation, tools, large
   bodies, and client-disconnect cancellation against NFR-1.
+- TLS is mandatory except in an explicit, visibly-marked dev mode
+  (`KINETIX_ALLOW_INSECURE_TLS`, NFR-3.12); plain-HTTP upstreams are refused on
+  the request path, not just at config time.
+- Bounded graceful-shutdown drain (`KINETIX_SHUTDOWN_GRACE_SECS`, default 30s,
+  NFR-2.3) and a best-effort pre-migration database backup written to
+  `$KINETIX_DATA_DIR/backups` (NFR-2.4).
+- `deny.toml` + `scripts/ci.sh`: fmt/clippy/test/release gate plus dependency
+  license/advisory/ban checks (`cargo deny`, NFR-3.7) that explicitly ban a
+  local response-cache crate (FR-7.6).
 
 **Deferred** (documented, not silently dropped): local response caching (removed
 from v1, FR-7.6), budget reservation (FR-6.9), and the M4 polish items

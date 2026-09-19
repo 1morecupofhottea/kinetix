@@ -52,9 +52,7 @@ impl Encoder {
     pub fn new(format: FrontendFormat, ctx: EncoderCtx) -> Self {
         match format {
             FrontendFormat::OpenAi => Encoder::OpenAi(openai::OpenAiEncoder::new(ctx)),
-            FrontendFormat::Anthropic => {
-                Encoder::Anthropic(anthropic::AnthropicEncoder::new(ctx))
-            }
+            FrontendFormat::Anthropic => Encoder::Anthropic(anthropic::AnthropicEncoder::new(ctx)),
         }
     }
 
@@ -125,10 +123,7 @@ pub fn aggregate(
                     StreamEvent::TextDelta(t) => text.push_str(&t),
                     StreamEvent::ThinkingDelta { text: t, .. } => reasoning.push_str(&t),
                     StreamEvent::ToolCallStart {
-                        index,
-                        id,
-                        name,
-                        ..
+                        index, id, name, ..
                     } => tool_calls.push((
                         index,
                         id.unwrap_or_else(|| format!("call_{}_{}", request_id, index)),
@@ -175,7 +170,8 @@ pub fn aggregate(
                 usage_obj["prompt_tokens_details"] = serde_json::json!({ "cached_tokens": c });
             }
             if let Some(t) = usage.thinking {
-                usage_obj["completion_tokens_details"] = serde_json::json!({ "reasoning_tokens": t });
+                usage_obj["completion_tokens_details"] =
+                    serde_json::json!({ "reasoning_tokens": t });
             }
             serde_json::json!({
                 "id": format!("chatcmpl-{}", request_id.replace(['-','_'], "")),
@@ -194,7 +190,8 @@ pub fn aggregate(
             let mut blocks: Vec<Value> = Vec::new();
             let mut cur_tool: Option<(u32, String, String, String)> = None;
             let mut finish = FinishReason::Stop;
-            let push_tool = |cur: &mut Option<(u32, String, String, String)>, blocks: &mut Vec<Value>| {
+            let push_tool = |cur: &mut Option<(u32, String, String, String)>,
+                             blocks: &mut Vec<Value>| {
                 if let Some((_, id, name, args)) = cur.take() {
                     let input: Value = serde_json::from_str(&args).unwrap_or(serde_json::json!({}));
                     blocks.push(serde_json::json!({
@@ -214,7 +211,9 @@ pub fn aggregate(
                             "signature": signature.unwrap_or_default()
                         }));
                     }
-                    StreamEvent::ToolCallStart { index, id, name, .. } => {
+                    StreamEvent::ToolCallStart {
+                        index, id, name, ..
+                    } => {
                         push_tool(&mut cur_tool, &mut blocks);
                         cur_tool = Some((
                             index,

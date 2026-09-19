@@ -45,14 +45,22 @@ pub trait Adapter: Send + Sync {
     fn build_body(&self, ctx: &UpstreamContext<'_>, req: &InternalRequest) -> serde_json::Value;
 
     /// Parse an upstream non-2xx response into a classified failure.
-    fn classify_error(&self, status: u16, body: &str, headers: &reqwest::header::HeaderMap) -> UpstreamFailure;
+    fn classify_error(
+        &self,
+        status: u16,
+        body: &str,
+        headers: &reqwest::header::HeaderMap,
+    ) -> UpstreamFailure;
 
     /// Parse one SSE `data:` payload (or one JSON object) into stream events.
     /// Returning an empty vec is fine (e.g. keepalive or metadata-only chunk).
     fn parse_stream_chunk(&self, data: &str) -> Result<Vec<StreamEvent>, UpstreamFailure>;
 
     /// Parse a full non-streaming response body into events (thin fallback path).
-    fn parse_full_response(&self, body: &serde_json::Value) -> Result<Vec<StreamEvent>, UpstreamFailure>;
+    fn parse_full_response(
+        &self,
+        body: &serde_json::Value,
+    ) -> Result<Vec<StreamEvent>, UpstreamFailure>;
 
     /// The path used for model discovery.
     fn default_models_path(&self) -> &'static str {

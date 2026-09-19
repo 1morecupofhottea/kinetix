@@ -59,7 +59,10 @@ pub fn decode_request(body: Value) -> Result<InternalRequest, ProxyError> {
         temperature: obj.get("temperature").and_then(|v| v.as_f64()),
         top_p: obj.get("top_p").and_then(|v| v.as_f64()),
         top_k: obj.get("top_k").and_then(|v| v.as_f64()),
-        max_tokens: obj.get("max_tokens").and_then(|v| v.as_u64()).map(|v| v as u32),
+        max_tokens: obj
+            .get("max_tokens")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32),
         ..Default::default()
     };
     let mut params = params;
@@ -153,9 +156,8 @@ fn decode_content(content: Option<&Value>) -> Vec<Part> {
                                 out.push(Part::Image(ImageData::Base64 { mime, data }));
                             }
                             "url" => {
-                                if let Some(url) = source
-                                    .and_then(|s| s.get("url"))
-                                    .and_then(|u| u.as_str())
+                                if let Some(url) =
+                                    source.and_then(|s| s.get("url")).and_then(|u| u.as_str())
                                 {
                                     out.push(Part::Image(ImageData::Url(url.to_string())));
                                 }
@@ -198,10 +200,7 @@ fn decode_content(content: Option<&Value>) -> Vec<Part> {
                                 .join(""),
                             _ => String::new(),
                         };
-                        let is_error = b
-                            .get("is_error")
-                            .and_then(|e| e.as_bool())
-                            .unwrap_or(false);
+                        let is_error = b.get("is_error").and_then(|e| e.as_bool()).unwrap_or(false);
                         out.push(Part::ToolResult {
                             tool_call_id,
                             name: None,
@@ -434,10 +433,7 @@ impl AnthropicEncoder {
                 }
             }
             StreamEvent::ToolCallStart {
-                index,
-                id,
-                name,
-                ..
+                index, id, name, ..
             } => {
                 self.emit_start(&mut out);
                 let id = id.unwrap_or_else(|| format!("toolu_{}_{}", self.ctx.request_id, index));

@@ -203,10 +203,7 @@ impl FlightRecorder {
             }
             inner.order.push_back(request_id.to_string());
         }
-        let entry = inner
-            .by_request
-            .entry(request_id.to_string())
-            .or_default();
+        let entry = inner.by_request.entry(request_id.to_string()).or_default();
         if entry.len() >= self.max_events_per_request {
             self.dropped_events.fetch_add(1, Ordering::Relaxed);
             return;

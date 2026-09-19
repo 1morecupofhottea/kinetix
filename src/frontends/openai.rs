@@ -366,10 +366,7 @@ impl OpenAiEncoder {
                 }
             }
             StreamEvent::ToolCallStart {
-                index,
-                id,
-                name,
-                ..
+                index, id, name, ..
             } => {
                 self.ensure_role(&mut out);
                 self.tool_started.insert(index);
@@ -459,7 +456,10 @@ impl OpenAiEncoder {
                 "code": "stream_error"
             }
         });
-        vec![sse_frame(None, &frame.to_string()), Bytes::from_static(b"data: [DONE]\n\n")]
+        vec![
+            sse_frame(None, &frame.to_string()),
+            Bytes::from_static(b"data: [DONE]\n\n"),
+        ]
     }
 }
 

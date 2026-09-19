@@ -190,7 +190,11 @@ mod tests {
             let mut f = SseFramer::new();
             let mut frames = f.push(&bytes[..split]);
             frames.extend(f.push(&bytes[split..]));
-            assert_eq!(frames, vec!["data: {\"t\":\"héllo→世界\"}"], "split {split}");
+            assert_eq!(
+                frames,
+                vec!["data: {\"t\":\"héllo→世界\"}"],
+                "split {split}"
+            );
         }
     }
 
