@@ -7,14 +7,11 @@
 all-features = true
 
 [advisories]
-# Fail CI on vulnerabilities. `unmaintained` is a scope (not a level) in current
-# cargo-deny: "workspace" flags unmaintained crates only when they are direct
+# Vulnerabilities always deny in current cargo-deny. `unmaintained` is a scope
+# (not a level): "workspace" flags unmaintained crates only when they are direct
 # dependencies, so an unmaintained transitive dependency cannot silently block a
-# release without review. `yanked`/`notice` are still warn-level.
-vulnerability = "deny"
+# release without review.
 unmaintained = "workspace"
-yanked = "warn"
-notice = "warn"
 
 [licenses]
 # Only permissive, OSI-approved licenses are accepted. Anything else must be
