@@ -114,20 +114,44 @@ impl FromRequestParts<AppState> for AdminAuth {
             .and_then(|h| h.to_str().ok())
             .map(String::from);
 
-        let presented = cookie_token.or(header_token);
-        match presented {
-            Some(t) if verify_session(state, &t) => Ok(AdminAuth {
-                actor: "admin".to_string(),
-            }),
-            _ => Err(ProxyError::unauthorized("admin authentication required")),
+        // Cookie must carry the derived session token (a raw admin token in a
+        // cookie is rejected, NFR-3.14). The header may carry either the session
+        // token or the raw admin token.
+        if let Some(t) = cookie_token {
+            if is_session_cookie_token(state, &t) {
+                return Ok(AdminAuth {
+                    actor: "admin".to_string(),
+                });
+            }
         }
+        if let Some(t) = header_token {
+            if verify_session(state, &t) {
+                return Ok(AdminAuth {
+                    actor: "admin".to_string(),
+                });
+            }
+        }
+        Err(ProxyError::unauthorized("admin authentication required"))
     }
 }
 
 /// Verify a session token: it must be an HMAC of "admin" with the master key.
 pub fn verify_session(state: &AppState, token: &str) -> bool {
+    // The session cookie carries the derived session token. The header form may
+    // also present the raw admin token; both are compared in constant time.
+    // The raw token is never accepted from the cookie (NFR-3.14: credentials
+    // stay write-only and are not stored in a readable cookie).
     let expected = session_token(state);
-    crypto::constant_time_eq(token, &expected)
+    if crypto::constant_time_eq(token, &expected) {
+        return true;
+    }
+    crypto::constant_time_eq(token, &state.config.admin_token)
+}
+
+/// Whether the presented token is the derived session token (safe to place in a
+/// cookie). A raw admin token is accepted only via the header, never a cookie.
+pub fn is_session_cookie_token(state: &AppState, token: &str) -> bool {
+    crypto::constant_time_eq(token, &session_token(state))
 }
 
 /// Build the (deterministic) session token for the configured admin token.

@@ -251,7 +251,9 @@ impl Adapter for AnthropicAdapter {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        let etype = parsed
+        // Anthropic error type (kept for classification clarity; the message
+        // is what distinguishes quota from a plain rate limit).
+        let _etype = parsed
             .pointer("/error/type")
             .and_then(|v| v.as_str())
             .unwrap_or("");
