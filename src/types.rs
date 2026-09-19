@@ -94,6 +94,9 @@ impl Capabilities {
         if needs.tools && !self.tool_calling {
             return false;
         }
+        if needs.reasoning && !self.reasoning {
+            return false;
+        }
         true
     }
 }
@@ -504,3 +507,39 @@ impl std::fmt::Display for ProxyError {
     }
 }
 impl std::error::Error for ProxyError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn satisfies_enforces_reasoning_capability() {
+        // A model that does not declare reasoning must not satisfy a request
+        // that carries reasoning controls (FR-10.9/FR-12.11).
+        let caps = Capabilities {
+            text: true,
+            vision: true,
+            reasoning: false,
+            tool_calling: true,
+            audio: false,
+        };
+        let reasoning_needed = CapabilityNeeds {
+            vision: false,
+            tools: false,
+            reasoning: true,
+        };
+        assert!(!caps.satisfies(&reasoning_needed));
+        let text_only = CapabilityNeeds {
+            vision: false,
+            tools: false,
+            reasoning: false,
+        };
+        assert!(caps.satisfies(&text_only));
+        let vision_needed = CapabilityNeeds {
+            vision: true,
+            tools: false,
+            reasoning: false,
+        };
+        assert!(caps.satisfies(&vision_needed));
+    }
+}

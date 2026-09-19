@@ -251,6 +251,13 @@ impl Adapter for OpenAiAdapter {
         if let Some(p) = req.params.frequency_penalty {
             body.insert("frequency_penalty".to_string(), json!(p));
         }
+        // Provider prompt-cache hint (FR-7.1): on the OpenAI translation path
+        // the hint is a request field, so preserve it rather than dropping it.
+        // set-if-absent, so an admin model extra_request still wins.
+        if let Some(key) = req.extra.get("prompt_cache_key").and_then(|v| v.as_str()) {
+            body.entry("prompt_cache_key".to_string())
+                .or_insert_with(|| json!(key));
+        }
         if let Some(tools) = Self::build_tools(req) {
             body.insert("tools".to_string(), tools);
         }
@@ -443,4 +450,95 @@ fn openai_events(v: &Value) -> Vec<StreamEvent> {
         }
     }
     events
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db::{ModelRow, ProviderRow};
+    use crate::types::AuthScheme;
+
+    fn provider() -> ProviderRow {
+        ProviderRow {
+            id: "prov".into(),
+            name: "p".into(),
+            base_url: "https://api.example.com/v1".into(),
+            wire_format: "openai".into(),
+            auth_scheme: "bearer".into(),
+            custom_header_name: None,
+            custom_param_name: None,
+            extra_headers: "{}".into(),
+            timeout_ms: 1000,
+            capability_mode: "permissive".into(),
+            models_path: None,
+            rate_limit_rules: "{}".into(),
+            enabled: 1,
+            follow_redirects: 0,
+            credential_hosts: String::new(),
+            allow_insecure_tls: 0,
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn model() -> ModelRow {
+        ModelRow {
+            id: "m".into(),
+            provider_id: "prov".into(),
+            upstream_id: "up".into(),
+            display_name: "Up".into(),
+            enabled: 1,
+            context_window: None,
+            max_output_tokens: None,
+            capabilities: "{}".into(),
+            prices: "{}".into(),
+            parameters: "{}".into(),
+            thinking_map: "{}".into(),
+            extra_request: "{}".into(),
+            discovery: "{}".into(),
+            created_at: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn base_request() -> InternalRequest {
+        InternalRequest {
+            requested_model: "up".into(),
+            system: vec![],
+            messages: vec![],
+            tools: vec![],
+            tool_choice: None,
+            tool_choice_name: None,
+            params: Default::default(),
+            stream: true,
+            thinking: None,
+            extra: Default::default(),
+            raw_body: None,
+        }
+    }
+
+    #[test]
+    fn preserves_provider_prompt_cache_hint_on_translation_path() {
+        let p = provider();
+        let m = model();
+        let ctx = UpstreamContext {
+            provider: &p,
+            model: &m,
+            credential: "k".into(),
+        };
+        let mut req = base_request();
+        req.extra
+            .insert("prompt_cache_key".into(), serde_json::json!("conv-123"));
+        let adapter = OpenAiAdapter;
+        let body = adapter.build_body(&ctx, &req);
+        assert_eq!(
+            body.get("prompt_cache_key").and_then(|v| v.as_str()),
+            Some("conv-123"),
+            "the provider prompt-cache hint must survive translation (FR-7.1)"
+        );
+    }
+
+    #[test]
+    fn wire_format_is_openai() {
+        assert_eq!(OpenAiAdapter.wire_format(), "openai");
+        let _ = AuthScheme::Bearer;
+    }
 }
