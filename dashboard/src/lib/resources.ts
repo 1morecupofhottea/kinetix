@@ -74,6 +74,11 @@ export const Kinetix = {
   createProvider: (body: Record<string, unknown>) => api.post('/admin/api/providers', body),
   updateProvider: (id: string, body: Record<string, unknown>) => api.put(`/admin/api/providers/${id}`, body),
   deleteProvider: (id: string) => api.del(`/admin/api/providers/${id}`),
+  validateProvider: (body: Record<string, unknown>) =>
+    api.post<{ valid: boolean; problems: string[]; warnings: string[]; outbound_security: string }>(
+      '/admin/api/validate/provider',
+      body,
+    ),
   async discover(providerId: string): Promise<DiscoveredModel[]> {
     const r = await api.post<{ models: DiscoveredModel[] }>(`/admin/api/providers/${providerId}/discover`);
     return r.models;
@@ -92,9 +97,18 @@ export const Kinetix = {
   deleteModel: (id: string) => api.del(`/admin/api/models/${id}`),
 
   // --- accounts ------------------------------------------------------------
+  async validateModel(body: Record<string, unknown>) {
+    return api.post<{ valid: boolean; problems: string[]; warnings: string[] }>(
+      '/admin/api/validate/model',
+      body,
+    );
+  },
   async accounts(): Promise<Account[]> {
     const r = await api.get<{ accounts: any[] }>('/admin/api/accounts');
     return r.accounts.map(mapAccount);
+  },
+  async validateAccount(body: Record<string, unknown>) {
+    return api.post<{ valid: boolean; problems: string[] }>('/admin/api/validate/account', body);
   },
   createAccount: (body: Record<string, unknown>) => api.post('/admin/api/accounts', body),
   updateAccount: (id: string, body: Record<string, unknown>) => api.put(`/admin/api/accounts/${id}`, body),
@@ -109,6 +123,8 @@ export const Kinetix = {
   createRoute: (body: Record<string, unknown>) => api.post('/admin/api/routes', body),
   updateRoute: (id: string, body: Record<string, unknown>) => api.put(`/admin/api/routes/${id}`, body),
   deleteRoute: (id: string) => api.del(`/admin/api/routes/${id}`),
+  dryRunRoute: (model: string, descriptor: Record<string, unknown>) =>
+    api.post<any>('/admin/api/routes/dry-run', { model, ...descriptor }),
 
   // --- aliases -------------------------------------------------------------
   async aliases(): Promise<ModelAlias[]> {

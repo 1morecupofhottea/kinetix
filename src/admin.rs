@@ -767,9 +767,10 @@ pub async fn discover_models(
         .ok_or_else(|| ApiError::bad("provider has no credentials to discover with"))?;
     let credential = state
         .credentials
-        .credential(&account)
+        .resolve(&account)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::internal)?
+        .secret;
 
     let wire = provider.wire();
     let adapter = state.adapters.for_format(wire);
@@ -908,9 +909,10 @@ pub async fn test_provider(
         .ok_or_else(|| ApiError::bad("provider has no credentials to test with"))?;
     let credential = state
         .credentials
-        .credential(&account)
+        .resolve(&account)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::internal)?
+        .secret;
 
     let upstream_id = body
         .model
@@ -1698,6 +1700,85 @@ pub struct ValidateBody {
     pub base_url: String,
     #[serde(default)]
     pub check_connectivity: bool,
+}
+
+/// `POST /admin/api/validate/provider` (FR-8.6): full schema + outbound-security
+/// validation of a proposed provider, without creating it.
+pub async fn validate_provider(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Json(body): Json<ProviderBody>,
+) -> ApiResult {
+    let mut problems = crate::validate::validate_provider_schema(
+        &body.name,
+        &body.base_url,
+        &body.wire_format,
+        &body.auth_scheme,
+        body.custom_header_name.as_deref(),
+        body.custom_param_name.as_deref(),
+    );
+    let mut warnings: Vec<String> = Vec::new();
+    let mut security: Value = Value::String("not_checked".into());
+    if body.base_url.trim().is_empty() {
+        // already reported as a schema problem
+    } else {
+        match validate_outbound_url(&state, &body.base_url) {
+            Ok(()) => security = Value::String("passed".into()),
+            Err(ApiError(_, msg)) => problems.push(msg),
+        }
+    }
+    if body.wire_format == "anthropic"
+        && !body
+            .extra_headers
+            .keys()
+            .any(|k| k.eq_ignore_ascii_case("anthropic-version"))
+    {
+        warnings.push(
+            "anthropic wire format: set an 'anthropic-version' extra header (Kinetix adds no hidden defaults)"
+                .into(),
+        );
+    }
+    Ok(Json(json!({
+        "valid": problems.is_empty(),
+        "problems": problems,
+        "warnings": warnings,
+        "outbound_security": security,
+        "note": "Validate only: no provider was created and no upstream call was made (FR-8.6).",
+    })))
+}
+
+/// `POST /admin/api/validate/model` (FR-8.6): schema + metadata validation of a
+/// proposed model (unknown price/capability data reported, never assumed).
+pub async fn validate_model_edit(
+    State(_state): State<AppState>,
+    _auth: AdminAuth,
+    Json(body): Json<ModelBody>,
+) -> ApiResult {
+    let out = crate::validate::validate_model(
+        &body.upstream_id,
+        body.context_window,
+        body.max_output_tokens,
+        &body.capabilities,
+        &body.prices,
+        &body.parameters,
+    );
+    Ok(Json(out))
+}
+
+/// `POST /admin/api/validate/account` (FR-8.6): schema validation of a proposed
+/// account. The credential is not stored; only its presence is checked.
+pub async fn validate_account_edit(
+    State(_state): State<AppState>,
+    _auth: AdminAuth,
+    Json(body): Json<AccountBody>,
+) -> ApiResult {
+    let problems =
+        crate::validate::validate_account(&body.label, body.api_key.as_deref(), &body.quota_type);
+    Ok(Json(json!({
+        "valid": problems.is_empty(),
+        "problems": problems,
+        "note": "Validate only: no account was created (FR-8.6).",
+    })))
 }
 
 pub async fn validate_endpoint(

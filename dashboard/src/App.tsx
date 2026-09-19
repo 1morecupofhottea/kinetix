@@ -269,6 +269,7 @@ export default function App() {
         custom_header_name: prov.customHeaderName || null,
         custom_param_name: prov.customParamName || null,
         extra_headers: prov.extraHeaders || {},
+        models_path: prov.modelsPath || null,
         timeout_ms: prov.timeoutMs,
         capability_mode: prov.capabilityMode,
       }),

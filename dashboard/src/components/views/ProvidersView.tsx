@@ -39,6 +39,24 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   const [wireFormat, setWireFormat] = useState<'gemini' | 'openai' | 'anthropic'>('gemini');
   const [authScheme, setAuthScheme] = useState<'bearer' | 'custom_header' | 'query_param'>('query_param');
   const [customHeader, setCustomHeader] = useState('');
+  const [modelsPath, setModelsPath] = useState('/models');
+  const [extraHeaders, setExtraHeaders] = useState('');
+  const [validation, setValidation] = useState<{ valid: boolean; problems: string[]; warnings: string[] } | null>(null);
+  const [validating, setValidating] = useState(false);
+
+  /** Parse a "Header: value" per line textarea into an object. */
+  const parseHeaders = (text: string): Record<string, string> => {
+    const out: Record<string, string> = {};
+    for (const line of text.split('\n')) {
+      const idx = line.indexOf(':');
+      if (idx > 0) {
+        const k = line.slice(0, idx).trim();
+        const v = line.slice(idx + 1).trim();
+        if (k) out[k] = v;
+      }
+    }
+    return out;
+  };
 
   // New Custom Model Form State
   const [modelUpstreamId, setModelUpstreamId] = useState('');
@@ -51,6 +69,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   const [capVision, setCapVision] = useState(true);
   const [capReasoning, setCapReasoning] = useState(false);
   const [capTools, setCapTools] = useState(true);
+  const [modelValidation, setModelValidation] = useState<{ valid: boolean; problems: string[]; warnings: string[] } | null>(null);
+  const [validatingModel, setValidatingModel] = useState(false);
 
   const activeProvider = providers.find((p) => p.id === selectedProviderId) || providers[0];
   const providerModels = models.filter((m) => m.providerId === activeProvider?.id);
@@ -124,6 +144,32 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     setDiscoveryResults((prev) => prev?.filter((x) => x.id !== m.id) || null);
   };
 
+  const providerBody = () => ({
+    name: name.trim(),
+    base_url: baseUrl.trim(),
+    wire_format: wireFormat,
+    auth_scheme: authScheme,
+    custom_header_name: authScheme === 'custom_header' ? customHeader : null,
+    custom_param_name: null,
+    extra_headers: parseHeaders(extraHeaders),
+    timeout_ms: 60000,
+    capability_mode: 'permissive',
+    models_path: modelsPath.trim() || null,
+  });
+
+  const handleValidateProvider = async () => {
+    if (!name.trim() || !baseUrl.trim()) return;
+    setValidating(true);
+    try {
+      const r = await Kinetix.validateProvider(providerBody());
+      setValidation({ valid: r.valid, problems: r.problems || [], warnings: r.warnings || [] });
+    } catch (e) {
+      setValidation({ valid: false, problems: [(e as Error).message], warnings: [] });
+    } finally {
+      setValidating(false);
+    }
+  };
+
   const handleCreateProvider = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !baseUrl.trim()) return;
@@ -146,8 +192,10 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     onAddProvider(newProv);
     setSelectedProviderId(newProv.id);
     setShowAddProviderModal(false);
+    setValidation(null);
     setName('');
     setBaseUrl('');
+    setExtraHeaders('');
   };
 
   const handleCreateCustomModel = (e: React.FormEvent) => {
@@ -187,6 +235,33 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     setShowAddModelModal(false);
     setModelUpstreamId('');
     setModelDisplayName('');
+    setModelValidation(null);
+  };
+
+  const modelBody = () => ({
+    upstream_id: modelUpstreamId.trim(),
+    display_name: modelDisplayName.trim() || modelUpstreamId.trim(),
+    enabled: true,
+    context_window: Number(modelContextWindow) || 128000,
+    max_output_tokens: Number(modelMaxOutput) || 8192,
+    capabilities: { text: capText, vision: capVision, reasoning: capReasoning, tool_calling: capTools, audio: false },
+    prices: {
+      input_per_1m: Number(modelInputPrice) || null,
+      output_per_1m: Number(modelOutputPrice) || null,
+    },
+  });
+
+  const handleValidateModel = async () => {
+    if (!modelUpstreamId.trim()) return;
+    setValidatingModel(true);
+    try {
+      const r = await Kinetix.validateModel(modelBody());
+      setModelValidation({ valid: r.valid, problems: r.problems || [], warnings: r.warnings || [] });
+    } catch (e) {
+      setModelValidation({ valid: false, problems: [(e as Error).message], warnings: [] });
+    } finally {
+      setValidatingModel(false);
+    }
   };
 
   return (
@@ -653,6 +728,58 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                   </div>
                 )}
 
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                      Models Path
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="/models"
+                      value={modelsPath}
+                      onChange={(e) => setModelsPath(e.target.value)}
+                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
+                      Extra Headers
+                    </label>
+                    <textarea
+                      rows={2}
+                      placeholder={'anthropic-version: 2023-06-01'}
+                      value={extraHeaders}
+                      onChange={(e) => setExtraHeaders(e.target.value)}
+                      className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-sm font-mono sketch-shadow-sm focus:outline-none"
+                    />
+                  </div>
+                </div>
+
+                {validation && (
+                  <div
+                    className="p-3 text-sm font-mono"
+                    style={{
+                      borderRadius: DESIGN_TOKENS.radii.wobbly,
+                      background: validation.valid ? '#e8f5e9' : '#fdecea',
+                      border: `2px solid ${validation.valid ? '#2e7d32' : '#ff4d4d'}`,
+                    }}
+                  >
+                    <div className="font-bold mb-1">
+                      {validation.valid ? 'Validate: passed' : 'Validate: problems found'}
+                    </div>
+                    {validation.problems.map((p, i) => (
+                      <div key={i} style={{ color: '#c62828' }}>
+                        • {p}
+                      </div>
+                    ))}
+                    {validation.warnings.map((w, i) => (
+                      <div key={i} style={{ color: '#d97706' }}>
+                        ⚠ {w}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
                 <div className="pt-2 flex justify-end gap-3">
                   <SketchButton
                     type="button"
@@ -660,6 +787,14 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     onClick={() => setShowAddProviderModal(false)}
                   >
                     Cancel
+                  </SketchButton>
+                  <SketchButton
+                    type="button"
+                    variant="secondary"
+                    onClick={handleValidateProvider}
+                    disabled={validating || !name.trim() || !baseUrl.trim()}
+                  >
+                    {validating ? 'Validating…' : 'Validate (Dry Run)'}
                   </SketchButton>
                   <SketchButton type="submit" variant="danger" className="font-bold">
                     Save Provider
@@ -835,10 +970,38 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                   >
                     Cancel
                   </SketchButton>
+                  <SketchButton
+                    type="button"
+                    variant="secondary"
+                    onClick={handleValidateModel}
+                    disabled={validatingModel || !modelUpstreamId.trim()}
+                  >
+                    {validatingModel ? 'Validating…' : 'Validate (Dry Run)'}
+                  </SketchButton>
                   <SketchButton type="submit" variant="primary" className="font-bold">
                     Save Model Configuration
                   </SketchButton>
                 </div>
+                {modelValidation && (
+                  <div
+                    className="mt-3 p-3 text-sm font-mono"
+                    style={{
+                      borderRadius: DESIGN_TOKENS.radii.wobbly,
+                      background: modelValidation.valid ? '#e8f5e9' : '#fdecea',
+                      border: `2px solid ${modelValidation.valid ? '#2e7d32' : '#ff4d4d'}`,
+                    }}
+                  >
+                    <div className="font-bold mb-1">
+                      {modelValidation.valid ? 'Validate: passed' : 'Validate: problems found'}
+                    </div>
+                    {modelValidation.problems.map((p, i) => (
+                      <div key={i} style={{ color: '#c62828' }}>• {p}</div>
+                    ))}
+                    {modelValidation.warnings.map((w, i) => (
+                      <div key={i} style={{ color: '#d97706' }}>⚠ {w}</div>
+                    ))}
+                  </div>
+                )}
               </form>
             </WobblyCard>
           </div>

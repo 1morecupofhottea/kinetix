@@ -58,6 +58,7 @@ export function mapProvider(j: any): Provider {
     modelsCount: num(j.models_count),
     accountsCount: num(j.accounts_count),
     extraHeaders: j.extra_headers || {},
+    modelsPath: j.models_path ?? undefined,
     timeoutMs: num(j.timeout_ms, 120000),
     capabilityMode: (j.capability_mode as Provider['capabilityMode']) || 'permissive',
     lastPingMs: 0,

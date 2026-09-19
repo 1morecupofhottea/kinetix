@@ -31,6 +31,7 @@ mod sse;
 mod torture;
 mod trace;
 mod types;
+mod validate;
 
 use std::sync::Arc;
 use std::time::Duration;

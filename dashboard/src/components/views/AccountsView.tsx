@@ -3,6 +3,7 @@ import { Users, Plus, ShieldCheck, Clock, AlertTriangle, RefreshCw, KeyRound, Sp
 import { Account, Provider } from '../../types';
 import { WobblyCard, SketchButton, SketchBadge } from '../HandDrawnElements';
 import { formatCurrency, formatTokens, DESIGN_TOKENS } from '../../lib/designSystem';
+import { Kinetix } from '../../lib/resources';
 
 interface AccountsViewProps {
   accounts: Account[];
@@ -25,6 +26,27 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
   const [providerId, setProviderId] = useState(providers[0]?.id || '');
   const [apiKey, setApiKey] = useState('');
   const [softQuota, setSoftQuota] = useState(100);
+  const [accountValidation, setAccountValidation] = useState<{ valid: boolean; problems: string[] } | null>(null);
+  const [validatingAccount, setValidatingAccount] = useState(false);
+
+  const handleValidateAccount = async () => {
+    const prov = providers.find((p) => p.id === providerId) || providers[0];
+    if (!label.trim() || !apiKey.trim() || !prov) return;
+    setValidatingAccount(true);
+    try {
+      const r = await Kinetix.validateAccount({
+        provider_id: prov.id,
+        label: label.trim(),
+        api_key: apiKey.trim(),
+        quota_type: 'monthly',
+      });
+      setAccountValidation({ valid: r.valid, problems: r.problems || [] });
+    } catch (e) {
+      setAccountValidation({ valid: false, problems: [(e as Error).message] });
+    } finally {
+      setValidatingAccount(false);
+    }
+  };
 
   const handleCreateSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -333,10 +355,35 @@ export const AccountsView: React.FC<AccountsViewProps> = ({
                   >
                     Cancel
                   </SketchButton>
+                  <SketchButton
+                    type="button"
+                    variant="secondary"
+                    onClick={handleValidateAccount}
+                    disabled={validatingAccount || !label.trim() || !apiKey.trim()}
+                  >
+                    {validatingAccount ? 'Validating…' : 'Validate (Dry Run)'}
+                  </SketchButton>
                   <SketchButton type="submit" variant="danger" className="font-bold">
                     Save Key to Pool
                   </SketchButton>
                 </div>
+                {accountValidation && (
+                  <div
+                    className="mt-3 p-3 text-sm font-mono"
+                    style={{
+                      borderRadius: DESIGN_TOKENS.radii.wobbly,
+                      background: accountValidation.valid ? '#e8f5e9' : '#fdecea',
+                      border: `2px solid ${accountValidation.valid ? '#2e7d32' : '#ff4d4d'}`,
+                    }}
+                  >
+                    <div className="font-bold mb-1">
+                      {accountValidation.valid ? 'Validate: passed' : 'Validate: problems found'}
+                    </div>
+                    {accountValidation.problems.map((p, i) => (
+                      <div key={i} style={{ color: '#c62828' }}>• {p}</div>
+                    ))}
+                  </div>
+                )}
               </form>
             </WobblyCard>
           </div>

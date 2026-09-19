@@ -33,6 +33,7 @@ export interface Provider {
   modelsCount: number;
   accountsCount: number;
   extraHeaders?: Record<string, string>;
+  modelsPath?: string;
   timeoutMs: number;
   capabilityMode: 'permissive' | 'strict';
   lastPingMs: number;

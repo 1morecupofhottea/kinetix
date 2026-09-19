@@ -422,8 +422,8 @@ pub async fn run(
         }
 
         // Credential.
-        let credential = match state.credentials.credential(&target.account).await {
-            Ok(c) => c,
+        let credential = match state.credentials.resolve(&target.account).await {
+            Ok(c) => c.secret,
             Err(e) => {
                 tracing::error!(account = %target.account.id, error = %e, "credential resolution failed");
                 last_error = Some(ProxyError::internal("credential unavailable"));

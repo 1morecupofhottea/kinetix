@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { Shuffle, Plus, ArrowDown, Shield, Check, Layers, ArrowRight, Trash2, AlertTriangle } from 'lucide-react';
+import { Shuffle, Plus, ArrowDown, Shield, Check, Layers, ArrowRight, Trash2, AlertTriangle, PlayCircle } from 'lucide-react';
 import { Route, Account, ModelConfig } from '../../types';
 import { WobblyCard, SketchButton, SketchBadge } from '../HandDrawnElements';
 import { DESIGN_TOKENS } from '../../lib/designSystem';
+import { Kinetix } from '../../lib/resources';
 
 interface RoutesViewProps {
   routes: Route[];
@@ -34,8 +35,29 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
   const [onQuota, setOnQuota] = useState(true);
   const [on5xx, setOn5xx] = useState(true);
   const [sticky, setSticky] = useState(true);
+  const [dryRunResult, setDryRunResult] = useState<any | null>(null);
+  const [dryRunning, setDryRunning] = useState(false);
 
   const activeRoute = routes.find((c) => c.id === selectedRouteId) || routes[0];
+
+  const handleDryRun = async () => {
+    if (!activeRoute) return;
+    setDryRunning(true);
+    try {
+      const r = await Kinetix.dryRunRoute(activeRoute.name, {
+        frontend: 'openai',
+        has_tools: false,
+        has_images: false,
+        has_reasoning: false,
+        input_tokens: 1000,
+      });
+      setDryRunResult(r);
+    } catch (e) {
+      setDryRunResult({ error: (e as Error).message });
+    } finally {
+      setDryRunning(false);
+    }
+  };
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -192,6 +214,16 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
                     <span className="text-xs font-mono bg-[#e5e0d8] px-2 py-1 border border-[#2d2d2d] rounded">
                       Total Fallback Hops: <strong>{activeRoute.totalHops}</strong>
                     </span>
+
+                    <button
+                      onClick={handleDryRun}
+                      disabled={dryRunning}
+                      className="px-2.5 py-1 text-xs font-heading font-bold text-[#2d5da1] hover:bg-[#e3f2fd] border border-[#2d5da1]/50 hover:border-[#2d5da1] rounded flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-50"
+                      title="Compute candidate ordering and would-be selection without calling upstream (FR-8.7)"
+                    >
+                      <PlayCircle className="w-3.5 h-3.5" />
+                      <span>{dryRunning ? 'Dry Running…' : 'Dry Run'}</span>
+                    </button>
 
                     {confirmDeleteRouteId === activeRoute.id ? (
                       <div className="flex items-center gap-1.5 bg-[#ffebee] px-2.5 py-1 border border-[#ff4d4d] rounded text-xs font-heading">
@@ -448,6 +480,66 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
                   </div>
                 </div>
               </div>
+
+              {dryRunResult && (
+                <div
+                  className="mt-4 p-4 text-sm font-mono bg-white border-2 border-[#2d5da1]"
+                  style={{ borderRadius: DESIGN_TOKENS.radii.wobbly }}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="font-heading font-bold text-[#2d5da1]">
+                      Route Dry Run (FR-8.7)
+                    </span>
+                    <button
+                      onClick={() => setDryRunResult(null)}
+                      className="text-[#2d2d2d] hover:text-[#ff4d4d] cursor-pointer"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                  {dryRunResult.error ? (
+                    <div style={{ color: '#c62828' }}>{dryRunResult.error}</div>
+                  ) : (
+                    <>
+                      <div className="mb-2">
+                        Would select:{' '}
+                        <strong>
+                          {dryRunResult.would_select
+                            ? `${dryRunResult.would_select.model} @ ${dryRunResult.would_select.account}`
+                            : '(no eligible target)'}
+                        </strong>
+                      </div>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-left border-b border-[#2d2d2d]/30">
+                            <th className="py-1">Target</th>
+                            <th>Predicate</th>
+                            <th>Caps</th>
+                            <th>Account</th>
+                            <th>Eligible</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {(dryRunResult.candidates || []).map((c: any, i: number) => (
+                            <tr key={i} className="border-b border-[#2d2d2d]/10">
+                              <td className="py-1">
+                                {c.model} @ {c.account || '—'}
+                              </td>
+                              <td>{c.predicate_result ?? '—'}</td>
+                              <td>{c.capability_eligible ? 'ok' : 'no'}</td>
+                              <td>{c.account_status ?? '—'}</td>
+                              <td style={{ color: c.eligible ? '#2e7d32' : '#c62828' }}>
+                                {c.eligible ? 'yes' : 'no'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <div className="mt-2 text-[#2d2d2d]/60">{dryRunResult.note}</div>
+                    </>
+                  )}
+                </div>
+              )}
             </WobblyCard>
           </div>
         )}

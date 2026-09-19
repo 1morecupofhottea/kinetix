@@ -170,6 +170,15 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   commit/result steps with timings) and the flight-recorder diagnostics inline
   (NFR-4.3/4.4); the Routes editor exposes the opaque-state portability policy
   (FR-2.11) and cache-affinity toggle (FR-7.3).
+- Validate / Dry Run before Apply (FR-8.6/NFR-6.4): `POST
+  /admin/api/validate/{provider,model,account}` checks schema, wire-format/auth
+  companions, outbound security, and reports missing price/capability data as
+  `unknown` warnings (never assumed); the Routes editor has a **Dry Run** action
+  (`POST /admin/api/routes/dry-run`) that returns candidate ordering, predicate
+  outcomes, eligibility, and the would-be selection without touching production.
+- The credential-strategy seam (FR-11.2) represents refresh/expiry/rotation and
+  health reporting (`resolve`/`health`/`rotate`, `CredentialHealth`,
+  `ResolvedCredential`) even though v1 ships only the static-key strategy.
 - Discovery never overwrites admin edits (FR-10.5): `POST
   /admin/api/providers/:id/discover` records a per-model `discovery` observation
   and returns a `disappeared` list flagging models no longer advertised
