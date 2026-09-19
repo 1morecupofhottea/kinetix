@@ -52,4 +52,3 @@ jobs:
           target: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
           archive: kinetix-$tag-$target
           token: ${{ secrets.GITHUB_TOKEN }}
-          ref: ${{ github.event.inputs.tag || github.ref }}
