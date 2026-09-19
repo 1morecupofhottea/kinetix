@@ -38,7 +38,7 @@ This wiki is the detailed, task-oriented companion to the repo
   wire protocol and routing decisions matters more than breadth.
 - **Isn't**: a general-purpose AI platform, a multi-tenant SaaS, or a bundled
   provider-preset library. See the non-goals in
-  [`docs/kinetix-llm-proxy-requirements-r4.md`](https://github.com/LazyGreed/kinetix/blob/main/docs/kinetix-llm-proxy-requirements-r4.md).
+  [docs/DESIGN.md](https://github.com/LazyGreed/kinetix/blob/main/docs/DESIGN.md).
 
 ## Editing this wiki
 

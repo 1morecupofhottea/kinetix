@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shuffle, Plus, ArrowDown, Shield, Check, Layers, ArrowRight, Trash2, AlertTriangle, PlayCircle } from 'lucide-react';
+import { Shuffle, Plus, ArrowDown, ArrowUp, Shield, Check, Layers, ArrowRight, Trash2, AlertTriangle, PlayCircle } from 'lucide-react';
 import { Route, Account, ModelConfig } from '../../types';
 import { WobblyCard, SketchButton, SketchBadge } from '../HandDrawnElements';
 import { DESIGN_TOKENS } from '../../lib/designSystem';
@@ -42,7 +42,46 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
   const [dryRunResult, setDryRunResult] = useState<any | null>(null);
   const [dryRunning, setDryRunning] = useState(false);
 
+  // Add-target form state (per selected route)
+  const [newTargetModelId, setNewTargetModelId] = useState('');
+  const [newTargetAccountId, setNewTargetAccountId] = useState('');
+
   const activeRoute = routes.find((c) => c.id === selectedRouteId) || routes[0];
+
+  /** Renumber targets by their (already ordered) position. */
+  const renumber = (targets: Route['targets']): Route['targets'] =>
+    targets.map((t, i) => ({ ...t, priority: i + 1 }));
+
+  /** Move a target up/down in the priority order and persist. */
+  const moveTarget = (route: Route, index: number, dir: -1 | 1) => {
+    const next = index + dir;
+    if (next < 0 || next >= route.targets.length) return;
+    const targets = [...route.targets];
+    [targets[index], targets[next]] = [targets[next], targets[index]];
+    const reordered = renumber(targets);
+    onUpdateRoute({ ...route, targets: reordered, totalHops: Math.max(0, reordered.length - 1) });
+  };
+
+  /** Add a chosen model (and optional account) as a new fallback tier. */
+  const handleAddTarget = (route: Route) => {
+    const model = models.find((m) => m.id === newTargetModelId);
+    if (!model) return;
+    const account = accounts.find((a) => a.id === newTargetAccountId);
+    const target = {
+      id: `tgt-${Date.now()}`,
+      accountId: account?.id ?? '',
+      accountLabel: account?.label ?? '(auto)',
+      providerName: model.providerName,
+      modelId: model.id,
+      modelDisplayName: model.displayName,
+      priority: route.targets.length + 1,
+      weight: 1,
+    };
+    const targets = renumber([...route.targets, target]);
+    onUpdateRoute({ ...route, targets, totalHops: Math.max(0, targets.length - 1) });
+    setNewTargetModelId('');
+    setNewTargetAccountId('');
+  };
 
   const handleDryRun = async () => {
     if (!activeRoute) return;
@@ -68,17 +107,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
     e.preventDefault();
     if (!name.trim()) return;
 
-    // Pick initial 2 targets as defaults
-    const newTargets = accounts.slice(0, 2).map((acc, idx) => ({
-      id: `tgt-${Date.now()}-${idx}`,
-      accountId: acc.id,
-      accountLabel: acc.label,
-      providerName: acc.providerName,
-      modelId: models[0]?.id || 'model-1',
-      modelDisplayName: models[0]?.displayName || 'Gemini 2.5 Pro',
-      priority: idx + 1,
-    }));
-
+    // Routes start empty: the user adds their own fallback targets.
     const newRoute: Route = {
       id: `route-${Date.now()}`,
       name: name.trim().toLowerCase().replace(/\s+/g, '-'),
@@ -90,7 +119,7 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
         on5xx,
         onTimeout: true,
       },
-      targets: newTargets,
+      targets: [],
       continuityPolicy: 'strip',
       portabilityPolicy: 'strip_with_warning',
       cacheAffinity: true,
@@ -270,10 +299,19 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
                   </h4>
 
                   <div className="space-y-3">
+                    {activeRoute.targets.length === 0 && (
+                      <div className="p-6 text-center bg-[var(--erased-soft)] border-2 border-dashed border-[var(--ink)]/40 rounded">
+                        <Layers className="w-8 h-8 text-[var(--pen-blue)] mx-auto mb-2 opacity-60" />
+                        <p className="text-sm font-body text-[var(--ink)]/80">
+                          No targets yet. Add a model below to define this route's fallback order.
+                        </p>
+                      </div>
+                    )}
+
                     {activeRoute.targets.map((tgt, idx) => (
                       <React.Fragment key={tgt.id}>
                         <div
-                          className="p-4 bg-[var(--surface)] border-2 border-[var(--ink)] sketch-shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3 relative"
+                          className="p-4 bg-[var(--surface)] border-2 border-[var(--ink)] sketch-shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3"
                           style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
                         >
                           <div className="flex items-center gap-3">
@@ -300,42 +338,59 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
                               {idx === 0 ? 'Primary Default' : `Fallback Tier ${idx}`}
                             </span>
 
-                            {activeRoute.targets.length > 1 && (
-                              confirmRemoveTargetId === tgt.id ? (
-                                <div className="flex items-center gap-1 bg-[var(--tint-red)] px-2 py-0.5 border border-[var(--marker-red)] rounded">
-                                  <span className="text-[var(--danger-text)] font-bold">Remove tier?</span>
-                                  <button
-                                    onClick={() => {
-                                      const updatedTargets = activeRoute.targets
-                                        .filter((t) => t.id !== tgt.id)
-                                        .map((t, i) => ({ ...t, priority: i + 1 }));
-                                      onUpdateRoute({
-                                        ...activeRoute,
-                                        targets: updatedTargets,
-                                        totalHops: Math.max(0, updatedTargets.length - 1),
-                                      });
-                                      setConfirmRemoveTargetId(null);
-                                    }}
-                                    className="px-1.5 py-0.5 bg-[var(--marker-red)] text-[var(--surface)] rounded font-bold hover:brightness-90 cursor-pointer"
-                                  >
-                                    Yes
-                                  </button>
-                                  <button
-                                    onClick={() => setConfirmRemoveTargetId(null)}
-                                    className="px-1.5 py-0.5 bg-[var(--surface)] border border-[var(--ink)] rounded cursor-pointer"
-                                  >
-                                    No
-                                  </button>
-                                </div>
-                              ) : (
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => moveTarget(activeRoute, idx, -1)}
+                                disabled={idx === 0}
+                                className="p-1 text-[var(--pen-blue)] hover:bg-[var(--tint-blue)] border border-transparent hover:border-[var(--pen-blue)]/40 rounded cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                title="Move up in fallback order"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => moveTarget(activeRoute, idx, 1)}
+                                disabled={idx === activeRoute.targets.length - 1}
+                                className="p-1 text-[var(--pen-blue)] hover:bg-[var(--tint-blue)] border border-transparent hover:border-[var(--pen-blue)]/40 rounded cursor-pointer transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                                title="Move down in fallback order"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {confirmRemoveTargetId === tgt.id ? (
+                              <div className="flex items-center gap-1 bg-[var(--tint-red)] px-2 py-0.5 border border-[var(--marker-red)] rounded">
+                                <span className="text-[var(--danger-text)] font-bold">Remove tier?</span>
                                 <button
-                                  onClick={() => setConfirmRemoveTargetId(tgt.id)}
-                                  className="p-1 text-[var(--marker-red)] hover:bg-[var(--tint-red)] border border-transparent hover:border-[var(--marker-red)]/40 rounded cursor-pointer transition-colors"
-                                  title="Remove this target tier from route pool"
+                                  onClick={() => {
+                                    const updatedTargets = renumber(
+                                      activeRoute.targets.filter((t) => t.id !== tgt.id),
+                                    );
+                                    onUpdateRoute({
+                                      ...activeRoute,
+                                      targets: updatedTargets,
+                                      totalHops: Math.max(0, updatedTargets.length - 1),
+                                    });
+                                    setConfirmRemoveTargetId(null);
+                                  }}
+                                  className="px-1.5 py-0.5 bg-[var(--marker-red)] text-[var(--surface)] rounded font-bold hover:brightness-90 cursor-pointer"
                                 >
-                                  <Trash2 className="w-3.5 h-3.5" />
+                                  Yes
                                 </button>
-                              )
+                                <button
+                                  onClick={() => setConfirmRemoveTargetId(null)}
+                                  className="px-1.5 py-0.5 bg-[var(--surface)] border border-[var(--ink)] rounded cursor-pointer"
+                                >
+                                  No
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setConfirmRemoveTargetId(tgt.id)}
+                                className="p-1 text-[var(--marker-red)] hover:bg-[var(--tint-red)] border border-transparent hover:border-[var(--marker-red)]/40 rounded cursor-pointer transition-colors"
+                                title="Remove this target tier from route pool"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                             )}
                           </div>
                         </div>
@@ -350,6 +405,54 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
                         )}
                       </React.Fragment>
                     ))}
+                  </div>
+
+                  {/* Add a fallback target */}
+                  <div className="p-3 bg-[var(--postit)] border border-[var(--ink)] rounded">
+                    <h5 className="text-sm font-heading font-bold text-[var(--ink)] mb-2 flex items-center gap-1">
+                      <Plus className="w-4 h-4" />
+                      Add Fallback Target
+                    </h5>
+                    <div className="flex flex-col md:flex-row gap-2">
+                      <select
+                        value={newTargetModelId}
+                        onChange={(e) => setNewTargetModelId(e.target.value)}
+                        className="flex-1 bg-[var(--surface)] border-2 border-[var(--ink)] px-2 py-1.5 text-sm font-mono rounded focus:outline-none"
+                      >
+                        <option value="">Select a model…</option>
+                        {models.map((m) => (
+                          <option key={m.id} value={m.id}>
+                            {m.displayName} — {m.providerName}
+                          </option>
+                        ))}
+                      </select>
+                      <select
+                        value={newTargetAccountId}
+                        onChange={(e) => setNewTargetAccountId(e.target.value)}
+                        className="flex-1 bg-[var(--surface)] border-2 border-[var(--ink)] px-2 py-1.5 text-sm font-mono rounded focus:outline-none"
+                      >
+                        <option value="">Account: auto (lowest priority)</option>
+                        {accounts.map((a) => (
+                          <option key={a.id} value={a.id}>
+                            {a.label} — {a.providerName}
+                          </option>
+                        ))}
+                      </select>
+                      <SketchButton
+                        type="button"
+                        variant="primary"
+                        onClick={() => handleAddTarget(activeRoute)}
+                        disabled={!newTargetModelId}
+                        className="gap-1 font-heading font-bold whitespace-nowrap"
+                      >
+                        <Plus className="w-4 h-4" />
+                        Add
+                      </SketchButton>
+                    </div>
+                    <p className="text-xs font-body text-[var(--ink)]/60 mt-2">
+                      Targets are tried in order; the first is primary, the rest are fallbacks.
+                      Choose a specific account to pin the tier, or leave it on auto.
+                    </p>
                   </div>
                 </div>
 
@@ -648,6 +751,12 @@ export const RoutesView: React.FC<RoutesViewProps> = ({
                     />
                     <span>Enable sticky session routing (Prompt cache preservation)</span>
                   </label>
+                  <p className="text-xs font-body text-[var(--ink)]/60 pl-6">
+                    Keeps a conversation on the same account/model across turns so the
+                    upstream provider's prompt cache stays warm. A client must send a
+                    session header (X-Kinetix-Session / X-Session-Id) for this to apply;
+                    if the sticky target becomes unhealthy, Kinetix falls back as usual.
+                  </p>
                 </div>
 
                 <div className="pt-2 flex justify-end gap-3">

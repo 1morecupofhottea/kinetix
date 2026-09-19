@@ -68,10 +68,10 @@ not a Kinetix bug. Raise `max_tokens` or lower the thinking level.
   (FR-8.1). Kinetix ships the vendored **React 19 + Vite** dashboard, embedded
   the same way (rust-embed). This is a deliberate, documented deviation.
 - **Admin API path:** the admin API is mounted under `/admin/api/*` so it does
-  not collide with the dashboard's `/admin/<tab>` page routes; r4 lists the
-  paths without the `/api` segment.
-- **Virtual-key prefix:** `sk-kinetix-…` (r4's earlier draft said `sk-prism-`;
-  the product was renamed to Kinetix).
+  not collide with the dashboard's `/admin/<tab>` page routes; the design
+  document lists the paths without the `/api` segment.
+- **Virtual-key prefix:** `sk-kinetix-…` (an early draft said `sk-prism-`; the
+  product was renamed to Kinetix).
 
 ## Provider wire-format notes
 

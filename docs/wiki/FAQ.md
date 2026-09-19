@@ -6,9 +6,9 @@ in front of admin-configured upstream LLM APIs, adding virtual keys, account
 pools, executable Routes with fallback, cost tracking, and an embedded dashboard.
 
 **Is it "Prism"?**
-Prism was the earlier working name; the product is **Kinetix** (the requirements
-doc `docs/prism-llm-proxy-requirements.md` is the superseded draft — see
-`docs/kinetix-llm-proxy-requirements-r4.md`).
+Prism was the earlier working name; the product is **Kinetix**. The two original
+requirement drafts have been merged into a single design document,
+`docs/DESIGN.md`.
 
 **Do I need `.env` or a config file?**
 No. A normal install is configured with the CLI and stored under XDG directories.
@@ -65,4 +65,4 @@ No. It's a single-machine, small-team gateway. Multi-tenant SaaS and HA are
 explicit non-goals.
 
 **What's the license?**
-Apache-2.0.
+MIT.
