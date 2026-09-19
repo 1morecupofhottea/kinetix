@@ -104,10 +104,19 @@ impl GeminiAdapter {
 
         let put_number =
             |key: &str, client_val: Option<f64>, cfg: &mut serde_json::Map<String, Value>| {
+                let spec = params.get(key);
                 if let Some(v) = client_val {
-                    let (value, keep) = apply_param_spec(params.get(key), v);
+                    let (value, keep) = apply_param_spec(spec, v);
                     if keep {
                         cfg.insert(key.to_string(), json!(value));
+                    }
+                } else if let Some(spec) = spec {
+                    // FR-10.6: a configured default applies when the client
+                    // omits the field (only for a supported parameter).
+                    if spec.supported {
+                        if let Some(d) = spec.default {
+                            cfg.insert(key.to_string(), json!(d));
+                        }
                     }
                 }
             };

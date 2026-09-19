@@ -211,8 +211,8 @@ impl Adapter for OpenAiAdapter {
 
         let params = ctx.model.params();
         let mut insert = |key: &str, v: Option<f64>| {
+            let spec = params.get(key);
             if let Some(v) = v {
-                let spec = params.get(key);
                 if let Some(spec) = spec {
                     if !spec.supported {
                         return;
@@ -228,6 +228,14 @@ impl Adapter for OpenAiAdapter {
                     return;
                 }
                 body.insert(key.to_string(), json!(v));
+            } else if let Some(spec) = spec {
+                // FR-10.6: a configured default applies when the client omits
+                // the field (only for a supported parameter).
+                if spec.supported {
+                    if let Some(d) = spec.default {
+                        body.insert(key.to_string(), json!(d));
+                    }
+                }
             }
         };
         insert("temperature", req.params.temperature);
