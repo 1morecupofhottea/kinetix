@@ -116,6 +116,7 @@ pub fn decode_request(body: Value) -> Result<InternalRequest, ProxyError> {
         stream,
         thinking,
         extra,
+        raw_body: None,
     })
 }
 

@@ -193,6 +193,10 @@ export function mapRequest(j: any): RequestLog {
     cacheStatus: (j.cache_status as RequestLog['cacheStatus']) || 'bypass',
     servingAccount: str(j.serving_account),
     servingProvider: str(j.serving_provider),
+    opaqueRouteId: str(j.opaque_route_id),
+    usageConfidence: (j.usage_confidence as RequestLog['usageConfidence']) || 'unknown',
+    commitState: str(j.commit_state),
+    retryCount: num(j.retry_count),
     promptPreview: str(j.error_message) || '',
     responsePreview: '',
   };

@@ -20,12 +20,30 @@ fn new_request_id() -> String {
     format!("req_{}", uuid::Uuid::new_v4().simple())
 }
 
+/// Session identity for prompt-cache affinity (FR-7.3, FR-7.5).
+///
+/// We only use an **explicit** session header; Kinetix never guesses a
+/// conversation identity when evidence is insufficient. An absent header means
+/// "no session", and sticky routing is simply not applied.
+fn extract_session(headers: &HeaderMap) -> Option<String> {
+    for name in ["x-kinetix-session", "x-session-id", "x-conversation-id"] {
+        if let Some(v) = headers.get(name).and_then(|v| v.to_str().ok()) {
+            let v = v.trim();
+            if !v.is_empty() && v.len() <= 200 {
+                return Some(v.to_string());
+            }
+        }
+    }
+    None
+}
+
 /// Shared entry for both inbound frontends.
 async fn handle(
     state: AppState,
     format: FrontendFormat,
     headers: HeaderMap,
     body: Value,
+    raw_body: String,
 ) -> Response {
     let request_id = new_request_id();
 
@@ -44,10 +62,12 @@ async fn handle(
     };
 
     // 2. Decode the request into the internal model.
-    let req = match frontends::decode(format, body) {
+    let mut req = match frontends::decode(format, body) {
         Ok(r) => r,
         Err(e) => return error_response(format, &request_id, e),
     };
+    // Keep the raw body for same-format passthrough (FR-2.7, FR-2.10).
+    req.raw_body = Some(raw_body);
 
     // 3. Enforce per-key limits and budgets.
     if let Err(e) = limits::enforce(&state.pool, &key, &req.requested_model).await {
@@ -55,7 +75,8 @@ async fn handle(
     }
 
     // 4. Run the pipeline.
-    match pipeline::run(&state, format, Some(key), req, request_id.clone(), true).await {
+    let session = extract_session(&headers);
+    match pipeline::run(&state, format, Some(key), req, request_id.clone(), true, session).await {
         Ok(resp) => resp,
         Err(e) => error_response(format, &request_id, e),
     }
@@ -76,7 +97,7 @@ pub async fn chat_completions(
             )
         }
     };
-    handle(state, FrontendFormat::OpenAi, headers, json).await
+    handle(state, FrontendFormat::OpenAi, headers, json, body).await
 }
 
 pub async fn messages(
@@ -94,7 +115,7 @@ pub async fn messages(
             )
         }
     };
-    handle(state, FrontendFormat::Anthropic, headers, json).await
+    handle(state, FrontendFormat::Anthropic, headers, json, body).await
 }
 
 /// `GET /v1/models`. The response shape is chosen by the client's auth style so
@@ -139,6 +160,11 @@ pub async fn healthz(State(state): State<AppState>) -> Response {
         "status": if db_ok { "ok" } else { "degraded" },
         "uptime_secs": state.uptime_secs(),
         "database": if db_ok { "ok" } else { "unavailable" },
+        // Distinguish data-plane serviceability from degraded control-plane
+        // state (Monitoring section). The data plane serves from an in-memory
+        // snapshot, so it stays up even if the database is briefly unavailable.
+        "data_plane": "serving",
+        "control_plane": if db_ok { "ok" } else { "degraded" },
     });
     (status, Json(body)).into_response()
 }

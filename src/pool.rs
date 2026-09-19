@@ -14,6 +14,7 @@ pub enum AccountStatus {
     Cooldown,
     Exhausted,
     Disabled,
+    CircuitOpen,
 }
 
 impl AccountStatus {
@@ -22,6 +23,7 @@ impl AccountStatus {
             "cooldown" => AccountStatus::Cooldown,
             "exhausted" => AccountStatus::Exhausted,
             "disabled" => AccountStatus::Disabled,
+            "circuit_open" => AccountStatus::CircuitOpen,
             _ => AccountStatus::Healthy,
         }
     }
@@ -31,13 +33,21 @@ impl AccountStatus {
             AccountStatus::Cooldown => "cooldown",
             AccountStatus::Exhausted => "exhausted",
             AccountStatus::Disabled => "disabled",
+            AccountStatus::CircuitOpen => "circuit_open",
         }
     }
 }
 
-/// Effective status accounting for elapsed cooldown/quota-reset windows.
+/// Effective status accounting for elapsed cooldown/quota-reset/circuit windows.
 pub fn effective_status(account: &AccountRow) -> AccountStatus {
     let now = Utc::now();
+    // An open circuit takes precedence. Once its window has elapsed the circuit
+    // is half-open: still reported as `CircuitOpen`, but `should_probe` now
+    // permits a single throttled recovery attempt (FR-4.7). A successful probe
+    // clears the breaker; a failed one re-arms it.
+    if account.circuit_open_until.is_some() {
+        return AccountStatus::CircuitOpen;
+    }
     match AccountStatus::parse(&account.status) {
         AccountStatus::Cooldown => {
             if let Some(until) = account.cooldown_until.as_deref().and_then(db::parse_dt) {
@@ -63,6 +73,47 @@ pub fn effective_status(account: &AccountRow) -> AccountStatus {
             }
         }
         other => other,
+    }
+}
+
+/// Bump the failure counter and open the circuit breaker when the threshold is
+/// reached (FR-4.7). Returns the new consecutive-failure count.
+pub async fn record_failure(
+    pool: &Pool,
+    account_id: &str,
+    threshold: i64,
+    open_secs: i64,
+) -> anyhow::Result<i64> {
+    db::record_account_failure(pool, account_id, threshold, open_secs).await
+}
+
+/// Clear the circuit breaker after a successful attempt or manual reset.
+pub async fn clear_circuit(pool: &Pool, account_id: &str) -> anyhow::Result<()> {
+    db::reset_account_failures(pool, account_id).await
+}
+
+/// Default interval between half-open recovery probes (FR-4.7, SHOULD).
+pub const HALF_OPEN_PROBE_SECS: i64 = 5;
+
+/// Minimum spacing between successive half-open probes for one account.
+pub const HALF_OPEN_PROBE_MIN_GAP_SECS: i64 = 2;
+
+/// Bounded half-open recovery probing (FR-4.7): once an account's circuit-open
+/// window has elapsed it may be tried again, but at most one probe per
+/// [`HALF_OPEN_PROBE_MIN_GAP_SECS`] so a still-broken upstream is not hammered
+/// by every concurrent request. Returns `false` while the circuit is still open.
+pub fn should_probe(account: &AccountRow) -> bool {
+    match account.circuit_open_until.as_deref().and_then(db::parse_dt) {
+        None => true, // no circuit history: nothing to throttle
+        Some(until) => {
+            if Utc::now() < until {
+                return false; // circuit still open: do not probe
+            }
+            match account.last_probe_at.as_deref().and_then(db::parse_dt) {
+                Some(last) => Utc::now() >= last + Duration::seconds(HALF_OPEN_PROBE_MIN_GAP_SECS),
+                None => true,
+            }
+        }
     }
 }
 
@@ -131,7 +182,8 @@ pub fn soonest_recovery(accounts: &[AccountRow]) -> Option<DateTime<Utc>> {
             AccountStatus::Cooldown => a.cooldown_until.as_deref().and_then(db::parse_dt),
             AccountStatus::Exhausted => a.quota_reset_at.as_deref().and_then(db::parse_dt),
             _ => None,
-        };
+        }
+        .or_else(|| a.circuit_open_until.as_deref().and_then(db::parse_dt));
         if let Some(t) = t {
             soonest = Some(match soonest {
                 Some(cur) if cur < t => cur,
@@ -174,3 +226,65 @@ pub fn window_start(quota_type: &str, window_secs: Option<i64>) -> String {
 }
 
 use chrono::Datelike;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Duration;
+
+    fn account(status: &str, circuit_until: Option<String>, last_probe: Option<String>) -> AccountRow {
+        AccountRow {
+            id: "acc".into(),
+            provider_id: "p".into(),
+            label: "l".into(),
+            secret_enc: String::new(),
+            key_mask: String::new(),
+            status: status.into(),
+            cooldown_until: None,
+            quota_reset_at: None,
+            quota_type: "none".into(),
+            quota_window_s: None,
+            soft_quota_usd: None,
+            priority: 1,
+            weight: 1,
+            last_error: None,
+            last_probe_at: last_probe,
+            circuit_open_until: circuit_until,
+            consecutive_failures: 0,
+            created_at: Utc::now().to_rfc3339(),
+        }
+    }
+
+    #[test]
+    fn circuit_open_takes_precedence_and_expires() {
+        let future = (Utc::now() + Duration::seconds(60)).to_rfc3339();
+        let a = account("healthy", Some(future), None);
+        assert_eq!(effective_status(&a), AccountStatus::CircuitOpen);
+        assert!(!should_probe(&a), "open circuit must not be probed");
+
+        // Once the window has elapsed the circuit is half-open and probeable.
+        let past = (Utc::now() - Duration::seconds(1)).to_rfc3339();
+        let b = account("healthy", Some(past), None);
+        assert_eq!(effective_status(&b), AccountStatus::CircuitOpen);
+        assert!(should_probe(&b), "half-open circuit should be probed");
+    }
+
+    #[test]
+    fn probe_is_throttled_by_min_gap() {
+        let past = (Utc::now() - Duration::seconds(30)).to_rfc3339();
+        let just_probed = Utc::now().to_rfc3339();
+        let a = account("healthy", Some(past.clone()), Some(just_probed));
+        assert!(!should_probe(&a), "a recent probe must throttle the next one");
+
+        let old = (Utc::now() - Duration::seconds(HALF_OPEN_PROBE_MIN_GAP_SECS + 1)).to_rfc3339();
+        let b = account("healthy", Some(past), Some(old));
+        assert!(should_probe(&b));
+    }
+
+    #[test]
+    fn no_circuit_history_is_probeable_and_healthy() {
+        let a = account("healthy", None, None);
+        assert_eq!(effective_status(&a), AccountStatus::Healthy);
+        assert!(should_probe(&a));
+    }
+}

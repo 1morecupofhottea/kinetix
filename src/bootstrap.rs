@@ -51,6 +51,9 @@ pub async fn seed_if_empty(
                 capability_mode: &p.capability_mode,
                 models_path: p.models_path.as_deref(),
                 rate_limit_rules: json!({}),
+                follow_redirects: false,
+                credential_hosts: "",
+                allow_insecure_tls: false,
             },
         )
         .await?;
@@ -119,8 +122,10 @@ pub async fn seed_if_empty(
                 strategy: if c.strategy.is_empty() { "priority" } else { &c.strategy },
                 fallback_triggers: json!({"on429": true, "onQuota": true, "on5xx": true, "onTimeout": true}),
                 continuity_policy: if c.continuity_policy.is_empty() { "strip" } else { &c.continuity_policy },
-                sticky_routing: false,
-                max_attempts: None,
+                portability_policy: if c.portability_policy.is_empty() { "strip_with_warning" } else { &c.portability_policy },
+                sticky_routing: c.sticky_routing,
+                cache_affinity: c.cache_affinity,
+                max_attempts: c.max_attempts,
             },
         )
         .await?;
@@ -128,7 +133,8 @@ pub async fn seed_if_empty(
             let account_id = account_ids.get(&t.account).cloned();
             let model_id = model_ids.get(&t.model).cloned();
             if let Some(model_id) = model_id {
-                db::insert_route_target(pool, &route_id, account_id.as_deref(), &model_id, t.priority, t.weight.unwrap_or(1)).await?;
+                let predicate = t.predicate.as_ref().map(|v| v.to_string()).unwrap_or_else(|| "{}".into());
+                db::insert_route_target(pool, &route_id, account_id.as_deref(), &model_id, t.priority, t.weight.unwrap_or(1), &predicate, "{}").await?;
             } else {
                 tracing::warn!("route '{}' target references unknown model '{}'", c.name, t.model);
             }

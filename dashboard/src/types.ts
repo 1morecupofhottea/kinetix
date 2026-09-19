@@ -156,6 +156,10 @@ export interface RequestLog {
   cacheStatus: 'hit' | 'miss' | 'bypass';
   servingAccount: string;
   servingProvider: string;
+  opaqueRouteId: string;
+  usageConfidence: 'provider_reported' | 'estimated' | 'unknown';
+  commitState: string;
+  retryCount: number;
   promptPreview: string;
   responsePreview: string;
 }

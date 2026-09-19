@@ -70,12 +70,16 @@ pub fn build(state: AppState) -> Router {
             "/routes/{id}",
             put(admin::update_route).delete(admin::delete_route),
         )
+        .route("/routes/dry-run", post(admin::dry_run_route))
+        .route("/validate", post(admin::validate_endpoint))
         // aliases
         .route("/aliases", get(admin::list_aliases).post(admin::create_alias))
         .route("/aliases/{id}", delete(admin::delete_alias))
-        // usage / audit / metrics
+        // usage / requests / audit / metrics
         .route("/usage", get(admin::usage))
         .route("/requests", get(admin::usage))
+        .route("/requests/{id}/route-trace", get(admin::request_route_trace))
+        .route("/requests/{id}/diagnostics", get(admin::request_diagnostics))
         .route("/audit", get(admin::audit))
         .route("/metrics", get(admin::metrics));
 

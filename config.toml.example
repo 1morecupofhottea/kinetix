@@ -58,8 +58,15 @@ target = "Google Gemini/gemini-3.6-flash"
 # name = "smart"
 # description = "Primary then fallback"
 # strategy = "priority"                # priority | round-robin | weighted | least-used
-# continuity_policy = "strip"          # strip | convert | error
+# continuity_policy = "strip"          # strip | error (cross-provider state handling)
+# portability_policy = "strip_with_warning"  # reject | strip_with_warning (r4 FR-2.11)
+# cache_affinity = false               # FR-7.3 prompt-cache-aware sticky routing
+# sticky_routing = false               # FR-7.5 prefer the same target per session
 # max_attempts = 3
 # [[routes.targets]]
 # model = "Google Gemini/gemini-3.6-flash"
 # priority = 1
+# # Optional typed eligibility predicate (FR-12.3). Facts: has_tools,
+# # has_images, has_reasoning, frontend, requested_model, requested_route,
+# # key_tag, input_tokens, target_capability, target_context_window, ...
+# predicate = { expr = { fact = "has_tools", op = "eq", value = true }, when_unknown = "skip" }

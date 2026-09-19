@@ -230,12 +230,15 @@ export const RequestsView: React.FC<RequestsViewProps> = ({ requests }) => {
                   </strong>
                   <div><code>X-Request-Id: {selectedRequest.requestId}</code></div>
                   <div><code>X-Kinetix-Cache: {selectedRequest.cacheStatus}</code></div>
-                  <div><code>X-Kinetix-Served-By: {selectedRequest.servingAccount} ({selectedRequest.servingProvider})</code></div>
+                  <div><code>X-Kinetix-Route-Id: {selectedRequest.opaqueRouteId || '(none)'}</code> <span className="text-[#2d2d2d]/50">(opaque; serving topology is admin-only)</span></div>
                   {selectedRequest.fallbackHops > 0 && (
                     <div className="text-[#ff4d4d] font-bold">
                       <code>X-Kinetix-Fallback: true (Hops: {selectedRequest.fallbackHops})</code>
                     </div>
                   )}
+                  <div>
+                    <code>Usage: {selectedRequest.usageConfidence} | commit: {selectedRequest.commitState || 'n/a'} | retries: {selectedRequest.retryCount}</code>
+                  </div>
                 </div>
 
                 {/* Fallback Path Trace */}
@@ -290,7 +293,27 @@ export const RequestsView: React.FC<RequestsViewProps> = ({ requests }) => {
                 </div>
               </div>
 
-              <div className="pt-4 flex justify-end">
+              <div className="pt-4 flex justify-between items-center gap-2">
+                <SketchButton
+                  variant="secondary"
+                  onClick={() => {
+                    fetch(`/admin/api/requests/${selectedRequest.requestId}/route-trace`, {
+                      credentials: 'same-origin',
+                    })
+                      .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+                      .then((trace) => {
+                        const steps = (trace.steps || [])
+                          .map((s: any) => `${s.stage}${s.target ? ` [${s.target}]` : ''}: ${s.detail || ''}`)
+                          .join('\n');
+                        window.alert(
+                          `Route Trace for ${selectedRequest.requestId}\n\n${steps}\n\nWarnings:\n${(trace.warnings || []).join('\n') || '(none)'}`,
+                        );
+                      })
+                      .catch((e) => window.alert(`Route trace unavailable (${e}).`));
+                  }}
+                >
+                  View Route Trace
+                </SketchButton>
                 <SketchButton
                   variant="secondary"
                   onClick={() => setSelectedRequest(null)}

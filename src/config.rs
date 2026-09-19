@@ -277,6 +277,16 @@ pub struct BootstrapRoute {
     pub strategy: String,
     #[serde(default)]
     pub continuity_policy: String,
+    /// FR-2.11: reject | strip_with_warning.
+    #[serde(default)]
+    pub portability_policy: String,
+    /// FR-7.3: cache-aware sticky routing.
+    #[serde(default)]
+    pub cache_affinity: bool,
+    #[serde(default)]
+    pub sticky_routing: bool,
+    #[serde(default)]
+    pub max_attempts: Option<i64>,
     #[serde(default)]
     pub targets: Vec<BootstrapRouteTarget>,
 }
@@ -295,6 +305,9 @@ pub struct BootstrapRouteTarget {
     pub priority: i64,
     #[serde(default)]
     pub weight: Option<i64>,
+    /// Typed eligibility predicate (FR-12.3), as an inline TOML/JSON value.
+    #[serde(default)]
+    pub predicate: Option<toml::Value>,
 }
 
 pub fn load_bootstrap(path: &std::path::Path) -> Result<BootstrapConfig> {

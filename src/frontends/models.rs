@@ -146,6 +146,7 @@ pub fn error_body(format: FrontendFormat, err: &ProxyError) -> Value {
                 ErrorKind::AllTargetsUnavailable => "upstream_unavailable",
                 ErrorKind::Upstream => "upstream_error",
                 ErrorKind::Internal => "internal_error",
+                ErrorKind::ServiceUnavailable => "service_unavailable",
             };
             json!({
                 "error": {
@@ -167,6 +168,7 @@ pub fn error_body(format: FrontendFormat, err: &ProxyError) -> Value {
                 ErrorKind::AllTargetsUnavailable => "overloaded_error",
                 ErrorKind::Upstream => "api_error",
                 ErrorKind::Internal => "api_error",
+                ErrorKind::ServiceUnavailable => "overloaded_error",
             };
             json!({
                 "type": "error",

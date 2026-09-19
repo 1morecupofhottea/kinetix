@@ -1,6 +1,8 @@
 //! Admin API (FR-8.4). Every dashboard action is available here; the dashboard
 //! is just a client. Protected by `AdminAuth`.
 
+use std::sync::atomic::Ordering;
+
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -57,6 +59,14 @@ pub async fn login(
     jar: CookieJar,
     Json(body): Json<LoginBody>,
 ) -> Result<(CookieJar, Json<Value>), ApiError> {
+    // Admin authentication is a control-plane action: if the store is
+    // unavailable it must fail closed, not fall through (NFR-2.7).
+    if !db_healthy(&state).await {
+        return Err(ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "admin authentication unavailable: control plane degraded".into(),
+        ));
+    }
     if !auth::verify_admin_password(&state, &body.password) {
         let _ = db::insert_audit(
             &state.pool,
@@ -166,6 +176,7 @@ pub async fn test_stream(
         stream,
         thinking: None,
         extra: Default::default(),
+        raw_body: None,
     };
 
     let request_id = format!("req_{}", uuid::Uuid::new_v4().simple());
@@ -173,7 +184,7 @@ pub async fn test_stream(
         return crate::api::error_response(format, &request_id, e);
     }
 
-    match pipeline::run(&state, format, Some(key), req, request_id.clone(), true).await {
+    match pipeline::run(&state, format, Some(key), req, request_id.clone(), true, None).await {
         Ok(resp) => resp,
         Err(e) => crate::api::error_response(format, &request_id, e),
     }
@@ -523,6 +534,15 @@ pub struct ProviderBody {
     #[serde(default = "default_permissive")]
     pub capability_mode: String,
     pub models_path: Option<String>,
+    /// NFR-3.10: redirects are never followed unless explicitly enabled.
+    #[serde(default)]
+    pub follow_redirects: bool,
+    /// NFR-3.11: comma-separated authorized hosts for the credential.
+    #[serde(default)]
+    pub credential_hosts: String,
+    /// NFR-3.12: explicit dev-mode opt-out of TLS verification.
+    #[serde(default)]
+    pub allow_insecure_tls: bool,
     /// Optional initial credential.
     pub api_key: Option<String>,
     pub account_label: Option<String>,
@@ -561,6 +581,9 @@ pub async fn create_provider(
             capability_mode: &body.capability_mode,
             models_path: body.models_path.as_deref(),
             rate_limit_rules: json!({}),
+            follow_redirects: body.follow_redirects,
+            credential_hosts: &body.credential_hosts,
+            allow_insecure_tls: body.allow_insecure_tls,
         },
     )
     .await
@@ -619,6 +642,9 @@ pub async fn update_provider(
         body.timeout_ms,
         &body.capability_mode,
         body.models_path.as_deref(),
+        body.follow_redirects,
+        &body.credential_hosts,
+        body.allow_insecure_tls,
     )
     .await
     .map_err(ApiError::internal)?;
@@ -843,6 +869,7 @@ pub async fn test_provider(
         stream: false,
         thinking: None,
         extra: Default::default(),
+        raw_body: None,
     };
     internal.stream = false;
 
@@ -1211,6 +1238,7 @@ pub async fn reset_account(
     crate::pool::mark_healthy(&state.pool, &id)
         .await
         .map_err(ApiError::internal)?;
+    let _ = crate::pool::clear_circuit(&state.pool, &id).await;
     let _ = db::insert_audit(
         &state.pool,
         "admin",
@@ -1218,7 +1246,7 @@ pub async fn reset_account(
         "account",
         &id,
         "",
-        "Cleared cooldown/exhaustion state.",
+        "Cleared cooldown/exhaustion/circuit state.",
     )
     .await;
     state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
@@ -1270,6 +1298,8 @@ pub async fn list_routes(State(state): State<AppState>, _auth: AdminAuth) -> Api
                     "provider_id": model.map(|m| m.provider_id.clone()),
                     "priority": t.priority,
                     "weight": t.weight,
+                    "predicate": serde_json::from_str::<Value>(&t.predicate).unwrap_or(json!({})),
+                    "param_overrides": serde_json::from_str::<Value>(&t.param_overrides).unwrap_or(json!({})),
                 })
             })
             .collect();
@@ -1280,7 +1310,9 @@ pub async fn list_routes(State(state): State<AppState>, _auth: AdminAuth) -> Api
             "strategy": c.strategy,
             "fallback_triggers": serde_json::from_str::<Value>(&c.fallback_triggers).unwrap_or(json!({})),
             "continuity_policy": c.continuity_policy,
+            "portability_policy": c.portability_policy,
             "sticky_routing": c.sticky_routing != 0,
+            "cache_affinity": c.cache_affinity != 0,
             "max_attempts": c.max_attempts,
             "enabled": c.enabled != 0,
             "targets": targets_json,
@@ -1300,8 +1332,14 @@ pub struct RouteBody {
     pub fallback_triggers: Value,
     #[serde(default = "strip_policy")]
     pub continuity_policy: String,
+    /// FR-2.11: reject | strip_with_warning.
+    #[serde(default = "portability_default")]
+    pub portability_policy: String,
     #[serde(default)]
     pub sticky_routing: bool,
+    /// FR-7.3: cache-aware sticky routing.
+    #[serde(default)]
+    pub cache_affinity: bool,
     pub max_attempts: Option<i64>,
     #[serde(default)]
     pub targets: Vec<RouteTargetBody>,
@@ -1313,6 +1351,9 @@ fn priority_strategy() -> String {
 fn strip_policy() -> String {
     "strip".into()
 }
+fn portability_default() -> String {
+    "strip_with_warning".into()
+}
 
 #[derive(Deserialize)]
 pub struct RouteTargetBody {
@@ -1322,6 +1363,12 @@ pub struct RouteTargetBody {
     pub priority: i64,
     #[serde(default = "one")]
     pub weight: i64,
+    /// Typed eligibility predicate (FR-12.3). Empty/absent = always eligible.
+    #[serde(default)]
+    pub predicate: Value,
+    /// Per-target parameter overrides (FR-12.2).
+    #[serde(default)]
+    pub param_overrides: Value,
 }
 
 pub async fn create_route(
@@ -1341,7 +1388,9 @@ pub async fn create_route(
                 body.fallback_triggers.clone()
             },
             continuity_policy: &body.continuity_policy,
+            portability_policy: &body.portability_policy,
             sticky_routing: body.sticky_routing,
+            cache_affinity: body.cache_affinity,
             max_attempts: body.max_attempts,
         },
     )
@@ -1375,7 +1424,9 @@ pub async fn update_route(
         &body.strategy,
         body.fallback_triggers.clone(),
         &body.continuity_policy,
+        &body.portability_policy,
         body.sticky_routing,
+        body.cache_affinity,
         body.max_attempts,
     )
     .await
@@ -1398,6 +1449,16 @@ pub async fn update_route(
 
 async fn write_route_targets(pool: &Pool, route_id: &str, targets: &[RouteTargetBody]) -> Result<(), ApiError> {
     for t in targets {
+        let predicate = if t.predicate.is_null() {
+            "{}".to_string()
+        } else {
+            t.predicate.to_string()
+        };
+        let overrides = if t.param_overrides.is_null() {
+            "{}".to_string()
+        } else {
+            t.param_overrides.to_string()
+        };
         db::insert_route_target(
             pool,
             route_id,
@@ -1405,6 +1466,8 @@ async fn write_route_targets(pool: &Pool, route_id: &str, targets: &[RouteTarget
             &t.model_id,
             t.priority,
             t.weight,
+            &predicate,
+            &overrides,
         )
         .await
         .map_err(ApiError::internal)?;
@@ -1421,6 +1484,75 @@ pub async fn delete_route(
     let _ = db::insert_audit(&state.pool, "admin", "route_deleted", "route", &id, "", "Deleted route.").await;
     state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
+}
+
+/// `POST /admin/api/routes/dry-run` (FR-8.7): evaluate routing for a
+/// representative request descriptor without mutating anything.
+#[derive(Deserialize)]
+pub struct DryRunBody {
+    pub model: String,
+    #[serde(flatten, default)]
+    pub descriptor: pipeline::DryRunRequest,
+}
+
+pub async fn dry_run_route(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Json(body): Json<DryRunBody>,
+) -> ApiResult {
+    let out = pipeline::dry_run(&state, &body.model, &body.descriptor)
+        .await
+        .map_err(|e| ApiError::bad(e.message))?;
+    Ok(Json(out))
+}
+
+/// `POST /admin/api/validate` (FR-8.6): validate a provider endpoint (schema,
+/// TLS/SSRF, credential-host binding) and, optionally, connectivity + resolved
+/// IP/ASN. Never mutates production state.
+#[derive(Deserialize)]
+pub struct ValidateBody {
+    pub base_url: String,
+    #[serde(default)]
+    pub check_connectivity: bool,
+}
+
+pub async fn validate_endpoint(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Json(body): Json<ValidateBody>,
+) -> ApiResult {
+    validate_outbound_url(&state, &body.base_url)?;
+    let parsed = url::Url::parse(&body.base_url).map_err(|e| ApiError::bad(format!("invalid URL: {e}")))?;
+    let host = parsed.host_str().unwrap_or("").to_string();
+    let mut resolved: Vec<String> = Vec::new();
+    let mut asn: Value = Value::String("unknown".into());
+    let mut reachable: Value = Value::String("not_checked".into());
+    if body.check_connectivity {
+        let port = parsed.port_or_known_default().unwrap_or(443);
+        match tokio::net::lookup_host((host.as_str(), port)).await {
+            Ok(addrs) => {
+                for a in addrs {
+                    resolved.push(a.ip().to_string());
+                }
+                reachable = Value::Bool(true);
+            }
+            Err(e) => {
+                reachable = Value::String(format!("dns_error: {e}"));
+            }
+        }
+        // ASN lookup is not implemented; the requirement says show unknown
+        // rather than guess (FR-8.8).
+        asn = Value::String("unknown".into());
+    }
+    Ok(Json(json!({
+        "valid": true,
+        "scheme": parsed.scheme(),
+        "host": host,
+        "resolved_ips": resolved,
+        "asn": asn,
+        "connectivity": reachable,
+        "note": "ASN is reported as unknown when it cannot be established; Kinetix never guesses (FR-8.8)."
+    })))
 }
 
 // ===========================================================================
@@ -1558,6 +1690,69 @@ fn usage_json(u: &db::UsageLogRow) -> Value {
         "serving_provider": u.serving_provider,
         "flagged": u.flagged != 0,
         "error_message": u.error_message,
+        "usage_confidence": u.usage_confidence,
+        "commit_state": u.commit_state,
+        "retry_count": u.retry_count,
+        "opaque_route_id": u.opaque_route_id,
+    })
+}
+
+/// `GET /admin/api/requests/{id}/route-trace` (FR-12.14, NFR-4.3).
+pub async fn request_route_trace(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(request_id): Path<String>,
+) -> ApiResult {
+    let trace = db::get_route_trace_by_request(&state.pool, &request_id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("no route trace for that request id"))?;
+    Ok(Json(route_trace_json(&trace)))
+}
+
+/// `GET /admin/api/requests/{id}/diagnostics` (FR-13.4): correlate the Route
+/// Trace with the flight-recorder events for one request.
+pub async fn request_diagnostics(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(request_id): Path<String>,
+) -> ApiResult {
+    let trace = db::get_route_trace_by_request(&state.pool, &request_id)
+        .await
+        .map_err(ApiError::internal)?;
+    let flight = state.flight.events(&request_id);
+    let usage = db::recent_usage(&state.pool, 2000)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .find(|u| u.request_id == request_id)
+        .map(|u| usage_json(&u));
+    Ok(Json(json!({
+        "request_id": request_id,
+        "route_trace": trace.as_ref().map(route_trace_json),
+        "flight_events": flight,
+        "usage": usage,
+        "flight_recorder": {
+            "tracked_requests": state.flight.request_count(),
+            "dropped_requests": state.flight.dropped_requests(),
+            "dropped_events": state.flight.dropped_events(),
+        }
+    })))
+}
+
+fn route_trace_json(t: &db::RouteTraceRow) -> Value {
+    json!({
+        "request_id": t.request_id,
+        "opaque_route_id": t.opaque_route_id,
+        "timestamp": t.ts,
+        "requested_model": t.requested_model,
+        "route_id": t.route_id,
+        "route_name": t.route_name,
+        "final_target": t.final_target,
+        "commit_state": t.commit_state,
+        "outcome": t.outcome,
+        "steps": serde_json::from_str::<Value>(&t.steps).unwrap_or(json!([])),
+        "warnings": serde_json::from_str::<Value>(&t.warnings).unwrap_or(json!([])),
     })
 }
 
@@ -1584,10 +1779,32 @@ pub async fn audit(State(state): State<AppState>, _auth: AdminAuth, Query(q): Qu
 }
 
 /// Prometheus-format metrics (NFR-4.2).
+/// True when the control-plane database answers a trivial query.
+pub async fn db_healthy(state: &AppState) -> bool {
+    sqlx::query("SELECT 1").fetch_one(&state.pool).await.is_ok()
+}
+
 pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Response {
-    let summary = db::usage_summary(&state.pool).await.unwrap_or(json!({}));
-    let accounts = db::list_accounts(&state.pool).await.unwrap_or_default();
+    // Serve whatever is available from memory even when the store is down; the
+    // control plane degrades, the data plane does not (NFR-2.6/2.7).
+    let healthy = db_healthy(&state).await;
+    let summary = if healthy {
+        db::usage_summary(&state.pool).await.unwrap_or(json!({}))
+    } else {
+        json!({})
+    };
+    let accounts = if healthy {
+        db::list_accounts(&state.pool).await.unwrap_or_default()
+    } else {
+        Vec::new()
+    };
     let mut body = String::new();
+    body.push_str("# HELP kinetix_control_plane_degraded 1 when the control-plane store is unavailable\n");
+    body.push_str("# TYPE kinetix_control_plane_degraded gauge\n");
+    body.push_str(&format!(
+        "kinetix_control_plane_degraded {}\n",
+        if healthy { 0 } else { 1 }
+    ));
     body.push_str("# HELP kinetix_requests_total Total proxied requests\n");
     body.push_str("# TYPE kinetix_requests_total counter\n");
     body.push_str(&format!(
@@ -1617,6 +1834,59 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
             "kinetix_account_status{{status=\"{status}\"}} {n}\n"
         ));
     }
+    // Commit-point failure counters (FR-4.9, NFR-4.2).
+    body.push_str("# HELP kinetix_failures_pre_commit_total Failures before the commit point\n");
+    body.push_str("# TYPE kinetix_failures_pre_commit_total counter\n");
+    body.push_str(&format!(
+        "kinetix_failures_pre_commit_total {}\n",
+        state.failures_pre_commit.load(Ordering::Relaxed)
+    ));
+    body.push_str("# HELP kinetix_failures_post_commit_total Failures after the commit point\n");
+    body.push_str("# TYPE kinetix_failures_post_commit_total counter\n");
+    body.push_str(&format!(
+        "kinetix_failures_post_commit_total {}\n",
+        state.failures_post_commit.load(Ordering::Relaxed)
+    ));
+    body.push_str("# HELP kinetix_cancellations_total Client-disconnect cancellations\n");
+    body.push_str("# TYPE kinetix_cancellations_total counter\n");
+    body.push_str(&format!(
+        "kinetix_cancellations_total {}\n",
+        state.cancellations.load(Ordering::Relaxed)
+    ));
+    let cancel_total = state.cancellations.load(Ordering::Relaxed);
+    let cancel_ms = state.cancellation_latency_ms_total.load(Ordering::Relaxed);
+    let avg_cancel = if cancel_total > 0 {
+        cancel_ms as f64 / cancel_total as f64
+    } else {
+        0.0
+    };
+    body.push_str("# HELP kinetix_cancellation_latency_ms Average cancellation latency (ms)\n");
+    body.push_str("# TYPE kinetix_cancellation_latency_ms gauge\n");
+    body.push_str(&format!("kinetix_cancellation_latency_ms {avg_cancel}\n"));
+    body.push_str("# HELP kinetix_cached_tokens_total Provider-reported cached prompt tokens\n");
+    body.push_str("# TYPE kinetix_cached_tokens_total counter\n");
+    body.push_str(&format!(
+        "kinetix_cached_tokens_total {}\n",
+        summary["cached_tokens"].as_i64().unwrap_or(0)
+    ));
+    body.push_str("# HELP kinetix_fallback_hops_total Total fallback hops across requests\n");
+    body.push_str("# TYPE kinetix_fallback_hops_total counter\n");
+    body.push_str(&format!(
+        "kinetix_fallback_hops_total {}\n",
+        summary["fallback_hops"].as_i64().unwrap_or(0)
+    ));
+    body.push_str("# HELP kinetix_flight_recorder_requests Requests tracked by the flight recorder\n");
+    body.push_str("# TYPE kinetix_flight_recorder_requests gauge\n");
+    body.push_str(&format!(
+        "kinetix_flight_recorder_requests {}\n",
+        state.flight.request_count()
+    ));
+    body.push_str("# HELP kinetix_flight_recorder_dropped_total Diagnostics dropped when saturated\n");
+    body.push_str("# TYPE kinetix_flight_recorder_dropped_total counter\n");
+    body.push_str(&format!(
+        "kinetix_flight_recorder_dropped_total {}\n",
+        state.flight.dropped_requests() + state.flight.dropped_events()
+    ));
     (
         [(axum::http::header::CONTENT_TYPE, "text/plain; version=0.0.4")],
         body,
@@ -1666,17 +1936,23 @@ fn is_blocked_host(host: &str) -> bool {
         return true;
     }
     if let Ok(ip) = lower.parse::<std::net::IpAddr>() {
-        return match ip {
-            std::net::IpAddr::V4(v4) => {
-                v4.is_loopback()
-                    || v4.is_private()
-                    || v4.is_link_local()
-                    || v4.is_unspecified()
-                    || v4.is_broadcast()
-                    || v4.octets()[0] == 169 && v4.octets()[1] == 254
-            }
-            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
-        };
+        return is_blocked_ip(ip);
     }
     false
+}
+
+/// Whether an IP literal falls in a blocked private/link-local/metadata range
+/// (NFR-3.9). Shared with the connect-time DNS re-check in the pipeline.
+pub fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
+    match ip {
+        std::net::IpAddr::V4(v4) => {
+            v4.is_loopback()
+                || v4.is_private()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.octets()[0] == 169 && v4.octets()[1] == 254
+        }
+        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+    }
 }

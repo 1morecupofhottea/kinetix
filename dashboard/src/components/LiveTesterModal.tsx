@@ -14,8 +14,10 @@ interface LiveTesterModalProps {
 interface ExecMeta {
   servingAccount: string;
   servingProvider: string;
+  routeId: string;
   fallbackHops: number;
   fallbackPath: string[];
+  warnings: string[];
   ttftMs: number;
   latencyMs: number;
   statusCode: number;
@@ -123,6 +125,8 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
       });
 
       const servedBy = parseServedBy(res.headers.get('x-kinetix-served-by') || '');
+      const routeId = res.headers.get('x-kinetix-route-id') || '';
+      const warnings = parseWarningsHeader(res.headers.get('x-kinetix-warning') || '');
       const fallback = res.headers.get('x-kinetix-fallback') || '';
       const parsedFallback = parseFallbackHeader(
         fallback,
@@ -142,6 +146,8 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
         setMeta({
           servingAccount: servedBy.account,
           servingProvider: servedBy.provider,
+          routeId,
+          warnings,
           fallbackHops: parsedFallback.hops,
           fallbackPath: parsedFallback.path,
           ttftMs: 0,
@@ -181,6 +187,8 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
       setMeta({
         servingAccount: servedBy.account,
         servingProvider: servedBy.provider,
+        routeId,
+        warnings,
         fallbackHops: parsedFallback.hops,
         fallbackPath: parsedFallback.path,
         ttftMs: ttft,
@@ -438,7 +446,7 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                     <div className="flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-[#2e7d32]" />
                       <span className="font-heading font-bold text-base">
-                        Served By: {meta.servingAccount || '(unreported)'}
+                        {meta.servingAccount ? `Served By: ${meta.servingAccount}` : `Route ID: ${meta.routeId || '(unknown)'}`}
                       </span>
                     </div>
                     {meta.fallbackHops > 0 ? (
@@ -469,6 +477,17 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                       </div>
                     </div>
                   )}
+
+                  {meta.warnings.length > 0 && (
+                    <div className="text-xs font-mono text-[#d97706] bg-[#fff9c4] p-2 border border-[#d97706] rounded">
+                      <strong className="font-heading">⚠ Portability warning:</strong>
+                      <div className="mt-1">{meta.warnings.join('; ')}</div>
+                    </div>
+                  )}
+
+                  <div className="text-[10px] font-mono text-[#2d2d2d]/60 break-all">
+                    Route ID (opaque): {meta.routeId || '(none)'}
+                  </div>
 
                   <div className="grid grid-cols-3 gap-2 text-center text-xs font-mono pt-1">
                     <div className="bg-white p-1 border border-[#2d2d2d] rounded">
@@ -551,4 +570,16 @@ function parseServedBy(value: string): { account: string; provider: string } {
   const m = value.match(/^(.*?)\s*\((.*)\)\s*$/);
   if (m) return { account: m[1].trim(), provider: m[2].trim() };
   return { account: value.trim(), provider: '' };
+}
+
+/** Parse the `X-Kinetix-Warning` JSON array of portability warnings. */
+function parseWarningsHeader(value: string): string[] {
+  if (!value) return [];
+  try {
+    const parsed = JSON.parse(value);
+    if (Array.isArray(parsed)) return parsed.map(String);
+  } catch {
+    /* ignore malformed */
+  }
+  return [value];
 }

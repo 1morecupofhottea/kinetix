@@ -174,6 +174,7 @@ pub fn decode_request(body: Value) -> Result<InternalRequest, ProxyError> {
         stream,
         thinking,
         extra,
+        raw_body: None,
     })
 }
 
@@ -413,19 +414,24 @@ impl OpenAiEncoder {
     }
 
     fn usage_chunk(&self, u: &crate::types::TokenUsage) -> Bytes {
+        let mut usage = json!({
+            "prompt_tokens": u.input.unwrap_or(0),
+            "completion_tokens": u.output.unwrap_or(0),
+            "total_tokens": u.input.unwrap_or(0) + u.output.unwrap_or(0),
+        });
+        if let Some(c) = u.cached {
+            usage["prompt_tokens_details"] = json!({ "cached_tokens": c });
+        }
+        if let Some(t) = u.thinking {
+            usage["completion_tokens_details"] = json!({ "reasoning_tokens": t });
+        }
         let frame = json!({
             "id": self.id,
             "object": "chat.completion.chunk",
             "created": self.ctx.created,
             "model": self.ctx.model_name,
             "choices": [],
-            "usage": {
-                "prompt_tokens": u.input.unwrap_or(0),
-                "completion_tokens": u.output.unwrap_or(0),
-                "total_tokens": u.input.unwrap_or(0) + u.output.unwrap_or(0),
-                "prompt_tokens_details": { "cached_tokens": u.cached.unwrap_or(0) },
-                "completion_tokens_details": { "reasoning_tokens": u.thinking.unwrap_or(0) }
-            }
+            "usage": usage
         });
         sse_frame(None, &frame.to_string())
     }

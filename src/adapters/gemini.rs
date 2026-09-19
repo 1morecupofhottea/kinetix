@@ -102,7 +102,7 @@ impl GeminiAdapter {
         let params = model.params();
         let mut cfg = serde_json::Map::new();
 
-        let mut put_number = |key: &str, client_val: Option<f64>, cfg: &mut serde_json::Map<String, Value>| {
+        let put_number = |key: &str, client_val: Option<f64>, cfg: &mut serde_json::Map<String, Value>| {
             if let Some(v) = client_val {
                 let (value, keep) = apply_param_spec(params.get(key), v);
                 if keep {

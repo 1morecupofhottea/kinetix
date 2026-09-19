@@ -12,9 +12,14 @@ use parking_lot::RwLock;
 
 use crate::db::{self, AccountRow, AliasRow, RouteRow, RouteTargetRow, ModelRow, Pool, ProviderRow};
 
+/// An immutable runtime configuration snapshot (FR-10.13, NFR-2.10).
+///
+/// The data plane holds an `Arc<Snapshot>` for the lifetime of a request, so a
+/// configuration change (which swaps in a new snapshot) never affects in-flight
+/// work. There are no interior locks on this type; it is read-only once built.
 #[derive(Clone)]
 pub struct Registry {
-    inner: Arc<RwLock<Snapshot>>,
+    inner: Arc<RwLock<Arc<Snapshot>>>,
 }
 
 #[derive(Default)]
@@ -49,12 +54,16 @@ pub struct ResolvedTarget {
     pub provider: ProviderRow,
     pub priority: i64,
     pub weight: i64,
+    /// Optional typed eligibility predicate (FR-12.3).
+    pub predicate: crate::predicate::TargetPredicate,
+    /// Optional per-target parameter overrides (FR-12.2).
+    pub param_overrides: serde_json::Value,
 }
 
 impl Registry {
     pub fn new() -> Self {
         Registry {
-            inner: Arc::new(RwLock::new(Snapshot::default())),
+            inner: Arc::new(RwLock::new(Arc::new(Snapshot::default()))),
         }
     }
 
@@ -90,25 +99,36 @@ impl Registry {
             snap.routes.insert(c.id.clone(), c);
         }
 
-        *self.inner.write() = snap;
+        // Atomically activate the new immutable snapshot (NFR-2.10).
+        *self.inner.write() = Arc::new(snap);
         Ok(())
     }
 
-    pub fn snapshot(&self) -> parking_lot::RwLockReadGuard<'_, Snapshot> {
-        self.inner.read()
+    /// Take a reference to the current immutable snapshot.
+    ///
+    /// A request should call this once at the start and use the returned Arc
+    /// throughout, so it is unaffected by concurrent configuration changes.
+    pub fn snapshot(&self) -> Arc<Snapshot> {
+        self.inner.read().clone()
     }
 
-    /// Resolve a client-facing model name to a route.
-    ///
-    /// Order: exact alias -> route by name -> `provider/model-id` ->
-    /// bare upstream model id (first provider that has it).
-    pub fn resolve(&self, requested: &str) -> Option<Resolved> {
-        let snap = self.inner.read();
+    /// The number of providers currently in the active snapshot.
+    pub fn provider_count(&self) -> usize {
+        self.inner.read().providers.len()
+    }
 
+    /// Resolve a client-facing model name to a route against the active snapshot.
+    pub fn resolve(&self, requested: &str) -> Option<Resolved> {
+        Self::resolve_in(&self.snapshot(), requested)
+    }
+
+    /// Resolve against a caller-held snapshot (used by the request pipeline so
+    /// the whole request sees one consistent view, NFR-2.10).
+    pub fn resolve_in(snap: &Snapshot, requested: &str) -> Option<Resolved> {
         // 1. Alias table.
         if let Some(alias) = snap.aliases.get(requested) {
             if alias.target_type == "route" {
-                if let Some(route) = self.build_route(&snap, &alias.target_id) {
+                if let Some(route) = Self::build_route(snap, &alias.target_id) {
                     return Some(route);
                 }
             } else if let Some(m) = snap.models.get(&alias.target_id) {
@@ -121,7 +141,7 @@ impl Registry {
 
         // 2. Route by name.
         if let Some(route) = snap.routes.values().find(|c| c.name == requested) {
-            if let Some(route) = self.build_route(&snap, &route.id) {
+            if let Some(route) = Self::build_route(snap, &route.id) {
                 return Some(route);
             }
         }
@@ -158,7 +178,7 @@ impl Registry {
         None
     }
 
-    fn build_route(&self, snap: &Snapshot, route_id: &str) -> Option<Resolved> {
+    fn build_route(snap: &Snapshot, route_id: &str) -> Option<Resolved> {
         let route = snap.routes.get(route_id)?.clone();
         if route.enabled == 0 {
             return None;
@@ -188,6 +208,8 @@ impl Registry {
                 provider,
                 priority: t.priority,
                 weight: t.weight,
+                predicate: crate::predicate::TargetPredicate::parse(&t.predicate),
+                param_overrides: serde_json::from_str(&t.param_overrides).unwrap_or(serde_json::Value::Null),
             });
         }
         if targets.is_empty() {
@@ -198,29 +220,34 @@ impl Registry {
 
     /// All enabled models the registry knows, for `/v1/models`.
     pub fn enabled_models(&self) -> Vec<ModelRow> {
-        let snap = self.inner.read();
+        let snap = self.snapshot();
         snap.models.values().filter(|m| m.enabled != 0).cloned().collect()
     }
 
     /// Provider by id.
     pub fn provider(&self, id: &str) -> Option<ProviderRow> {
-        self.inner.read().providers.get(id).cloned()
+        self.snapshot().providers.get(id).cloned()
     }
 
     pub fn model(&self, id: &str) -> Option<ModelRow> {
-        self.inner.read().models.get(id).cloned()
+        self.snapshot().models.get(id).cloned()
     }
 
     pub fn account(&self, id: &str) -> Option<AccountRow> {
-        self.inner.read().accounts.get(id).cloned()
+        self.snapshot().accounts.get(id).cloned()
     }
 
     pub fn route_name(&self, id: &str) -> Option<String> {
-        self.inner.read().routes.get(id).map(|c| c.name.clone())
+        self.snapshot().routes.get(id).map(|c| c.name.clone())
+    }
+
+    /// The full route row (used for cache-affinity / portability policy).
+    pub fn route_row(&self, id: &str) -> Option<RouteRow> {
+        self.snapshot().routes.get(id).cloned()
     }
 
     pub fn aliases(&self) -> Vec<AliasRow> {
-        self.inner.read().aliases.values().cloned().collect()
+        self.snapshot().aliases.values().cloned().collect()
     }
 }
 

@@ -93,19 +93,73 @@ Tech: Rust + Tokio, Axum 0.8, reqwest (rustls, HTTP/2), SQLite in WAL mode via s
 
 ## Testing
 
-A local end-to-end harness lives at `/tmp/ktest.sh` (see `scripts/`), exercising the
-public API, the admin API, streaming tool calls, and automatic fallback. CI will run
-the fixture suite from the requirements (FR-9).
+- `cargo test` runs the unit + protocol-torture/fuzz suite (SSE framing across
+  arbitrary chunk boundaries, UTF-8 splits, tool-argument fragmentation, usage
+  only in the final event, malformed/unknown frames, bounded fuzzing).
+- `scripts/bench.sh [concurrency-list] [requests-per-level]` runs the synthetic
+  benchmark matrix (passthrough / translation / tools / large) against a
+  deterministic local upstream, measuring added latency and TTFT versus NFR-1.
+- `scripts/cancel_bench.py` measures client-disconnect cancellation latency
+  (NFR-1.10).
+- A local end-to-end harness exercises the public API, the admin API, streaming
+  tool calls, and automatic fallback. CI will run the fixture suite from the
+  requirements (FR-9).
 
 ## Status
 
 Milestone 1 (walking skeleton) and Milestone 2 (dashboard, Routes, limits, cost,
 audit) are implemented and verified end-to-end against live Gemini and
 OpenAI-compatible upstreams. Revision 4 renamed the product to Kinetix (Prism is the
-old name), renamed Combos to Routes, and promoted several behaviours to MUST that are
-**not yet implemented**: same-format passthrough (FR-2.7), executable Route predicates
-and the Route Trace (FR-12.3/12.14), the diagnostic flight recorder (FR-13),
-cache-aware sticky routing (FR-7.3), the explicit non-portable-state policy (FR-2.11),
-topology hiding via `X-Kinetix-Route-Id` (FR-12.15), usage confidence states (FR-6.8),
-Validate/Dry Run (FR-8.6/8.7), and the protocol torture/fuzz harness (FR-9.4/9.5).
-See the r4 requirements document for the full delta.
+old name), renamed Combos to Routes, and promoted several behaviours to MUST.
+
+**Implemented in this pass** (r4 M1 + M2):
+
+- Same-format passthrough (FR-2.7/2.10) for OpenAI→OpenAI-compatible and
+  Anthropic→Anthropic, preserving unknown/provider-specific fields verbatim while
+  extracting usage.
+- Executable, three-valued Route predicates with an explanation and Dry Run
+  (FR-12.3/12.4), plus the Route Trace (FR-12.14) and a bounded metadata-only
+  flight recorder (FR-13), retrievable at
+  `/admin/api/requests/{id}/route-trace` and `.../diagnostics`.
+- Explicit commit-point state machine (FR-4.5): retry/fallback only before the
+  first client byte; post-commit failures terminate the stream with a
+  format-correct error (never spliced), with separate before-/after-commit and
+  cancellation metrics.
+- `strip_with_warning` portability policy (FR-2.11): non-portable reasoning/
+  thinking signatures are removed on cross-provider fallback with a recorded
+  trace warning and an `X-Kinetix-Warning` response header; `reject` is the
+  alternative.
+- Topology hiding (FR-12.15): clients see `X-Kinetix-Route-Id` (opaque
+  `krt_…`), not the serving account/provider.
+- Usage confidence states (FR-6.2/6.8): provider-reported vs unknown tokens; cost
+  is unknown (not zero) when prices are missing.
+- Validate/Dry Run (FR-8.6/8.7): `/admin/api/validate`,
+  `/admin/api/routes/dry-run` (ASN shown as unknown when it cannot be resolved).
+- Outbound security (NFR-3): zero-redirect default, credential host binding,
+  connect-time DNS re-check, and an explicit insecure-TLS dev mode.
+- Cache-aware sticky routing (FR-7.3) keyed on an explicit session header.
+- Protocol torture + fuzz tests (FR-9.4/9.5) over a byte-robust SSE framer.
+- Data-plane/control-plane separation (NFR-2.6/2.7): `/healthz` distinguishes
+  serviceability from degraded control-plane state; admin login fails closed
+  when the store is down, while inference keeps serving from the in-memory
+  snapshot and `/metrics` reports `kinetix_control_plane_degraded`.
+- Immutable per-request config snapshots (NFR-2.10/FR-10.13): every request
+  captures one `Arc<Snapshot>` for its whole lifetime, so config edits never
+  affect in-flight work; the snapshot is reloaded every second so time-based
+  account recovery and out-of-band edits are visible within 1s (NFR-2.8).
+- Bounded half-open circuit-breaker recovery probing (FR-4.7): an account whose
+  circuit has opened is retried at most once every few seconds; a successful
+  probe clears the breaker.
+- Cancellation latency (NFR-1.10): a response-body drop-guard signals the driver
+  the instant the client goes away, so upstream cancellation is immediate
+  (measured ~0ms signal latency in the cancellation benchmark).
+- A synthetic-upstream benchmark harness (`scripts/bench.sh`,
+  `scripts/synthetic_upstream.py`, `scripts/bench_client.py`,
+  `scripts/cancel_bench.py`) covering passthrough, translation, tools, large
+  bodies, and client-disconnect cancellation against NFR-1.
+
+**Deferred** (documented, not silently dropped): local response caching (removed
+from v1, FR-7.6), budget reservation (FR-6.9), and the M4 polish items
+(config export/import FR-10.12, per-key IP allowlist FR-3.4, webhook alerts
+FR-6.6/12.17, the live request view FR-8.3). See the r4 requirements document for
+the full delta.

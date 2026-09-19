@@ -190,6 +190,9 @@ pub struct ProviderRow {
     pub models_path: Option<String>,
     pub rate_limit_rules: String,
     pub enabled: i64,
+    pub follow_redirects: i64,
+    pub credential_hosts: String,
+    pub allow_insecure_tls: i64,
     pub created_at: String,
 }
 
@@ -205,6 +208,42 @@ impl ProviderRow {
     }
     pub fn strict(&self) -> bool {
         self.capability_mode == "strict"
+    }
+    /// NFR-3.10: redirects are followed only when explicitly enabled.
+    pub fn follows_redirects(&self) -> bool {
+        self.follow_redirects != 0
+    }
+    /// NFR-3.12: TLS verification may only be disabled in an explicit dev mode.
+    pub fn insecure_tls(&self) -> bool {
+        self.allow_insecure_tls != 0
+    }
+    /// NFR-3.11: the host(s) a credential is authorized for. Empty means the
+    /// provider's own base_url host only.
+    pub fn credential_hosts(&self) -> Vec<String> {
+        self.credential_hosts
+            .split(',')
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect()
+    }
+    /// The host of the provider's configured base URL.
+    pub fn base_host(&self) -> Option<String> {
+        url::Url::parse(&self.base_url)
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_string()))
+    }
+    /// Whether a destination host is authorized to receive this provider's
+    /// credential (NFR-3.11).
+    pub fn host_authorized(&self, host: &str) -> bool {
+        let host = host.to_ascii_lowercase();
+        if let Some(base) = self.base_host() {
+            if base.to_ascii_lowercase() == host {
+                return true;
+            }
+        }
+        self.credential_hosts()
+            .iter()
+            .any(|h| h.to_ascii_lowercase() == host)
     }
 }
 
@@ -235,6 +274,9 @@ pub struct NewProvider<'a> {
     pub capability_mode: &'a str,
     pub models_path: Option<&'a str>,
     pub rate_limit_rules: Value,
+    pub follow_redirects: bool,
+    pub credential_hosts: &'a str,
+    pub allow_insecure_tls: bool,
 }
 
 pub async fn insert_provider(pool: &Pool, p: &NewProvider<'_>) -> Result<String> {
@@ -242,8 +284,9 @@ pub async fn insert_provider(pool: &Pool, p: &NewProvider<'_>) -> Result<String>
     sqlx::query(
         "INSERT INTO providers
          (id, name, base_url, wire_format, auth_scheme, custom_header_name, custom_param_name,
-          extra_headers, timeout_ms, capability_mode, models_path, rate_limit_rules, enabled, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?)",
+          extra_headers, timeout_ms, capability_mode, models_path, rate_limit_rules, enabled,
+          follow_redirects, credential_hosts, allow_insecure_tls, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)",
     )
     .bind(&id)
     .bind(p.name)
@@ -257,6 +300,9 @@ pub async fn insert_provider(pool: &Pool, p: &NewProvider<'_>) -> Result<String>
     .bind(p.capability_mode)
     .bind(p.models_path)
     .bind(p.rate_limit_rules.to_string())
+    .bind(p.follow_redirects as i64)
+    .bind(p.credential_hosts)
+    .bind(p.allow_insecure_tls as i64)
     .bind(now_iso())
     .execute(pool)
     .await?;
@@ -285,10 +331,14 @@ pub async fn update_provider(
     timeout_ms: i64,
     capability_mode: &str,
     models_path: Option<&str>,
+    follow_redirects: bool,
+    credential_hosts: &str,
+    allow_insecure_tls: bool,
 ) -> Result<()> {
     sqlx::query(
         "UPDATE providers SET name=?, base_url=?, wire_format=?, auth_scheme=?, custom_header_name=?,
-         custom_param_name=?, extra_headers=?, timeout_ms=?, capability_mode=?, models_path=? WHERE id=?",
+         custom_param_name=?, extra_headers=?, timeout_ms=?, capability_mode=?, models_path=?,
+         follow_redirects=?, credential_hosts=?, allow_insecure_tls=? WHERE id=?",
     )
     .bind(name)
     .bind(base_url)
@@ -300,6 +350,9 @@ pub async fn update_provider(
     .bind(timeout_ms)
     .bind(capability_mode)
     .bind(models_path)
+    .bind(follow_redirects as i64)
+    .bind(credential_hosts)
+    .bind(allow_insecure_tls as i64)
     .bind(id)
     .execute(pool)
     .await?;
@@ -336,6 +389,8 @@ pub struct AccountRow {
     pub weight: i64,
     pub last_error: Option<String>,
     pub last_probe_at: Option<String>,
+    pub circuit_open_until: Option<String>,
+    pub consecutive_failures: i64,
     pub created_at: String,
 }
 
@@ -430,6 +485,22 @@ pub async fn set_account_status(
     quota_reset_at: Option<&str>,
     last_error: Option<&str>,
 ) -> Result<()> {
+    // A healthy status is a recovery: clear any lingering circuit window so
+    // `effective_status` reports Healthy again (FR-4.7).
+    if status == "healthy" {
+        sqlx::query(
+            "UPDATE accounts SET status=?, cooldown_until=?, quota_reset_at=?, last_error=?, \
+             circuit_open_until=NULL, consecutive_failures=0 WHERE id=?",
+        )
+        .bind(status)
+        .bind(cooldown_until)
+        .bind(quota_reset_at)
+        .bind(last_error)
+        .bind(id)
+        .execute(pool)
+        .await?;
+        return Ok(());
+    }
     sqlx::query(
         "UPDATE accounts SET status=?, cooldown_until=?, quota_reset_at=?, last_error=? WHERE id=?",
     )
@@ -445,6 +516,54 @@ pub async fn set_account_status(
 
 pub async fn delete_account(pool: &Pool, id: &str) -> Result<()> {
     sqlx::query("DELETE FROM accounts WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Bump the consecutive-failure counter and open the circuit when the
+/// threshold is reached (FR-4.7). Returns the new failure count.
+pub async fn record_account_failure(
+    pool: &Pool,
+    id: &str,
+    circuit_threshold: i64,
+    open_secs: i64,
+) -> Result<i64> {
+    sqlx::query("UPDATE accounts SET consecutive_failures = consecutive_failures + 1 WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    let row = sqlx::query("SELECT consecutive_failures FROM accounts WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    let n = row.map(|r| r.get::<i64, _>("consecutive_failures")).unwrap_or(0);
+    if n >= circuit_threshold {
+        let until = (Utc::now() + chrono::Duration::seconds(open_secs)).to_rfc3339();
+        sqlx::query("UPDATE accounts SET circuit_open_until = ? WHERE id = ?")
+            .bind(until)
+            .bind(id)
+            .execute(pool)
+            .await?;
+    }
+    Ok(n)
+}
+
+/// Clear the circuit breaker and failure counter after a successful probe.
+pub async fn reset_account_failures(pool: &Pool, id: &str) -> Result<()> {
+    sqlx::query("UPDATE accounts SET consecutive_failures = 0, circuit_open_until = NULL WHERE id = ?")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Record the instant an account was last actively probed (half-open recovery,
+/// FR-4.7). Kept separate from the status write so it is a pure timestamp touch.
+pub async fn touch_probe_at(pool: &Pool, id: &str) -> Result<()> {
+    sqlx::query("UPDATE accounts SET last_probe_at = ? WHERE id = ?")
+        .bind(Utc::now().to_rfc3339())
         .bind(id)
         .execute(pool)
         .await?;
@@ -710,10 +829,23 @@ pub struct RouteRow {
     pub strategy: String,
     pub fallback_triggers: String,
     pub continuity_policy: String,
+    pub portability_policy: String,
     pub sticky_routing: i64,
+    pub cache_affinity: i64,
     pub max_attempts: Option<i64>,
     pub enabled: i64,
     pub created_at: String,
+}
+
+impl RouteRow {
+    /// The configured policy for non-portable opaque state (FR-2.11).
+    /// Accepts `reject` or `strip_with_warning`.
+    pub fn portability(&self) -> &str {
+        match self.portability_policy.as_str() {
+            "reject" => "reject",
+            _ => "strip_with_warning",
+        }
+    }
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
@@ -725,6 +857,7 @@ pub struct RouteTargetRow {
     pub priority: i64,
     pub weight: i64,
     pub param_overrides: String,
+    pub predicate: String,
 }
 
 pub async fn list_routes(pool: &Pool) -> Result<Vec<RouteRow>> {
@@ -764,15 +897,17 @@ pub struct NewRoute<'a> {
     pub strategy: &'a str,
     pub fallback_triggers: Value,
     pub continuity_policy: &'a str,
+    pub portability_policy: &'a str,
     pub sticky_routing: bool,
+    pub cache_affinity: bool,
     pub max_attempts: Option<i64>,
 }
 
 pub async fn insert_route(pool: &Pool, c: &NewRoute<'_>) -> Result<String> {
     let id = format!("route_{}", uuid::Uuid::new_v4().simple());
     sqlx::query(
-        "INSERT INTO routes (id, name, description, strategy, fallback_triggers, continuity_policy, sticky_routing, max_attempts, enabled, created_at)
-         VALUES (?,?,?,?,?,?,?,?,1,?)",
+        "INSERT INTO routes (id, name, description, strategy, fallback_triggers, continuity_policy, portability_policy, sticky_routing, cache_affinity, max_attempts, enabled, created_at)
+         VALUES (?,?,?,?,?,?,?,?,?,?,1,?)",
     )
     .bind(&id)
     .bind(c.name)
@@ -780,7 +915,9 @@ pub async fn insert_route(pool: &Pool, c: &NewRoute<'_>) -> Result<String> {
     .bind(c.strategy)
     .bind(c.fallback_triggers.to_string())
     .bind(c.continuity_policy)
+    .bind(c.portability_policy)
     .bind(c.sticky_routing as i64)
+    .bind(c.cache_affinity as i64)
     .bind(c.max_attempts)
     .bind(now_iso())
     .execute(pool)
@@ -795,17 +932,21 @@ pub async fn update_route(
     strategy: &str,
     fallback_triggers: Value,
     continuity_policy: &str,
+    portability_policy: &str,
     sticky_routing: bool,
+    cache_affinity: bool,
     max_attempts: Option<i64>,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE routes SET description=?, strategy=?, fallback_triggers=?, continuity_policy=?, sticky_routing=?, max_attempts=? WHERE id=?",
+        "UPDATE routes SET description=?, strategy=?, fallback_triggers=?, continuity_policy=?, portability_policy=?, sticky_routing=?, cache_affinity=?, max_attempts=? WHERE id=?",
     )
     .bind(description)
     .bind(strategy)
     .bind(fallback_triggers.to_string())
     .bind(continuity_policy)
+    .bind(portability_policy)
     .bind(sticky_routing as i64)
+    .bind(cache_affinity as i64)
     .bind(max_attempts)
     .bind(id)
     .execute(pool)
@@ -828,10 +969,12 @@ pub async fn insert_route_target(
     model_id: &str,
     priority: i64,
     weight: i64,
+    predicate: &str,
+    param_overrides: &str,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO route_targets (id, route_id, account_id, model_id, priority, weight, param_overrides)
-         VALUES (?,?,?,?,?,?,'{}')",
+        "INSERT INTO route_targets (id, route_id, account_id, model_id, priority, weight, param_overrides, predicate)
+         VALUES (?,?,?,?,?,?,?,?)",
     )
     .bind(format!("tgt_{}", uuid::Uuid::new_v4().simple()))
     .bind(route_id)
@@ -839,6 +982,8 @@ pub async fn insert_route_target(
     .bind(model_id)
     .bind(priority)
     .bind(weight)
+    .bind(param_overrides)
+    .bind(predicate)
     .execute(pool)
     .await?;
     Ok(())
@@ -888,6 +1033,11 @@ pub struct UsageLogRow {
     pub upstream_request_id: Option<String>,
     pub flagged: i64,
     pub error_message: Option<String>,
+    pub usage_confidence: String,
+    pub commit_state: String,
+    pub retry_count: i64,
+    pub route_trace_id: Option<String>,
+    pub opaque_route_id: Option<String>,
 }
 
 pub async fn insert_usage_log(pool: &Pool, u: &UsageLogRow) -> Result<()> {
@@ -896,8 +1046,9 @@ pub async fn insert_usage_log(pool: &Pool, u: &UsageLogRow) -> Result<()> {
         (id, request_id, ts, key_id, key_name, client_format, requested_model, effective_model, route_id,
          route_name, fallback_hops, fallback_path, status, status_code, latency_ms, ttft_ms, input_tokens,
          output_tokens, cached_tokens, thinking_tokens, cost_usd, cost_known, price_version_id, cache_status,
-         serving_account_id, serving_account, serving_provider, upstream_request_id, flagged, error_message)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+         serving_account_id, serving_account, serving_provider, upstream_request_id, flagged, error_message,
+         usage_confidence, commit_state, retry_count, route_trace_id, opaque_route_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
     )
     .bind(&u.id)
     .bind(&u.request_id)
@@ -929,6 +1080,11 @@ pub async fn insert_usage_log(pool: &Pool, u: &UsageLogRow) -> Result<()> {
     .bind(&u.upstream_request_id)
     .bind(u.flagged)
     .bind(&u.error_message)
+    .bind(&u.usage_confidence)
+    .bind(&u.commit_state)
+    .bind(u.retry_count)
+    .bind(&u.route_trace_id)
+    .bind(&u.opaque_route_id)
     .execute(pool)
     .await?;
     Ok(())
@@ -951,7 +1107,8 @@ pub async fn usage_summary(pool: &Pool) -> Result<Value> {
             COALESCE(SUM(output_tokens),0) as output_tokens,
             COALESCE(SUM(cached_tokens),0) as cached_tokens,
             COALESCE(SUM(thinking_tokens),0) as thinking_tokens,
-            COALESCE(SUM(cost_usd),0.0) as cost_usd,
+            COALESCE(SUM(CASE WHEN cost_known != 0 THEN cost_usd ELSE 0.0 END),0.0) as cost_usd,
+            COALESCE(SUM(CASE WHEN cost_known = 0 THEN 1 ELSE 0 END),0) as unknown_cost_rows,
             COALESCE(SUM(fallback_hops),0) as fallback_hops,
             COALESCE(AVG(latency_ms),0.0) as avg_latency
          FROM usage_logs",
@@ -965,6 +1122,10 @@ pub async fn usage_summary(pool: &Pool) -> Result<Value> {
         "cached_tokens": row.get::<i64, _>("cached_tokens"),
         "thinking_tokens": row.get::<i64, _>("thinking_tokens"),
         "cost_usd": row.get::<f64, _>("cost_usd"),
+        // USD totals are only meaningful for priced usage; unknown-cost rows
+        // are counted separately so a total is never read as complete
+        // (FR-6.3/6.9).
+        "unknown_cost_requests": row.get::<i64, _>("unknown_cost_rows"),
         "fallback_hops": row.get::<i64, _>("fallback_hops"),
         "avg_latency_ms": row.get::<f64, _>("avg_latency"),
     }))
@@ -1180,4 +1341,105 @@ pub async fn set_setting(pool: &Pool, key: &str, value: &str) -> Result<()> {
 
 pub fn parse_dt(s: &str) -> Option<DateTime<Utc>> {
     DateTime::parse_from_rfc3339(s).ok().map(|d| d.with_timezone(&Utc))
+}
+
+// ===========================================================================
+// Route traces (FR-12.14) and flight events (FR-13)
+// ===========================================================================
+
+pub async fn insert_route_trace(pool: &Pool, t: &crate::trace::RouteTrace) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO route_traces
+         (id, request_id, opaque_route_id, ts, requested_model, route_id, route_name, final_target,
+          commit_state, outcome, steps, warnings)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+    )
+    .bind(&t.opaque_route_id)
+    .bind(&t.request_id)
+    .bind(&t.opaque_route_id)
+    .bind(now_iso())
+    .bind(&t.requested_model)
+    .bind(&t.route_id)
+    .bind(&t.route_name)
+    .bind(&t.final_target)
+    .bind(&t.commit_state)
+    .bind(&t.outcome)
+    .bind(t.steps_json())
+    .bind(t.warnings_json())
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct RouteTraceRow {
+    pub id: String,
+    pub request_id: String,
+    pub opaque_route_id: String,
+    pub ts: String,
+    pub requested_model: String,
+    pub route_id: Option<String>,
+    pub route_name: Option<String>,
+    pub final_target: Option<String>,
+    pub commit_state: String,
+    pub outcome: String,
+    pub steps: String,
+    pub warnings: String,
+}
+
+pub async fn get_route_trace_by_request(
+    pool: &Pool,
+    request_id: &str,
+) -> Result<Option<RouteTraceRow>> {
+    Ok(sqlx::query_as::<_, RouteTraceRow>(
+        "SELECT * FROM route_traces WHERE request_id = ? ORDER BY ts DESC LIMIT 1",
+    )
+    .bind(request_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn get_route_trace_by_opaque(
+    pool: &Pool,
+    opaque_route_id: &str,
+) -> Result<Option<RouteTraceRow>> {
+    Ok(sqlx::query_as::<_, RouteTraceRow>(
+        "SELECT * FROM route_traces WHERE opaque_route_id = ? LIMIT 1",
+    )
+    .bind(opaque_route_id)
+    .fetch_optional(pool)
+    .await?)
+}
+
+pub async fn insert_flight_event(
+    pool: &Pool,
+    request_id: &str,
+    seq: i64,
+    event: &str,
+    detail: &str,
+    elapsed_ms: i64,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO flight_events (id, request_id, ts, seq, event, detail, elapsed_ms)
+         VALUES (?,?,?,?,?,?,?)",
+    )
+    .bind(format!("flight_{}", uuid::Uuid::new_v4().simple()))
+    .bind(request_id)
+    .bind(now_iso())
+    .bind(seq)
+    .bind(event)
+    .bind(detail)
+    .bind(elapsed_ms)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn purge_old_route_traces(pool: &Pool, retain_days: i64) -> Result<u64> {
+    let cutoff = (Utc::now() - chrono::Duration::days(retain_days)).to_rfc3339();
+    let res = sqlx::query("DELETE FROM route_traces WHERE ts < ?")
+        .bind(cutoff)
+        .execute(pool)
+        .await?;
+    Ok(res.rows_affected())
 }

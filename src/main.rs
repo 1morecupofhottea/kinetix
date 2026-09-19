@@ -18,10 +18,16 @@ mod db;
 mod frontends;
 mod limits;
 mod logqueue;
+mod passthrough;
 mod pipeline;
 mod pool;
+mod predicate;
 mod registry;
 mod router;
+mod sse;
+#[cfg(test)]
+mod torture;
+mod trace;
 mod types;
 
 use std::sync::Arc;
@@ -77,11 +83,34 @@ async fn main() -> Result<()> {
         .pool_idle_timeout(Duration::from_secs(90))
         .connect_timeout(Duration::from_secs(10))
         .http2_adaptive_window(true)
+        .redirect(reqwest::redirect::Policy::none())
         .user_agent(concat!("kinetix/", env!("CARGO_PKG_VERSION")))
         .build()
         .context("building HTTP client")?;
 
-    let state = AppState::new(config.clone(), pool.clone(), registry.clone(), crypto, http, log_queue);
+    // A separate client that follows redirects, used only for providers that
+    // explicitly opt in (NFR-3.10). Redirect targets are revalidated by the
+    // credential-host-binding check in the pipeline before any credential is
+    // attached; this client is never used for credential-bearing calls to an
+    // unauthorized host because the check runs first.
+    let http_redirect = reqwest::Client::builder()
+        .pool_max_idle_per_host(16)
+        .pool_idle_timeout(Duration::from_secs(90))
+        .connect_timeout(Duration::from_secs(10))
+        .redirect(reqwest::redirect::Policy::limited(5))
+        .user_agent(concat!("kinetix/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("building redirect HTTP client")?;
+
+    let state = AppState::new(
+        config.clone(),
+        pool.clone(),
+        registry.clone(),
+        crypto,
+        http,
+        http_redirect,
+        log_queue,
+    );
 
     // Background tasks.
     spawn_background_tasks(state.clone());
@@ -114,21 +143,26 @@ fn init_tracing(json: bool) {
 }
 
 fn spawn_background_tasks(state: AppState) {
-    // Periodically reload the registry so cooldown/quota expiry and any
-    // out-of-band DB edits are reflected (state changes are visible within 1s
-    // because failures reload eagerly; this catches time-based recovery).
+    // Reload the registry frequently so time-based account recovery (cooldown
+    // and quota windows) is reflected quickly, and so control-plane edits made
+    // out of band are picked up. Reloading does no writes and only swaps an
+    // immutable snapshot, so a short interval is cheap (NFR-2.8: health-state
+    // changes visible within 1s; NFR-2.10: in-flight requests unaffected).
     let st = state.clone();
     tokio::spawn(async move {
-        let mut tick = tokio::time::interval(Duration::from_secs(30));
+        let mut tick = tokio::time::interval(Duration::from_millis(1000));
         loop {
             tick.tick().await;
             if let Err(e) = st.registry.reload(&st.pool).await {
-                tracing::warn!(error = %e, "registry reload failed");
+                // Control-plane degradation must not fail serving (NFR-2.6/2.7).
+                tracing::warn!(error = %e, "registry reload failed; continuing on last snapshot");
             }
+            // Bound the prompt-cache-affinity map (FR-7.3).
+            st.sticky_sweep(Duration::from_secs(30 * 60));
         }
     });
 
-    // Purge expired body logs (FR-6.5 retention).
+    // Purge expired body logs (FR-6.5 retention) and old route traces.
     let st = state.clone();
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(Duration::from_secs(3600));
@@ -138,8 +172,17 @@ fn spawn_background_tasks(state: AppState) {
                 Ok(n) if n > 0 => tracing::info!(purged = n, "purged expired body logs"),
                 _ => {}
             }
+            if let Ok(n) = db::purge_old_route_traces(&st.pool, 30).await {
+                if n > 0 {
+                    tracing::info!(purged = n, "purged old route traces");
+                }
+            }
         }
     });
+
+    // Recover cooled-down / exhausted accounts whose windows have elapsed
+    // (FR-12.9): recovery is bounded by the registry reload above, which flips
+    // `effective_status` back to healthy automatically once the window passes.
 }
 
 async fn shutdown_signal() {

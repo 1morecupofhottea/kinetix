@@ -164,6 +164,19 @@ pub fn aggregate(
                     .collect();
                 message["tool_calls"] = Value::Array(tcs);
             }
+            let mut usage_obj = serde_json::json!({
+                "prompt_tokens": usage.input.unwrap_or(0),
+                "completion_tokens": usage.output.unwrap_or(0),
+                "total_tokens": usage.input.unwrap_or(0) + usage.output.unwrap_or(0),
+            });
+            // Unknown means unknown (FR-6.2/6.8): only emit detail fields the
+            // upstream actually reported, never a coerced zero.
+            if let Some(c) = usage.cached {
+                usage_obj["prompt_tokens_details"] = serde_json::json!({ "cached_tokens": c });
+            }
+            if let Some(t) = usage.thinking {
+                usage_obj["completion_tokens_details"] = serde_json::json!({ "reasoning_tokens": t });
+            }
             serde_json::json!({
                 "id": format!("chatcmpl-{}", request_id.replace(['-','_'], "")),
                 "object": "chat.completion",
@@ -174,20 +187,14 @@ pub fn aggregate(
                     "message": message,
                     "finish_reason": openai_finish_str(&finish)
                 }],
-                "usage": {
-                    "prompt_tokens": usage.input.unwrap_or(0),
-                    "completion_tokens": usage.output.unwrap_or(0),
-                    "total_tokens": usage.input.unwrap_or(0) + usage.output.unwrap_or(0),
-                    "prompt_tokens_details": { "cached_tokens": usage.cached.unwrap_or(0) },
-                    "completion_tokens_details": { "reasoning_tokens": usage.thinking.unwrap_or(0) }
-                }
+                "usage": usage_obj
             })
         }
         FrontendFormat::Anthropic => {
             let mut blocks: Vec<Value> = Vec::new();
             let mut cur_tool: Option<(u32, String, String, String)> = None;
             let mut finish = FinishReason::Stop;
-            let mut push_tool = |cur: &mut Option<(u32, String, String, String)>, blocks: &mut Vec<Value>| {
+            let push_tool = |cur: &mut Option<(u32, String, String, String)>, blocks: &mut Vec<Value>| {
                 if let Some((_, id, name, args)) = cur.take() {
                     let input: Value = serde_json::from_str(&args).unwrap_or(serde_json::json!({}));
                     blocks.push(serde_json::json!({

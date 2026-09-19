@@ -257,6 +257,9 @@ pub struct InternalRequest {
     pub thinking: Option<ThinkingLevel>,
     /// Fields the client sent that we did not model; forwarded or stripped per config.
     pub extra: serde_json::Map<String, serde_json::Value>,
+    /// The original client body (JSON string), kept for same-format passthrough
+    /// so unknown/provider-specific fields survive (FR-2.7, FR-2.10).
+    pub raw_body: Option<String>,
 }
 
 impl InternalRequest {
@@ -415,6 +418,8 @@ pub enum ErrorKind {
     Upstream,
     AllTargetsUnavailable,
     Internal,
+    /// Control-plane/administrative surface is degraded (NFR-2.7).
+    ServiceUnavailable,
 }
 
 #[derive(Debug, Clone)]
@@ -464,6 +469,11 @@ impl ProxyError {
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::new(ErrorKind::Internal, msg)
     }
+    /// Service temporarily degraded (control plane unavailable). Rendered as
+    /// 503 and does not affect any inference path (NFR-2.7).
+    pub fn unavailable(msg: impl Into<String>) -> Self {
+        Self::new(ErrorKind::ServiceUnavailable, msg)
+    }
     pub fn new(kind: ErrorKind, msg: impl Into<String>) -> Self {
         Self {
             kind,
@@ -480,7 +490,7 @@ impl ProxyError {
             ErrorKind::NotFound => 404,
             ErrorKind::Unsupported => 422,
             ErrorKind::RateLimited | ErrorKind::BudgetExceeded => 429,
-            ErrorKind::AllTargetsUnavailable => 503,
+            ErrorKind::AllTargetsUnavailable | ErrorKind::ServiceUnavailable => 503,
             ErrorKind::Upstream | ErrorKind::Internal => 502,
         }
     }
