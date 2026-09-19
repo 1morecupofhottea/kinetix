@@ -41,12 +41,12 @@ pub fn models_body(format: FrontendFormat, registry: &Registry, key_allowed: &[S
     let snap = registry.snapshot();
     let created = chrono::Utc::now().timestamp();
 
-    // Client-facing names: aliases and combos first, then bare upstream model IDs.
+    // Client-facing names: aliases and routes first, then bare upstream model IDs.
     let mut entries: Vec<(String, Option<i64>, Option<i64>)> = Vec::new();
     for alias in snap.aliases.values() {
         let (ctx, max) = match alias.target_type.as_str() {
-            "combo" => snap
-                .combos
+            "route" => snap
+                .routes
                 .get(&alias.target_id)
                 .map(|_| (None, None))
                 .unwrap_or((None, None)),
@@ -58,9 +58,9 @@ pub fn models_body(format: FrontendFormat, registry: &Registry, key_allowed: &[S
         };
         entries.push((alias.alias.clone(), ctx, max));
     }
-    for combo in snap.combos.values() {
-        if combo.enabled != 0 && !entries.iter().any(|(n, _, _)| n == &combo.name) {
-            entries.push((combo.name.clone(), None, None));
+    for route in snap.routes.values() {
+        if route.enabled != 0 && !entries.iter().any(|(n, _, _)| n == &route.name) {
+            entries.push((route.name.clone(), None, None));
         }
     }
     for m in snap.models.values() {

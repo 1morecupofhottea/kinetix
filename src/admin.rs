@@ -1246,16 +1246,16 @@ pub async fn delete_account(
 }
 
 // ===========================================================================
-// Combos
+// Routes
 // ===========================================================================
 
-pub async fn list_combos(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
-    let combos = db::list_combos(&state.pool).await.map_err(ApiError::internal)?;
+pub async fn list_routes(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
+    let routes = db::list_routes(&state.pool).await.map_err(ApiError::internal)?;
     let accounts = db::list_accounts(&state.pool).await.map_err(ApiError::internal)?;
     let models = db::list_models(&state.pool).await.map_err(ApiError::internal)?;
     let mut out = Vec::new();
-    for c in &combos {
-        let targets = db::combo_targets(&state.pool, &c.id).await.map_err(ApiError::internal)?;
+    for c in &routes {
+        let targets = db::route_targets(&state.pool, &c.id).await.map_err(ApiError::internal)?;
         let targets_json: Vec<Value> = targets
             .iter()
             .map(|t| {
@@ -1286,11 +1286,11 @@ pub async fn list_combos(State(state): State<AppState>, _auth: AdminAuth) -> Api
             "targets": targets_json,
         }));
     }
-    Ok(Json(json!({ "combos": out })))
+    Ok(Json(json!({ "routes": out })))
 }
 
 #[derive(Deserialize)]
-pub struct ComboBody {
+pub struct RouteBody {
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -1304,7 +1304,7 @@ pub struct ComboBody {
     pub sticky_routing: bool,
     pub max_attempts: Option<i64>,
     #[serde(default)]
-    pub targets: Vec<ComboTargetBody>,
+    pub targets: Vec<RouteTargetBody>,
 }
 
 fn priority_strategy() -> String {
@@ -1315,7 +1315,7 @@ fn strip_policy() -> String {
 }
 
 #[derive(Deserialize)]
-pub struct ComboTargetBody {
+pub struct RouteTargetBody {
     pub account_id: Option<String>,
     pub model_id: String,
     #[serde(default = "one")]
@@ -1324,14 +1324,14 @@ pub struct ComboTargetBody {
     pub weight: i64,
 }
 
-pub async fn create_combo(
+pub async fn create_route(
     State(state): State<AppState>,
     _auth: AdminAuth,
-    Json(body): Json<ComboBody>,
+    Json(body): Json<RouteBody>,
 ) -> ApiResult {
-    let id = db::insert_combo(
+    let id = db::insert_route(
         &state.pool,
-        &db::NewCombo {
+        &db::NewRoute {
             name: &body.name,
             description: &body.description,
             strategy: &body.strategy,
@@ -1347,28 +1347,28 @@ pub async fn create_combo(
     )
     .await
     .map_err(ApiError::internal)?;
-    write_combo_targets(&state.pool, &id, &body.targets).await?;
+    write_route_targets(&state.pool, &id, &body.targets).await?;
     let _ = db::insert_audit(
         &state.pool,
         "admin",
-        "combo_created",
-        "combo",
+        "route_created",
+        "route",
         &id,
         &body.name,
-        &format!("Created combo with {} targets.", body.targets.len()),
+        &format!("Created route with {} targets.", body.targets.len()),
     )
     .await;
     state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
     Ok(Json(json!({ "id": id })))
 }
 
-pub async fn update_combo(
+pub async fn update_route(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Path(id): Path<String>,
-    Json(body): Json<ComboBody>,
+    Json(body): Json<RouteBody>,
 ) -> ApiResult {
-    db::update_combo(
+    db::update_route(
         &state.pool,
         &id,
         &body.description,
@@ -1380,27 +1380,27 @@ pub async fn update_combo(
     )
     .await
     .map_err(ApiError::internal)?;
-    db::clear_combo_targets(&state.pool, &id).await.map_err(ApiError::internal)?;
-    write_combo_targets(&state.pool, &id, &body.targets).await?;
+    db::clear_route_targets(&state.pool, &id).await.map_err(ApiError::internal)?;
+    write_route_targets(&state.pool, &id, &body.targets).await?;
     let _ = db::insert_audit(
         &state.pool,
         "admin",
-        "combo_updated",
-        "combo",
+        "route_updated",
+        "route",
         &id,
         &body.name,
-        "Updated combo configuration.",
+        "Updated route configuration.",
     )
     .await;
     state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn write_combo_targets(pool: &Pool, combo_id: &str, targets: &[ComboTargetBody]) -> Result<(), ApiError> {
+async fn write_route_targets(pool: &Pool, route_id: &str, targets: &[RouteTargetBody]) -> Result<(), ApiError> {
     for t in targets {
-        db::insert_combo_target(
+        db::insert_route_target(
             pool,
-            combo_id,
+            route_id,
             t.account_id.as_deref(),
             &t.model_id,
             t.priority,
@@ -1412,13 +1412,13 @@ async fn write_combo_targets(pool: &Pool, combo_id: &str, targets: &[ComboTarget
     Ok(())
 }
 
-pub async fn delete_combo(
+pub async fn delete_route(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Path(id): Path<String>,
 ) -> ApiResult {
-    db::delete_combo(&state.pool, &id).await.map_err(ApiError::internal)?;
-    let _ = db::insert_audit(&state.pool, "admin", "combo_deleted", "combo", &id, "", "Deleted combo.").await;
+    db::delete_route(&state.pool, &id).await.map_err(ApiError::internal)?;
+    let _ = db::insert_audit(&state.pool, "admin", "route_deleted", "route", &id, "", "Deleted route.").await;
     state.registry.reload(&state.pool).await.map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true })))
 }
@@ -1430,15 +1430,15 @@ pub async fn delete_combo(
 pub async fn list_aliases(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
     let aliases = db::list_aliases(&state.pool).await.map_err(ApiError::internal)?;
     let models = db::list_models(&state.pool).await.map_err(ApiError::internal)?;
-    let combos = db::list_combos(&state.pool).await.map_err(ApiError::internal)?;
+    let routes = db::list_routes(&state.pool).await.map_err(ApiError::internal)?;
     let out: Vec<Value> = aliases
         .iter()
         .map(|a| {
-            let display = if a.target_type == "combo" {
-                combos
+            let display = if a.target_type == "route" {
+                routes
                     .iter()
                     .find(|c| c.id == a.target_id)
-                    .map(|c| format!("Combo: {}", c.name))
+                    .map(|c| format!("Route: {}", c.name))
             } else {
                 models
                     .iter()
@@ -1538,8 +1538,8 @@ fn usage_json(u: &db::UsageLogRow) -> Value {
         "client_format": u.client_format,
         "requested_model": u.requested_model,
         "effective_model": u.effective_model,
-        "combo_id": u.combo_id,
-        "combo_name": u.combo_name,
+        "route_id": u.route_id,
+        "route_name": u.route_name,
         "fallback_hops": u.fallback_hops,
         "fallback_path": serde_json::from_str::<Value>(&u.fallback_path).unwrap_or(json!([])),
         "status": u.status,

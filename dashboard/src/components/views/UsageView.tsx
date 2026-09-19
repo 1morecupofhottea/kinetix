@@ -150,7 +150,7 @@ export const UsageView: React.FC<UsageViewProps> = ({ keys, models, requests }) 
           📌 Active Pricing Schema Reference (Versioned)
         </h4>
         <p className="text-sm font-body text-[#2d2d2d]/80 mb-3">
-          Prism / Kinetix bundles no vendor pricing assumptions. All costs are computed from your explicit rates configured in Provider settings:
+          Kinetix bundles no vendor pricing assumptions. All costs are computed from your explicit rates configured in Provider settings:
         </p>
 
         <div className="overflow-x-auto">

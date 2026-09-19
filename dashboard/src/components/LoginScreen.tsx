@@ -67,7 +67,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onLoginSucces
       <div className="absolute bottom-8 right-8 hidden md:block rotate-[3deg]">
         <div className="p-3 bg-[#e8f5e9] border-2 border-[#2d2d2d] sketch-shadow-sm rounded-lg max-w-[220px] text-xs font-mono">
           <span className="font-heading font-bold text-sm text-[#1b5e20] block mb-1">🛡️ RBAC & Audit</span>
-          Every key mutation, combo edit, and provider ping is cryptographically stamped.
+          Every key mutation, route edit, and provider ping is cryptographically stamped.
         </div>
       </div>
 
@@ -103,7 +103,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onLoginSucces
               Sign in to Gateway
             </h2>
             <p className="text-sm font-body text-[#2d2d2d]/80 mt-0.5">
-              Enter your credentials to manage routing combos, key pools, and upstream providers.
+              Enter your credentials to manage routing routes, key pools, and upstream providers.
             </p>
           </div>
 
@@ -188,7 +188,7 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({ onLogin, onLoginSucces
 
       <div className="text-xs font-mono text-[#2d2d2d]/60 text-center relative z-10 flex items-center gap-1.5">
         <ShieldCheck className="w-4 h-4 text-[#2e7d32]" />
-        Kinetix LLM Gateway v1.2 • End-to-end Local Encryption
+        Kinetix LLM Gateway v0.1 • End-to-end Local Encryption
       </div>
     </div>
   );

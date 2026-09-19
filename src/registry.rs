@@ -1,5 +1,5 @@
 //! Runtime registry: an in-memory snapshot of the admin-configured providers,
-//! accounts, models, aliases, and combos. Reloaded from the database whenever
+//! accounts, models, aliases, and routes. Reloaded from the database whenever
 //! configuration changes so edits take effect without a restart (FR-10.13).
 //!
 //! In-flight requests keep the `Arc<Registry>` snapshot they started with.
@@ -10,7 +10,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use parking_lot::RwLock;
 
-use crate::db::{self, AccountRow, AliasRow, ComboRow, ComboTargetRow, ModelRow, Pool, ProviderRow};
+use crate::db::{self, AccountRow, AliasRow, RouteRow, RouteTargetRow, ModelRow, Pool, ProviderRow};
 
 #[derive(Clone)]
 pub struct Registry {
@@ -26,18 +26,18 @@ pub struct Snapshot {
     /// (provider_id, upstream_id) -> model_id
     pub model_by_upstream: HashMap<(String, String), String>,
     pub aliases: HashMap<String, AliasRow>,
-    pub combos: HashMap<String, ComboRow>,
-    pub combo_targets: HashMap<String, Vec<ComboTargetRow>>,
+    pub routes: HashMap<String, RouteRow>,
+    pub route_targets: HashMap<String, Vec<RouteTargetRow>>,
 }
 
-/// A resolved route for a client-requested model name.
+/// A resolved routing decision for a client-requested model name.
 #[derive(Debug, Clone)]
-pub enum Route {
+pub enum Resolved {
     /// A single (provider, model) target.
     Single { provider_id: String, model_id: String },
-    /// A combo with an ordered list of targets.
-    Combo {
-        combo: ComboRow,
+    /// A route with an ordered list of targets.
+    Route {
+        route: RouteRow,
         targets: Vec<ResolvedTarget>,
     },
 }
@@ -63,7 +63,7 @@ impl Registry {
         let accounts = db::list_accounts(pool).await?;
         let models = db::list_models(pool).await?;
         let aliases = db::list_aliases(pool).await?;
-        let combos = db::list_combos(pool).await?;
+        let routes = db::list_routes(pool).await?;
 
         let mut snap = Snapshot::default();
         for p in providers {
@@ -84,10 +84,10 @@ impl Registry {
         for a in aliases {
             snap.aliases.insert(a.alias.clone(), a);
         }
-        for c in combos {
-            let targets = db::combo_targets(pool, &c.id).await?;
-            snap.combo_targets.insert(c.id.clone(), targets);
-            snap.combos.insert(c.id.clone(), c);
+        for c in routes {
+            let targets = db::route_targets(pool, &c.id).await?;
+            snap.route_targets.insert(c.id.clone(), targets);
+            snap.routes.insert(c.id.clone(), c);
         }
 
         *self.inner.write() = snap;
@@ -100,28 +100,28 @@ impl Registry {
 
     /// Resolve a client-facing model name to a route.
     ///
-    /// Order: exact alias -> combo by name -> `provider/model-id` ->
+    /// Order: exact alias -> route by name -> `provider/model-id` ->
     /// bare upstream model id (first provider that has it).
-    pub fn resolve(&self, requested: &str) -> Option<Route> {
+    pub fn resolve(&self, requested: &str) -> Option<Resolved> {
         let snap = self.inner.read();
 
         // 1. Alias table.
         if let Some(alias) = snap.aliases.get(requested) {
-            if alias.target_type == "combo" {
-                if let Some(route) = self.build_combo(&snap, &alias.target_id) {
+            if alias.target_type == "route" {
+                if let Some(route) = self.build_route(&snap, &alias.target_id) {
                     return Some(route);
                 }
             } else if let Some(m) = snap.models.get(&alias.target_id) {
-                return Some(Route::Single {
+                return Some(Resolved::Single {
                     provider_id: m.provider_id.clone(),
                     model_id: m.id.clone(),
                 });
             }
         }
 
-        // 2. Combo by name.
-        if let Some(combo) = snap.combos.values().find(|c| c.name == requested) {
-            if let Some(route) = self.build_combo(&snap, &combo.id) {
+        // 2. Route by name.
+        if let Some(route) = snap.routes.values().find(|c| c.name == requested) {
+            if let Some(route) = self.build_route(&snap, &route.id) {
                 return Some(route);
             }
         }
@@ -138,7 +138,7 @@ impl Registry {
                     .get(&(p.id.clone(), model_part.to_string()))
                 {
                     if let Some(m) = snap.models.get(mid) {
-                        return Some(Route::Single {
+                        return Some(Resolved::Single {
                             provider_id: m.provider_id.clone(),
                             model_id: m.id.clone(),
                         });
@@ -149,7 +149,7 @@ impl Registry {
 
         // 4. Bare upstream model id.
         if let Some(m) = snap.models.values().find(|m| m.upstream_id == requested) {
-            return Some(Route::Single {
+            return Some(Resolved::Single {
                 provider_id: m.provider_id.clone(),
                 model_id: m.id.clone(),
             });
@@ -158,13 +158,13 @@ impl Registry {
         None
     }
 
-    fn build_combo(&self, snap: &Snapshot, combo_id: &str) -> Option<Route> {
-        let combo = snap.combos.get(combo_id)?.clone();
-        if combo.enabled == 0 {
+    fn build_route(&self, snap: &Snapshot, route_id: &str) -> Option<Resolved> {
+        let route = snap.routes.get(route_id)?.clone();
+        if route.enabled == 0 {
             return None;
         }
         let mut targets = Vec::new();
-        for t in snap.combo_targets.get(combo_id).into_iter().flatten() {
+        for t in snap.route_targets.get(route_id).into_iter().flatten() {
             let Some(model) = snap.models.get(&t.model_id).cloned() else {
                 continue;
             };
@@ -193,7 +193,7 @@ impl Registry {
         if targets.is_empty() {
             return None;
         }
-        Some(Route::Combo { combo, targets })
+        Some(Resolved::Route { route, targets })
     }
 
     /// All enabled models the registry knows, for `/v1/models`.
@@ -215,8 +215,8 @@ impl Registry {
         self.inner.read().accounts.get(id).cloned()
     }
 
-    pub fn combo_name(&self, id: &str) -> Option<String> {
-        self.inner.read().combos.get(id).map(|c| c.name.clone())
+    pub fn route_name(&self, id: &str) -> Option<String> {
+        self.inner.read().routes.get(id).map(|c| c.name.clone())
     }
 
     pub fn aliases(&self) -> Vec<AliasRow> {

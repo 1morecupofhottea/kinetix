@@ -51,10 +51,10 @@ impl AppState {
         }
     }
 
-    /// Round-robin counter for a combo.
-    pub fn rr_counter(&self, combo_id: &str) -> Arc<AtomicU64> {
+    /// Round-robin counter for a route.
+    pub fn rr_counter(&self, route_id: &str) -> Arc<AtomicU64> {
         self.rr_counters
-            .entry(combo_id.to_string())
+            .entry(route_id.to_string())
             .or_insert_with(|| Arc::new(AtomicU64::new(0)))
             .clone()
     }

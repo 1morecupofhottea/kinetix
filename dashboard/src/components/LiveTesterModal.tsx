@@ -1,13 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { X, Play, RefreshCw, Zap, CheckCircle2, ArrowRight, AlertTriangle } from 'lucide-react';
-import { VirtualKey, Combo, ModelConfig } from '../types';
+import { VirtualKey, Route, ModelConfig } from '../types';
 import { WobblyCard, SketchButton, SketchBadge } from './HandDrawnElements';
 
 interface LiveTesterModalProps {
   isOpen: boolean;
   onClose: () => void;
   keys: VirtualKey[];
-  combos: Combo[];
+  routes: Route[];
   models: ModelConfig[];
 }
 
@@ -25,14 +25,14 @@ interface ExecMeta {
  * Sends a real request through the Kinetix pipeline via the admin-authenticated
  * `/admin/api/test-stream` endpoint. The chosen virtual key is identified by id;
  * the raw key never leaves the server (it is stored hashed). The SSE frames are
- * parsed back into text for display, and the Prism response headers are read off
+ * parsed back into text for display, and the Kinetix response headers are read off
  * the live response.
  */
 export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
   isOpen,
   onClose,
   keys,
-  combos,
+  routes,
   models,
 }) => {
   const [selectedKeyId, setSelectedKeyId] = useState(keys[0]?.id || '');
@@ -50,7 +50,7 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
   const [meta, setMeta] = useState<ExecMeta | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Keys/combos/models arrive asynchronously; default the selection once they load.
+  // Keys/routes/models arrive asynchronously; default the selection once they load.
   useEffect(() => {
     if (!selectedKeyId && keys.length > 0) setSelectedKeyId(keys[0].id);
   }, [keys, selectedKeyId]);
@@ -58,7 +58,7 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
   if (!isOpen) return null;
 
   const defaultTarget =
-    combos.find((c) => c.targets.length > 0)?.name || models[0]?.upstreamModelId || '';
+    routes.find((c) => c.targets.length > 0)?.name || models[0]?.upstreamModelId || '';
   const effectiveTarget = target || defaultTarget;
   const useRaw = authMode === 'raw';
 
@@ -122,11 +122,11 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
         body: JSON.stringify(body),
       });
 
-      const servedBy = parseServedBy(res.headers.get('x-prism-served-by') || '');
-      const fallback = res.headers.get('x-prism-fallback') || '';
+      const servedBy = parseServedBy(res.headers.get('x-kinetix-served-by') || '');
+      const fallback = res.headers.get('x-kinetix-fallback') || '';
       const parsedFallback = parseFallbackHeader(
         fallback,
-        res.headers.get('x-prism-fallback-path') || '',
+        res.headers.get('x-kinetix-fallback-path') || '',
       );
 
       if (!res.ok) {
@@ -315,7 +315,7 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
 
               <div>
                 <label className="block text-base font-heading font-bold text-[#2d2d2d] mb-1">
-                  3. Requested Model or Combo
+                  3. Requested Model or Route
                 </label>
                 <select
                   value={effectiveTarget}
@@ -323,11 +323,11 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
                   className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none focus:border-[#2d5da1]"
                   style={{ borderRadius: '255px 15px 225px 15px / 15px 225px 15px 255px' }}
                 >
-                  {combos.length > 0 && (
-                    <optgroup label="Combos (With Automatic Fallback)">
-                      {combos.map((c) => (
+                  {routes.length > 0 && (
+                    <optgroup label="Routes (With Automatic Fallback)">
+                      {routes.map((c) => (
                         <option key={c.id} value={c.name}>
-                          ⚡ Combo: {c.name} ({c.targets.length} pool targets)
+                          ⚡ Route: {c.name} ({c.targets.length} pool targets)
                         </option>
                       ))}
                     </optgroup>
@@ -546,7 +546,7 @@ function parseFallbackHeader(
   return { hops: isFinite(hops) ? hops : 0, path };
 }
 
-/** Split the `X-Prism-Served-By` header ("Account (Provider)") into its parts. */
+/** Split the `X-Kinetix-Served-By` header ("Account (Provider)") into its parts. */
 function parseServedBy(value: string): { account: string; provider: string } {
   const m = value.match(/^(.*?)\s*\((.*)\)\s*$/);
   if (m) return { account: m[1].trim(), provider: m[2].trim() };

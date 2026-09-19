@@ -1,6 +1,6 @@
 {
   "name": "Kinetix",
-  "description": "Multi-protocol LLM proxy dashboard with virtual keys, account pooling, automatic fallback combos, and cost tracking",
+  "description": "Multi-protocol LLM proxy dashboard with virtual keys, account pooling, executable Routes, and cost tracking",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }

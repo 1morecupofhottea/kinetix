@@ -5,7 +5,7 @@
 import {
   Account,
   AuditLog,
-  Combo,
+  Route,
   ModelAlias,
   ModelConfig,
   ModelPrice,
@@ -125,7 +125,7 @@ export function mapAccount(j: any): Account {
   };
 }
 
-export function mapCombo(j: any): Combo {
+export function mapRoute(j: any): Route {
   const t = j.fallback_triggers || {};
   const targets = Array.isArray(j.targets) ? j.targets : [];
   const allExhausted = false;
@@ -133,7 +133,7 @@ export function mapCombo(j: any): Combo {
     id: str(j.id),
     name: str(j.name),
     description: str(j.description),
-    selectionStrategy: (j.strategy as Combo['selectionStrategy']) || 'priority',
+    selectionStrategy: (j.strategy as Route['selectionStrategy']) || 'priority',
     fallbackTriggers: {
       on429: t.on429 !== false,
       onQuota: t.onQuota !== false,
@@ -150,7 +150,7 @@ export function mapCombo(j: any): Combo {
       priority: num(x.priority, idx + 1),
       weight: num(x.weight, 1),
     })),
-    continuityPolicy: (j.continuity_policy as Combo['continuityPolicy']) || 'strip',
+    continuityPolicy: (j.continuity_policy as Route['continuityPolicy']) || 'strip',
     stickyRouting: !!j.sticky_routing,
     totalHops: 0,
     status: allExhausted ? 'all_exhausted' : j.enabled === false ? 'degraded' : 'active',
@@ -178,7 +178,7 @@ export function mapRequest(j: any): RequestLog {
     clientFormat: (j.client_format as RequestLog['clientFormat']) || 'openai',
     requestedModel: str(j.requested_model),
     effectiveTarget: str(j.effective_model),
-    comboName: j.combo_name ?? undefined,
+    routeName: j.route_name ?? undefined,
     fallbackHops: num(j.fallback_hops),
     fallbackPath: Array.isArray(j.fallback_path) ? j.fallback_path : [],
     status: (j.status as RequestLog['status']) || 'success',

@@ -223,17 +223,17 @@ export const RequestsView: React.FC<RequestsViewProps> = ({ requests }) => {
                   )}
                 </div>
 
-                {/* HTTP Headers returned by Prism / Kinetix */}
+                {/* HTTP Headers returned by Kinetix */}
                 <div className="bg-[#fdfbf7] p-3 border border-[#2d2d2d] rounded text-xs font-mono space-y-1">
                   <strong className="font-heading text-sm text-[#2d2d2d] block mb-1">
                     Response Headers Injected by Kinetix
                   </strong>
                   <div><code>X-Request-Id: {selectedRequest.requestId}</code></div>
-                  <div><code>X-Prism-Cache: {selectedRequest.cacheStatus}</code></div>
-                  <div><code>X-Prism-Served-By: {selectedRequest.servingAccount} ({selectedRequest.servingProvider})</code></div>
+                  <div><code>X-Kinetix-Cache: {selectedRequest.cacheStatus}</code></div>
+                  <div><code>X-Kinetix-Served-By: {selectedRequest.servingAccount} ({selectedRequest.servingProvider})</code></div>
                   {selectedRequest.fallbackHops > 0 && (
                     <div className="text-[#ff4d4d] font-bold">
-                      <code>X-Prism-Fallback: true (Hops: {selectedRequest.fallbackHops})</code>
+                      <code>X-Kinetix-Fallback: true (Hops: {selectedRequest.fallbackHops})</code>
                     </div>
                   )}
                 </div>

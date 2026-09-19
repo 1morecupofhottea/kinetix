@@ -22,7 +22,7 @@ use crate::credentials::CredentialStrategy;
 use crate::db::{self, UsageLogRow};
 use crate::frontends::{self, Encoder, EncoderCtx, FrontendFormat};
 use crate::pool;
-use crate::registry::{ResolvedTarget, Route};
+use crate::registry::{Resolved, ResolvedTarget};
 use crate::types::{
     FailureKind, InternalRequest, ProxyError, StreamEvent, TokenUsage, UpstreamFailure,
 };
@@ -34,8 +34,8 @@ pub struct RequestMeta {
     pub key_name: Option<String>,
     pub client_format: &'static str,
     pub requested_model: String,
-    pub combo_id: Option<String>,
-    pub combo_name: Option<String>,
+    pub route_id: Option<String>,
+    pub route_name: Option<String>,
     pub fallback_hops: i64,
     pub fallback_path: Vec<String>,
     pub cache_status: &'static str,
@@ -49,8 +49,8 @@ impl RequestMeta {
             key_name: None,
             client_format: format.as_str(),
             requested_model,
-            combo_id: None,
-            combo_name: None,
+            route_id: None,
+            route_name: None,
             fallback_hops: 0,
             fallback_path: Vec::new(),
             cache_status: "bypass",
@@ -95,8 +95,8 @@ pub async fn run(
 
     // 2. Build the ordered attempt list.
     let needs = req.capability_needs();
-    let (mut targets, combo) = match route {
-        Route::Single {
+    let (mut targets, route) = match route {
+        Resolved::Single {
             provider_id,
             model_id,
         } => {
@@ -121,16 +121,16 @@ pub async fn run(
                 .collect();
             (targets, None)
         }
-        Route::Combo { combo, targets } => {
-            meta.combo_id = Some(combo.id.clone());
-            meta.combo_name = Some(combo.name.clone());
-            let ordered = order_combo_targets(state, &combo, targets).await;
-            (ordered, Some(combo))
+        Resolved::Route { route, targets } => {
+            meta.route_id = Some(route.id.clone());
+            meta.route_name = Some(route.name.clone());
+            let ordered = order_route_targets(state, &route, targets).await;
+            (ordered, Some(route))
         }
     };
 
-    if let Some(combo) = &combo {
-        meta.fallback_path.push(format!("combo:{}", combo.name));
+    if let Some(route) = &route {
+        meta.fallback_path.push(format!("route:{}", route.name));
     }
 
     // Filter by key provider restrictions (FR-12.15) and compatibility (FR-12.8).
@@ -156,7 +156,7 @@ pub async fn run(
         ));
     }
 
-    let max_attempts = combo
+    let max_attempts = route
         .as_ref()
         .and_then(|c| c.max_attempts)
         .map(|m| m as usize)
@@ -208,10 +208,10 @@ pub async fn run(
         };
 
         // Continuity: if we already tried a different provider, strip
-        // non-portable content per the combo policy (FR-12.10).
+        // non-portable content per the route policy (FR-12.10).
         if attempts_done > 0 {
-            if let Some(combo) = &combo {
-                apply_continuity(&mut req, combo, target);
+            if let Some(route) = &route {
+                apply_continuity(&mut req, route, target);
             }
         }
 
@@ -272,9 +272,9 @@ pub async fn run(
     // 4. Every target unavailable.
     let retry_after = pool::soonest_recovery(&all_accounts)
         .map(|t| ((t - chrono::Utc::now()).num_seconds().max(1)) as u64);
-    let name = combo
+    let name = route
         .as_ref()
-        .map(|c| format!("combo '{}'", c.name))
+        .map(|c| format!("route '{}'", c.name))
         .unwrap_or_else(|| req.requested_model.clone());
     let msg = last_error
         .map(|e| e.message)
@@ -471,15 +471,15 @@ async fn select_accounts(
     Ok(available)
 }
 
-/// Order combo targets according to the combo strategy (FR-12.2).
-async fn order_combo_targets(
+/// Order route targets according to the route strategy (FR-12.2).
+async fn order_route_targets(
     state: &AppState,
-    combo: &db::ComboRow,
+    route: &db::RouteRow,
     mut targets: Vec<ResolvedTarget>,
 ) -> Vec<ResolvedTarget> {
-    match combo.strategy.as_str() {
+    match route.strategy.as_str() {
         "round-robin" => {
-            let counter = state.rr_counter(&combo.id);
+            let counter = state.rr_counter(&route.id);
             let n = counter.fetch_add(1, Ordering::Relaxed) as usize;
             if !targets.is_empty() {
                 let offset = n % targets.len();
@@ -523,10 +523,10 @@ async fn order_combo_targets(
     targets
 }
 
-/// Apply a combo's continuity policy when falling back across providers
+/// Apply a route's continuity policy when falling back across providers
 /// (FR-12.10). `strip` removes provider-specific thinking/signature content.
-fn apply_continuity(req: &mut InternalRequest, combo: &db::ComboRow, _target: &ResolvedTarget) {
-    match combo.continuity_policy.as_str() {
+fn apply_continuity(req: &mut InternalRequest, route: &db::RouteRow, _target: &ResolvedTarget) {
+    match route.continuity_policy.as_str() {
         "convert" | "strip" => {
             for msg in &mut req.messages {
                 msg.parts.retain(|p| match p {
@@ -617,20 +617,20 @@ fn stream_response(
     // Response headers injected by Kinetix (Interfaces section).
     let mut builder = Response::builder()
         .header("x-request-id", &request_id)
-        .header("x-prism-cache", meta.cache_status)
+        .header("x-kinetix-cache", meta.cache_status)
         .header(
-            "x-prism-served-by",
+            "x-kinetix-served-by",
             format!(
                 "{} ({})",
                 attempt.target.account.label, attempt.target.provider.name
             ),
         );
     if meta.fallback_hops > 0 {
-        builder = builder.header("x-prism-fallback", meta.fallback_hops.to_string());
+        builder = builder.header("x-kinetix-fallback", meta.fallback_hops.to_string());
         // Machine-readable hop trace so the dashboard tester can show the path
         // immediately (without waiting for the async usage log to land).
         if let Ok(trace) = serde_json::to_string(&meta.fallback_path) {
-            builder = builder.header("x-prism-fallback-path", trace);
+            builder = builder.header("x-kinetix-fallback-path", trace);
         }
     }
 
@@ -925,8 +925,8 @@ async fn finalize_log(
         client_format: meta.client_format.to_string(),
         requested_model: req.requested_model.clone(),
         effective_model: Some(model_display.to_string()),
-        combo_id: meta.combo_id.clone(),
-        combo_name: meta.combo_name.clone(),
+        route_id: meta.route_id.clone(),
+        route_name: meta.route_name.clone(),
         fallback_hops: meta.fallback_hops,
         fallback_path: serde_json::to_string(&meta.fallback_path).unwrap_or_else(|_| "[]".into()),
         status: status.to_string(),

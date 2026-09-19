@@ -143,7 +143,7 @@ pub async fn healthz(State(state): State<AppState>) -> Response {
     (status, Json(body)).into_response()
 }
 
-/// Build a format-correct error response with the standard Prism headers.
+/// Build a format-correct error response with the standard Kinetix headers.
 pub fn error_response(format: FrontendFormat, request_id: &str, err: ProxyError) -> Response {
     let status = StatusCode::from_u16(err.http_status()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
     let body = frontends::models::error_body(format, &err);

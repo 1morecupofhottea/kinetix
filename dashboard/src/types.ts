@@ -6,7 +6,7 @@ export interface VirtualKey {
   name: string;
   owner: string;
   tag: string;
-  allowedModels: string[]; // ['*'] or list of model IDs / aliases / combos
+  allowedModels: string[]; // ['*'] or list of model IDs / aliases / routes
   rpmLimit: number;
   tpmLimit: number;
   dailyBudget: number; // USD
@@ -94,7 +94,7 @@ export interface ModelConfig {
   };
 }
 
-export interface ComboTarget {
+export interface RouteTarget {
   id: string;
   accountId: string;
   accountLabel: string;
@@ -105,7 +105,7 @@ export interface ComboTarget {
   weight?: number;
 }
 
-export interface Combo {
+export interface Route {
   id: string;
   name: string;
   description: string;
@@ -116,7 +116,7 @@ export interface Combo {
     on5xx: boolean;
     onTimeout: boolean;
   };
-  targets: ComboTarget[];
+  targets: RouteTarget[];
   continuityPolicy: 'strip' | 'convert' | 'error';
   stickyRouting: boolean;
   totalHops: number;
@@ -126,7 +126,7 @@ export interface Combo {
 export interface ModelAlias {
   id: string;
   aliasName: string;
-  targetType: 'model' | 'combo';
+  targetType: 'model' | 'route';
   targetId: string;
   targetDisplayName: string;
   description: string;
@@ -141,7 +141,7 @@ export interface RequestLog {
   clientFormat: 'openai' | 'anthropic';
   requestedModel: string;
   effectiveTarget: string;
-  comboName?: string;
+  routeName?: string;
   fallbackHops: number;
   fallbackPath: string[];
   status: 'success' | 'rate_limited' | 'quota_exhausted' | 'fallback_recovered' | 'client_error' | 'upstream_error';
@@ -165,7 +165,7 @@ export interface AuditLog {
   timestamp: string;
   actor: string;
   action: string;
-  targetType: 'key' | 'provider' | 'account' | 'combo' | 'alias' | 'model' | 'system';
+  targetType: 'key' | 'provider' | 'account' | 'route' | 'alias' | 'model' | 'system';
   targetId: string;
   targetName: string;
   details: string;

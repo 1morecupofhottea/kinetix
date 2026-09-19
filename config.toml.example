@@ -50,16 +50,16 @@ models_path = "/models"        # for model discovery (optional)
 # --- Aliases (stable client-facing model names) ----------------------------
 [[aliases]]
 alias = "coder"
-target_type = "model"                  # model | combo
+target_type = "model"                  # model | route
 target = "Google Gemini/gemini-3.6-flash"
 
-# --- Combos (named fallback groups across accounts/models) -----------------
-# [[combos]]
+# --- Routes (named fallback groups across accounts/models) -----------------
+# [[routes]]
 # name = "smart"
 # description = "Primary then fallback"
 # strategy = "priority"                # priority | round-robin | weighted | least-used
 # continuity_policy = "strip"          # strip | convert | error
 # max_attempts = 3
-# [[combos.targets]]
+# [[routes.targets]]
 # model = "Google Gemini/gemini-3.6-flash"
 # priority = 1

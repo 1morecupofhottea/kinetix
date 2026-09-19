@@ -12,7 +12,7 @@ import { Navbar, NavTab, TAB_ROUTES } from './components/Navbar';
 import { LiveTesterModal } from './components/LiveTesterModal';
 import { LoginScreen } from './components/LoginScreen';
 import { KeysView } from './components/views/KeysView';
-import { CombosView } from './components/views/CombosView';
+import { RoutesView } from './components/views/RoutesView';
 import { ProvidersView } from './components/views/ProvidersView';
 import { AccountsView } from './components/views/AccountsView';
 import { UsageView } from './components/views/UsageView';
@@ -25,7 +25,7 @@ import { Kinetix } from './lib/resources';
 import { ApiError } from './lib/api';
 import {
   VirtualKey,
-  Combo,
+  Route,
   Provider,
   Account,
   ModelConfig,
@@ -62,7 +62,7 @@ export default function App() {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [models, setModels] = useState<ModelConfig[]>([]);
-  const [combos, setCombos] = useState<Combo[]>([]);
+  const [routes, setRoutes] = useState<Route[]>([]);
   const [aliases, setAliases] = useState<ModelAlias[]>([]);
   const [requests, setRequests] = useState<RequestLog[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -89,7 +89,7 @@ export default function App() {
         Kinetix.providers(),
         Kinetix.accounts(),
         Kinetix.models(),
-        Kinetix.combos(),
+        Kinetix.routes(),
         Kinetix.aliases(),
         Kinetix.requests(),
         Kinetix.audit(),
@@ -99,7 +99,7 @@ export default function App() {
       setProviders(p);
       setAccounts(a);
       setModels(m);
-      setCombos(c);
+      setRoutes(c);
       setAliases(al);
       setRequests(req);
       setAuditLogs(aud);
@@ -196,16 +196,16 @@ export default function App() {
   const handleUpdateKeyStatus = (id: string, status: 'active' | 'disabled' | 'revoked') =>
     withRefresh(() => Kinetix.updateKey(id, { status }));
 
-  const handleAddCombo = (newCombo: Combo) =>
+  const handleAddRoute = (newRoute: Route) =>
     withRefresh(() =>
-      Kinetix.createCombo({
-        name: newCombo.name,
-        description: newCombo.description,
-        strategy: newCombo.selectionStrategy,
-        fallback_triggers: newCombo.fallbackTriggers,
-        continuity_policy: newCombo.continuityPolicy,
-        sticky_routing: newCombo.stickyRouting,
-        targets: newCombo.targets.map((t) => ({
+      Kinetix.createRoute({
+        name: newRoute.name,
+        description: newRoute.description,
+        strategy: newRoute.selectionStrategy,
+        fallback_triggers: newRoute.fallbackTriggers,
+        continuity_policy: newRoute.continuityPolicy,
+        sticky_routing: newRoute.stickyRouting,
+        targets: newRoute.targets.map((t) => ({
           account_id: t.accountId || null,
           model_id: t.modelId,
           priority: t.priority,
@@ -214,9 +214,9 @@ export default function App() {
       }),
     );
 
-  const handleUpdateCombo = (updated: Combo) =>
+  const handleUpdateRoute = (updated: Route) =>
     withRefresh(() =>
-      Kinetix.updateCombo(updated.id, {
+      Kinetix.updateRoute(updated.id, {
         name: updated.name,
         description: updated.description,
         strategy: updated.selectionStrategy,
@@ -232,7 +232,7 @@ export default function App() {
       }),
     );
 
-  const handleDeleteCombo = (comboId: string) => withRefresh(() => Kinetix.deleteCombo(comboId));
+  const handleDeleteRoute = (routeId: string) => withRefresh(() => Kinetix.deleteRoute(routeId));
 
   const handleAddProvider = (prov: Provider) =>
     withRefresh(() =>
@@ -345,14 +345,14 @@ export default function App() {
           <KeysView keys={keys} onAddKey={handleAddKey} onUpdateKeyStatus={handleUpdateKeyStatus} />
         )}
 
-        {activeTab === 'combos' && (
-          <CombosView
-            combos={combos}
+        {activeTab === 'routes' && (
+          <RoutesView
+            routes={routes}
             accounts={accounts}
             models={models}
-            onAddCombo={handleAddCombo}
-            onUpdateCombo={handleUpdateCombo}
-            onDeleteCombo={handleDeleteCombo}
+            onAddRoute={handleAddRoute}
+            onUpdateRoute={handleUpdateRoute}
+            onDeleteRoute={handleDeleteRoute}
           />
         )}
 
@@ -385,7 +385,7 @@ export default function App() {
         {activeTab === 'aliases' && (
           <AliasesView
             aliases={aliases}
-            combos={combos}
+            routes={routes}
             models={models}
             onAddAlias={handleAddAlias}
             onDeleteAlias={handleDeleteAlias}
@@ -431,7 +431,7 @@ export default function App() {
           refresh();
         }}
         keys={keys}
-        combos={combos}
+        routes={routes}
         models={models}
       />
     </div>

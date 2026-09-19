@@ -142,7 +142,7 @@ pub struct BootstrapConfig {
     #[serde(default)]
     pub aliases: Vec<BootstrapAlias>,
     #[serde(default)]
-    pub combos: Vec<BootstrapCombo>,
+    pub routes: Vec<BootstrapRoute>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -263,13 +263,13 @@ pub struct BootstrapPrices {
 #[derive(Debug, Clone, Deserialize)]
 pub struct BootstrapAlias {
     pub alias: String,
-    /// `model` (provider/model-id) or `combo` (combo name)
+    /// `model` (provider/model-id) or `route` (route name)
     pub target_type: String,
     pub target: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct BootstrapCombo {
+pub struct BootstrapRoute {
     pub name: String,
     #[serde(default)]
     pub description: String,
@@ -278,7 +278,7 @@ pub struct BootstrapCombo {
     #[serde(default)]
     pub continuity_policy: String,
     #[serde(default)]
-    pub targets: Vec<BootstrapComboTarget>,
+    pub targets: Vec<BootstrapRouteTarget>,
 }
 
 fn default_priority_strategy() -> String {
@@ -286,7 +286,7 @@ fn default_priority_strategy() -> String {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct BootstrapComboTarget {
+pub struct BootstrapRouteTarget {
     /// Account label (must be unique across providers).
     pub account: String,
     /// `provider/model-id`

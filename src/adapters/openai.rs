@@ -1,6 +1,6 @@
 //! OpenAI Chat Completions outbound adapter (wire format `openai`).
 //!
-//! Also used to translate for cross-provider combos (FR-12.7).
+//! Also used to translate for cross-provider routes (FR-12.7).
 
 use async_trait::async_trait;
 use serde_json::{json, Value};

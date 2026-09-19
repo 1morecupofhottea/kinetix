@@ -1,7 +1,7 @@
 //! Kinetix: a multi-protocol LLM proxy. OpenAI Chat Completions and Anthropic
 //! Messages in (streaming first), admin-configured upstreams out (Gemini,
 //! OpenAI-compatible, Anthropic), with virtual keys, account pools with
-//! automatic fallback combos, and cost tracking.
+//! automatic fallback routes, and cost tracking.
 
 mod adapters;
 mod admin;

@@ -1,7 +1,7 @@
 //! Key-pool health state and account/soft-quota bookkeeping (FR-4, FR-12).
 //!
 //! Selection is health-aware: disabled/cooldown/exhausted accounts are skipped,
-//! and selection order depends on the combo strategy. State changes are
+//! and selection order depends on the route strategy. State changes are
 //! persisted so they survive restarts (open issue: rate-limit state location).
 
 use chrono::{DateTime, Duration, Utc};

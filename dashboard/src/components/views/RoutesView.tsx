@@ -1,32 +1,32 @@
 import React, { useState } from 'react';
 import { Shuffle, Plus, ArrowDown, Shield, Check, Layers, ArrowRight, Trash2, AlertTriangle } from 'lucide-react';
-import { Combo, Account, ModelConfig } from '../../types';
+import { Route, Account, ModelConfig } from '../../types';
 import { WobblyCard, SketchButton, SketchBadge } from '../HandDrawnElements';
 import { DESIGN_TOKENS } from '../../lib/designSystem';
 
-interface CombosViewProps {
-  combos: Combo[];
+interface RoutesViewProps {
+  routes: Route[];
   accounts: Account[];
   models: ModelConfig[];
-  onAddCombo: (newCombo: Combo) => void;
-  onUpdateCombo: (updated: Combo) => void;
-  onDeleteCombo: (comboId: string) => void;
+  onAddRoute: (newRoute: Route) => void;
+  onUpdateRoute: (updated: Route) => void;
+  onDeleteRoute: (routeId: string) => void;
 }
 
-export const CombosView: React.FC<CombosViewProps> = ({
-  combos,
+export const RoutesView: React.FC<RoutesViewProps> = ({
+  routes,
   accounts,
   models,
-  onAddCombo,
-  onUpdateCombo,
-  onDeleteCombo,
+  onAddRoute,
+  onUpdateRoute,
+  onDeleteRoute,
 }) => {
   const [showCreateModal, setShowCreateModal] = useState(false);
-  const [selectedComboId, setSelectedComboId] = useState<string>(combos[0]?.id || '');
-  const [confirmDeleteComboId, setConfirmDeleteComboId] = useState<string | null>(null);
+  const [selectedRouteId, setSelectedRouteId] = useState<string>(routes[0]?.id || '');
+  const [confirmDeleteRouteId, setConfirmDeleteRouteId] = useState<string | null>(null);
   const [confirmRemoveTargetId, setConfirmRemoveTargetId] = useState<string | null>(null);
 
-  // New combo form
+  // New route form
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [strategy, setStrategy] = useState<'priority' | 'round-robin' | 'weighted' | 'least-used'>('priority');
@@ -35,7 +35,7 @@ export const CombosView: React.FC<CombosViewProps> = ({
   const [on5xx, setOn5xx] = useState(true);
   const [sticky, setSticky] = useState(true);
 
-  const activeCombo = combos.find((c) => c.id === selectedComboId) || combos[0];
+  const activeRoute = routes.find((c) => c.id === selectedRouteId) || routes[0];
 
   const handleCreateSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -52,10 +52,10 @@ export const CombosView: React.FC<CombosViewProps> = ({
       priority: idx + 1,
     }));
 
-    const newCombo: Combo = {
-      id: `combo-${Date.now()}`,
+    const newRoute: Route = {
+      id: `route-${Date.now()}`,
       name: name.trim().toLowerCase().replace(/\s+/g, '-'),
-      description: description.trim() || 'Custom fallback combo',
+      description: description.trim() || 'Custom fallback route',
       selectionStrategy: strategy,
       fallbackTriggers: {
         on429,
@@ -70,8 +70,8 @@ export const CombosView: React.FC<CombosViewProps> = ({
       status: 'active',
     };
 
-    onAddCombo(newCombo);
-    setSelectedComboId(newCombo.id);
+    onAddRoute(newRoute);
+    setSelectedRouteId(newRoute.id);
     setShowCreateModal(false);
     setName('');
     setDescription('');
@@ -83,7 +83,7 @@ export const CombosView: React.FC<CombosViewProps> = ({
       <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
         <div>
           <h2 className="text-3xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
-            <span>Combos & Automatic Fallback</span>
+            <span>Routes & Automatic Fallback</span>
             <SketchBadge variant="yellow" rotation="1deg">
               FR-12 Architecture
             </SketchBadge>
@@ -100,17 +100,17 @@ export const CombosView: React.FC<CombosViewProps> = ({
           className="gap-2 font-heading font-bold"
         >
           <Plus className="w-5 h-5" />
-          Create New Combo
+          Create New Route
         </SketchButton>
       </div>
 
-      {/* Main Grid: Combos selector on left, Deep Inspector on right */}
-      {combos.length === 0 ? (
+      {/* Main Grid: Routes selector on left, Deep Inspector on right */}
+      {routes.length === 0 ? (
         <WobblyCard decoration="tack" className="p-10 text-center bg-white">
           <Shuffle className="w-12 h-12 text-[#2d5da1] mx-auto mb-3 opacity-60" />
-          <h3 className="text-2xl font-heading font-bold text-[#2d2d2d]">No Combos Configured</h3>
+          <h3 className="text-2xl font-heading font-bold text-[#2d2d2d]">No Routes Configured</h3>
           <p className="text-base font-body text-[#2d2d2d]/80 max-w-lg mx-auto mt-2 mb-6">
-            Combos allow you to group multiple upstream provider accounts and models under one seamless model alias. If one account exhausts its quota or hits rate limits, Kinetix instantly retries on the next healthy tier.
+            Routes allow you to group multiple upstream provider accounts and models under one seamless model alias. If one account exhausts its quota or hits rate limits, Kinetix instantly retries on the next healthy tier.
           </p>
           <SketchButton
             variant="primary"
@@ -119,26 +119,26 @@ export const CombosView: React.FC<CombosViewProps> = ({
             className="gap-2 font-heading font-bold"
           >
             <Plus className="w-5 h-5" />
-            Create First Fallback Combo
+            Create First Fallback Route
           </SketchButton>
         </WobblyCard>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {/* Left Column: List of Combos */}
+          {/* Left Column: List of Routes */}
           <div className="space-y-4">
             <h3 className="text-xl font-heading font-bold text-[#2d2d2d] flex items-center gap-2">
               <Shuffle className="w-5 h-5 text-[#2d5da1]" />
-              Configured Combos ({combos.length})
+              Configured Routes ({routes.length})
             </h3>
 
-            {combos.map((combo, idx) => {
-              const isSelected = combo.id === activeCombo?.id;
+            {routes.map((route, idx) => {
+              const isSelected = route.id === activeRoute?.id;
               const tilt = idx % 2 === 0 ? '-rotate-0.5' : 'rotate-0.5';
 
               return (
                 <div
-                  key={combo.id}
-                  onClick={() => setSelectedComboId(combo.id)}
+                  key={route.id}
+                  onClick={() => setSelectedRouteId(route.id)}
                   className={`p-4 border-2 border-[#2d2d2d] cursor-pointer transition-all ${tilt} ${
                     isSelected
                       ? 'bg-[#fff9c4] sketch-shadow -translate-y-1 font-bold'
@@ -149,62 +149,62 @@ export const CombosView: React.FC<CombosViewProps> = ({
                   <div className="flex items-start justify-between gap-2">
                     <div>
                       <span className="font-mono text-sm px-2 py-0.5 bg-white border border-[#2d2d2d] rounded">
-                        {combo.name}
+                        {route.name}
                       </span>
-                      <h4 className="font-heading text-lg mt-1 text-[#2d2d2d]">{combo.description}</h4>
+                      <h4 className="font-heading text-lg mt-1 text-[#2d2d2d]">{route.description}</h4>
                     </div>
-                    <SketchBadge variant={combo.status === 'active' ? 'green' : 'red'}>
-                      {combo.status}
+                    <SketchBadge variant={route.status === 'active' ? 'green' : 'red'}>
+                      {route.status}
                     </SketchBadge>
                   </div>
 
                   <div className="mt-3 pt-2 border-t border-[#2d2d2d]/20 flex items-center justify-between text-xs font-mono text-[#2d2d2d]/70">
-                    <span>Strategy: <strong>{combo.selectionStrategy}</strong></span>
-                    <span>{combo.targets.length} targets • {combo.totalHops} hops</span>
+                    <span>Strategy: <strong>{route.selectionStrategy}</strong></span>
+                    <span>{route.targets.length} targets • {route.totalHops} hops</span>
                   </div>
                 </div>
               );
             })}
           </div>
 
-          {/* Right Column: Selected Combo Detail & Target Fallback Chain */}
-          {activeCombo && (
+          {/* Right Column: Selected Route Detail & Target Fallback Chain */}
+          {activeRoute && (
             <div className="lg:col-span-2 space-y-5">
               <WobblyCard decoration="tape" className="p-6">
                 <div className="flex flex-wrap items-start justify-between gap-4 mb-4 pb-3 border-b-2 border-dashed border-[#2d2d2d]/30">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="text-3xl font-heading font-bold text-[#2d2d2d]">
-                        Combo: <span className="underline decoration-wavy decoration-[#ff4d4d]">{activeCombo.name}</span>
+                        Route: <span className="underline decoration-wavy decoration-[#ff4d4d]">{activeRoute.name}</span>
                       </h3>
                       <SketchBadge variant="blue" rotation="-1deg">
-                        {activeCombo.selectionStrategy} strategy
+                        {activeRoute.selectionStrategy} strategy
                       </SketchBadge>
                     </div>
                     <p className="text-base font-body text-[#2d2d2d]/80 mt-1">
-                      {activeCombo.description}
+                      {activeRoute.description}
                     </p>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="text-xs font-mono bg-[#e5e0d8] px-2 py-1 border border-[#2d2d2d] rounded">
-                      Total Fallback Hops: <strong>{activeCombo.totalHops}</strong>
+                      Total Fallback Hops: <strong>{activeRoute.totalHops}</strong>
                     </span>
 
-                    {confirmDeleteComboId === activeCombo.id ? (
+                    {confirmDeleteRouteId === activeRoute.id ? (
                       <div className="flex items-center gap-1.5 bg-[#ffebee] px-2.5 py-1 border border-[#ff4d4d] rounded text-xs font-heading">
-                        <span className="text-[#b71c1c] font-bold">Delete {activeCombo.name}?</span>
+                        <span className="text-[#b71c1c] font-bold">Delete {activeRoute.name}?</span>
                         <button
                           onClick={() => {
-                            onDeleteCombo(activeCombo.id);
-                            setConfirmDeleteComboId(null);
+                            onDeleteRoute(activeRoute.id);
+                            setConfirmDeleteRouteId(null);
                           }}
                           className="px-2 py-0.5 bg-[#ff4d4d] text-white rounded font-bold hover:bg-[#d32f2f] cursor-pointer"
                         >
                           Confirm
                         </button>
                         <button
-                          onClick={() => setConfirmDeleteComboId(null)}
+                          onClick={() => setConfirmDeleteRouteId(null)}
                           className="px-2 py-0.5 bg-white border border-[#2d2d2d] rounded hover:bg-[#e5e0d8] cursor-pointer"
                         >
                           Cancel
@@ -212,12 +212,12 @@ export const CombosView: React.FC<CombosViewProps> = ({
                       </div>
                     ) : (
                       <button
-                        onClick={() => setConfirmDeleteComboId(activeCombo.id)}
+                        onClick={() => setConfirmDeleteRouteId(activeRoute.id)}
                         className="px-2.5 py-1 text-xs font-heading font-bold text-[#ff4d4d] hover:bg-[#ffebee] border border-[#ff4d4d]/50 hover:border-[#ff4d4d] rounded flex items-center gap-1 cursor-pointer transition-colors"
-                        title="Delete this combo configuration"
+                        title="Delete this route configuration"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
-                        <span>Delete Combo</span>
+                        <span>Delete Route</span>
                       </button>
                     )}
                   </div>
@@ -231,7 +231,7 @@ export const CombosView: React.FC<CombosViewProps> = ({
                   </h4>
 
                   <div className="space-y-3">
-                    {activeCombo.targets.map((tgt, idx) => (
+                    {activeRoute.targets.map((tgt, idx) => (
                       <React.Fragment key={tgt.id}>
                         <div
                           className="p-4 bg-white border-2 border-[#2d2d2d] sketch-shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-3 relative"
@@ -261,17 +261,17 @@ export const CombosView: React.FC<CombosViewProps> = ({
                               {idx === 0 ? 'Primary Default' : `Fallback Tier ${idx}`}
                             </span>
 
-                            {activeCombo.targets.length > 1 && (
+                            {activeRoute.targets.length > 1 && (
                               confirmRemoveTargetId === tgt.id ? (
                                 <div className="flex items-center gap-1 bg-[#ffebee] px-2 py-0.5 border border-[#ff4d4d] rounded">
                                   <span className="text-[#b71c1c] font-bold">Remove tier?</span>
                                   <button
                                     onClick={() => {
-                                      const updatedTargets = activeCombo.targets
+                                      const updatedTargets = activeRoute.targets
                                         .filter((t) => t.id !== tgt.id)
                                         .map((t, i) => ({ ...t, priority: i + 1 }));
-                                      onUpdateCombo({
-                                        ...activeCombo,
+                                      onUpdateRoute({
+                                        ...activeRoute,
                                         targets: updatedTargets,
                                         totalHops: Math.max(0, updatedTargets.length - 1),
                                       });
@@ -292,7 +292,7 @@ export const CombosView: React.FC<CombosViewProps> = ({
                                 <button
                                   onClick={() => setConfirmRemoveTargetId(tgt.id)}
                                   className="p-1 text-[#ff4d4d] hover:bg-[#ffebee] border border-transparent hover:border-[#ff4d4d]/40 rounded cursor-pointer transition-colors"
-                                  title="Remove this target tier from combo pool"
+                                  title="Remove this target tier from route pool"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
@@ -301,7 +301,7 @@ export const CombosView: React.FC<CombosViewProps> = ({
                           </div>
                         </div>
 
-                        {idx < activeCombo.targets.length - 1 && (
+                        {idx < activeRoute.targets.length - 1 && (
                           <div className="flex justify-center -my-1">
                             <div className="flex items-center gap-1 bg-[#fff9c4] px-3 py-1 border border-[#2d2d2d] rounded-full text-xs font-mono sketch-shadow-sm z-10">
                               <ArrowDown className="w-3.5 h-3.5 text-[#ff4d4d]" />
@@ -314,7 +314,7 @@ export const CombosView: React.FC<CombosViewProps> = ({
                   </div>
                 </div>
 
-              {/* Combo Policies & Triggers Settings */}
+              {/* Route Policies & Triggers Settings */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-[#fdfbf7] p-4 border-2 border-[#2d2d2d] rounded-lg">
                 <div>
                   <h5 className="font-heading font-bold text-base text-[#2d2d2d] mb-2 flex items-center gap-1">
@@ -325,11 +325,11 @@ export const CombosView: React.FC<CombosViewProps> = ({
                     <label className="flex items-center gap-2">
                       <input
                         type="checkbox"
-                        checked={activeCombo.fallbackTriggers.on429}
+                        checked={activeRoute.fallbackTriggers.on429}
                         onChange={(e) =>
-                          onUpdateCombo({
-                            ...activeCombo,
-                            fallbackTriggers: { ...activeCombo.fallbackTriggers, on429: e.target.checked },
+                          onUpdateRoute({
+                            ...activeRoute,
+                            fallbackTriggers: { ...activeRoute.fallbackTriggers, on429: e.target.checked },
                           })
                         }
                         className="accent-[#ff4d4d]"
@@ -340,11 +340,11 @@ export const CombosView: React.FC<CombosViewProps> = ({
                     <label className="flex items-center gap-2">
                       <input
                         type="checkbox"
-                        checked={activeCombo.fallbackTriggers.onQuota}
+                        checked={activeRoute.fallbackTriggers.onQuota}
                         onChange={(e) =>
-                          onUpdateCombo({
-                            ...activeCombo,
-                            fallbackTriggers: { ...activeCombo.fallbackTriggers, onQuota: e.target.checked },
+                          onUpdateRoute({
+                            ...activeRoute,
+                            fallbackTriggers: { ...activeRoute.fallbackTriggers, onQuota: e.target.checked },
                           })
                         }
                         className="accent-[#ff4d4d]"
@@ -355,11 +355,11 @@ export const CombosView: React.FC<CombosViewProps> = ({
                     <label className="flex items-center gap-2">
                       <input
                         type="checkbox"
-                        checked={activeCombo.fallbackTriggers.on5xx}
+                        checked={activeRoute.fallbackTriggers.on5xx}
                         onChange={(e) =>
-                          onUpdateCombo({
-                            ...activeCombo,
-                            fallbackTriggers: { ...activeCombo.fallbackTriggers, on5xx: e.target.checked },
+                          onUpdateRoute({
+                            ...activeRoute,
+                            fallbackTriggers: { ...activeRoute.fallbackTriggers, on5xx: e.target.checked },
                           })
                         }
                         className="accent-[#ff4d4d]"
@@ -378,10 +378,10 @@ export const CombosView: React.FC<CombosViewProps> = ({
                     <label className="flex items-center gap-2">
                       <input
                         type="checkbox"
-                        checked={activeCombo.stickyRouting}
+                        checked={activeRoute.stickyRouting}
                         onChange={(e) =>
-                          onUpdateCombo({
-                            ...activeCombo,
+                          onUpdateRoute({
+                            ...activeRoute,
                             stickyRouting: e.target.checked,
                           })
                         }
@@ -395,10 +395,10 @@ export const CombosView: React.FC<CombosViewProps> = ({
                         Cross-Provider Content Policy:
                       </span>
                       <select
-                        value={activeCombo.continuityPolicy}
+                        value={activeRoute.continuityPolicy}
                         onChange={(e) =>
-                          onUpdateCombo({
-                            ...activeCombo,
+                          onUpdateRoute({
+                            ...activeRoute,
                             continuityPolicy: e.target.value as any,
                           })
                         }
@@ -418,7 +418,7 @@ export const CombosView: React.FC<CombosViewProps> = ({
       </div>
     )}
 
-      {/* Create Combo Modal */}
+      {/* Create Route Modal */}
       {showCreateModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 backdrop-blur-xs">
           <div className="w-full max-w-lg">
@@ -432,18 +432,18 @@ export const CombosView: React.FC<CombosViewProps> = ({
 
               <h3 className="text-2xl font-heading font-bold text-[#2d2d2d] mb-4 flex items-center gap-2">
                 <Shuffle className="w-6 h-6 text-[#2d5da1]" />
-                Create New Fallback Combo
+                Create New Fallback Route
               </h3>
 
               <form onSubmit={handleCreateSubmit} className="space-y-4 font-body">
                 <div>
                   <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
-                    Combo Slug Name (Clients request this model)
+                    Route Slug Name (Clients request this model)
                   </label>
                   <input
                     type="text"
                     required
-                    placeholder="e.g. coder, fast-chat, vision-combo"
+                    placeholder="e.g. coder, fast-chat, vision-route"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none font-mono"
@@ -524,7 +524,7 @@ export const CombosView: React.FC<CombosViewProps> = ({
                     Cancel
                   </SketchButton>
                   <SketchButton type="submit" variant="danger" className="font-bold">
-                    Create Combo
+                    Create Route
                   </SketchButton>
                 </div>
               </form>

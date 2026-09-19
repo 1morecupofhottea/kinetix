@@ -1,5 +1,5 @@
 //! Bootstrap seeding: on first run (empty database) seed providers, models,
-//! credentials, virtual keys, aliases, and combos from a TOML file. The
+//! credentials, virtual keys, aliases, and routes from a TOML file. The
 //! database is authoritative afterwards (FR-8.5).
 
 use anyhow::Result;
@@ -108,12 +108,12 @@ pub async fn seed_if_empty(
         }
     }
 
-    // Combos.
-    let mut combo_ids: std::collections::HashMap<String, String> = Default::default();
-    for c in &cfg.combos {
-        let combo_id = db::insert_combo(
+    // Routes.
+    let mut route_ids: std::collections::HashMap<String, String> = Default::default();
+    for c in &cfg.routes {
+        let route_id = db::insert_route(
             pool,
-            &db::NewCombo {
+            &db::NewRoute {
                 name: &c.name,
                 description: &c.description,
                 strategy: if c.strategy.is_empty() { "priority" } else { &c.strategy },
@@ -128,18 +128,18 @@ pub async fn seed_if_empty(
             let account_id = account_ids.get(&t.account).cloned();
             let model_id = model_ids.get(&t.model).cloned();
             if let Some(model_id) = model_id {
-                db::insert_combo_target(pool, &combo_id, account_id.as_deref(), &model_id, t.priority, t.weight.unwrap_or(1)).await?;
+                db::insert_route_target(pool, &route_id, account_id.as_deref(), &model_id, t.priority, t.weight.unwrap_or(1)).await?;
             } else {
-                tracing::warn!("combo '{}' target references unknown model '{}'", c.name, t.model);
+                tracing::warn!("route '{}' target references unknown model '{}'", c.name, t.model);
             }
         }
-        combo_ids.insert(c.name.clone(), combo_id);
+        route_ids.insert(c.name.clone(), route_id);
     }
 
     // Aliases.
     for a in &cfg.aliases {
         let target_id = match a.target_type.as_str() {
-            "combo" => combo_ids.get(&a.target).cloned(),
+            "route" => route_ids.get(&a.target).cloned(),
             _ => model_ids.get(&a.target).cloned(),
         };
         if let Some(target_id) = target_id {

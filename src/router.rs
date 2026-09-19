@@ -64,11 +64,11 @@ pub fn build(state: AppState) -> Router {
             put(admin::update_account).delete(admin::delete_account),
         )
         .route("/accounts/{id}/reset", post(admin::reset_account))
-        // combos
-        .route("/combos", get(admin::list_combos).post(admin::create_combo))
+        // routes
+        .route("/routes", get(admin::list_routes).post(admin::create_route))
         .route(
-            "/combos/{id}",
-            put(admin::update_combo).delete(admin::delete_combo),
+            "/routes/{id}",
+            put(admin::update_route).delete(admin::delete_route),
         )
         // aliases
         .route("/aliases", get(admin::list_aliases).post(admin::create_alias))

@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS virtual_keys (
     name            TEXT NOT NULL,
     owner           TEXT NOT NULL,
     tag             TEXT NOT NULL DEFAULT '',
-    allowed_models  TEXT NOT NULL DEFAULT '["*"]', -- JSON array of models/aliases/combos
+    allowed_models  TEXT NOT NULL DEFAULT '["*"]', -- JSON array of models/aliases/routes
     allowed_providers TEXT NOT NULL DEFAULT '[]',  -- JSON array; empty = any (FR-12.15)
     rpm_limit       INTEGER,
     tpm_limit       INTEGER,
@@ -115,16 +115,16 @@ CREATE INDEX IF NOT EXISTS idx_price_versions_model ON price_versions(model_id);
 CREATE TABLE IF NOT EXISTS aliases (
     id           TEXT PRIMARY KEY,
     alias        TEXT NOT NULL UNIQUE,
-    target_type  TEXT NOT NULL,                    -- model | combo
+    target_type  TEXT NOT NULL,                    -- model | route
     target_id    TEXT NOT NULL,
     description  TEXT NOT NULL DEFAULT '',
     created_at   TEXT NOT NULL
 );
 
 -- ---------------------------------------------------------------------------
--- Combos (FR-12)
+-- Routes (FR-12)
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS combos (
+CREATE TABLE IF NOT EXISTS routes (
     id                TEXT PRIMARY KEY,
     name              TEXT NOT NULL UNIQUE,
     description       TEXT NOT NULL DEFAULT '',
@@ -137,9 +137,9 @@ CREATE TABLE IF NOT EXISTS combos (
     created_at        TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS combo_targets (
+CREATE TABLE IF NOT EXISTS route_targets (
     id          TEXT PRIMARY KEY,
-    combo_id    TEXT NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+    route_id    TEXT NOT NULL REFERENCES routes(id) ON DELETE CASCADE,
     account_id  TEXT REFERENCES accounts(id) ON DELETE CASCADE,
     model_id    TEXT NOT NULL REFERENCES models(id) ON DELETE CASCADE,
     priority    INTEGER NOT NULL DEFAULT 1,
@@ -147,7 +147,7 @@ CREATE TABLE IF NOT EXISTS combo_targets (
     param_overrides TEXT NOT NULL DEFAULT '{}'
 );
 
-CREATE INDEX IF NOT EXISTS idx_combo_targets_combo ON combo_targets(combo_id);
+CREATE INDEX IF NOT EXISTS idx_route_targets_route ON route_targets(route_id);
 
 -- ---------------------------------------------------------------------------
 -- Usage log (FR-6.1)
@@ -161,8 +161,8 @@ CREATE TABLE IF NOT EXISTS usage_logs (
     client_format      TEXT NOT NULL,              -- openai | anthropic
     requested_model    TEXT NOT NULL,
     effective_model    TEXT,
-    combo_id           TEXT,
-    combo_name         TEXT,
+    route_id           TEXT,
+    route_name         TEXT,
     fallback_hops      INTEGER NOT NULL DEFAULT 0,
     fallback_path      TEXT NOT NULL DEFAULT '[]',
     status             TEXT NOT NULL,              -- success | rate_limited | quota_exhausted | client_error | upstream_error | stream_error

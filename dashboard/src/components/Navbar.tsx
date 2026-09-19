@@ -4,11 +4,11 @@ import { ProxyMetrics } from '../types';
 import { formatCurrency } from '../lib/designSystem';
 import { SketchButton, SketchBadge } from './HandDrawnElements';
 
-export type NavTab = 'keys' | 'combos' | 'providers' | 'accounts' | 'usage' | 'requests' | 'aliases' | 'audit';
+export type NavTab = 'keys' | 'routes' | 'providers' | 'accounts' | 'usage' | 'requests' | 'aliases' | 'audit';
 
 export const TAB_ROUTES: Record<NavTab, string> = {
   keys: '/admin/keys',
-  combos: '/admin/combos',
+  routes: '/admin/routes',
   providers: '/admin/providers',
   accounts: '/admin/accounts',
   usage: '/admin/usage',
@@ -40,7 +40,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const tabs: { id: NavTab; label: string; icon: React.ReactNode; badge?: string; path: string }[] = [
     { id: 'keys', label: 'Virtual Keys', icon: <Key className="w-5 h-5" />, path: TAB_ROUTES.keys },
-    { id: 'combos', label: 'Combos & Fallback', icon: <Shuffle className="w-5 h-5" />, badge: 'Active', path: TAB_ROUTES.combos },
+    { id: 'routes', label: 'Routes & Fallback', icon: <Shuffle className="w-5 h-5" />, badge: 'Active', path: TAB_ROUTES.routes },
     { id: 'providers', label: 'Upstream Providers', icon: <Server className="w-5 h-5" />, path: TAB_ROUTES.providers },
     { id: 'accounts', label: 'Accounts & Pools', icon: <Users className="w-5 h-5" />, path: TAB_ROUTES.accounts },
     { id: 'usage', label: 'Usage & Spend', icon: <BarChart3 className="w-5 h-5" />, path: TAB_ROUTES.usage },
@@ -67,7 +67,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                 Kinetix
               </h1>
               <SketchBadge variant="yellow" rotation="1deg" className="text-xs font-heading">
-                v1.2 Proxy
+                v0.1 Proxy
               </SketchBadge>
             </div>
             <p className="text-sm text-[#2d2d2d]/80 font-body -mt-1">

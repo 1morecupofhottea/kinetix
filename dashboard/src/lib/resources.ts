@@ -6,14 +6,14 @@ import {
   mapAccount,
   mapAlias,
   mapAudit,
-  mapCombo,
+  mapRoute,
   mapKey,
   mapMetrics,
   mapModel,
   mapProvider,
   mapRequest,
 } from './mappers';
-import { Account, AuditLog, Combo, ModelAlias, ModelConfig, Provider, ProxyMetrics, RequestLog, VirtualKey } from '../types';
+import { Account, AuditLog, Route, ModelAlias, ModelConfig, Provider, ProxyMetrics, RequestLog, VirtualKey } from '../types';
 
 export interface CreateKeyInput {
   name: string;
@@ -100,14 +100,14 @@ export const Kinetix = {
   deleteAccount: (id: string) => api.del(`/admin/api/accounts/${id}`),
   resetAccount: (id: string) => api.post(`/admin/api/accounts/${id}/reset`),
 
-  // --- combos --------------------------------------------------------------
-  async combos(): Promise<Combo[]> {
-    const r = await api.get<{ combos: any[] }>('/admin/api/combos');
-    return r.combos.map(mapCombo);
+  // --- routes --------------------------------------------------------------
+  async routes(): Promise<Route[]> {
+    const r = await api.get<{ routes: any[] }>('/admin/api/routes');
+    return r.routes.map(mapRoute);
   },
-  createCombo: (body: Record<string, unknown>) => api.post('/admin/api/combos', body),
-  updateCombo: (id: string, body: Record<string, unknown>) => api.put(`/admin/api/combos/${id}`, body),
-  deleteCombo: (id: string) => api.del(`/admin/api/combos/${id}`),
+  createRoute: (body: Record<string, unknown>) => api.post('/admin/api/routes', body),
+  updateRoute: (id: string, body: Record<string, unknown>) => api.put(`/admin/api/routes/${id}`, body),
+  deleteRoute: (id: string) => api.del(`/admin/api/routes/${id}`),
 
   // --- aliases -------------------------------------------------------------
   async aliases(): Promise<ModelAlias[]> {

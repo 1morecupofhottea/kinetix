@@ -375,7 +375,7 @@ export const KeysView: React.FC<KeysViewProps> = ({ keys, onAddKey, onUpdateKeyS
 
                 <div>
                   <label className="block text-sm font-heading font-bold text-[#2d2d2d] mb-1">
-                    Allowed Models / Combos
+                    Allowed Models / Routes
                   </label>
                   <input
                     type="text"
@@ -385,7 +385,7 @@ export const KeysView: React.FC<KeysViewProps> = ({ keys, onAddKey, onUpdateKeyS
                     className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base sketch-shadow-sm focus:outline-none"
                     style={{ borderRadius: '255px 25px 225px 25px / 25px 225px 25px 255px' }}
                   />
-                  <p className="text-xs text-[#2d2d2d]/60 mt-1">Use * to allow all configured models and combos.</p>
+                  <p className="text-xs text-[#2d2d2d]/60 mt-1">Use * to allow all configured models and routes.</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3">

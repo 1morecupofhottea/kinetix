@@ -245,7 +245,7 @@ pub struct SamplingParams {
 
 #[derive(Debug, Clone)]
 pub struct InternalRequest {
-    /// The model name the client asked for (alias, combo, or provider/model-id).
+    /// The model name the client asked for (alias, route, or provider/model-id).
     pub requested_model: String,
     pub system: Vec<String>,
     pub messages: Vec<Message>,
@@ -422,7 +422,7 @@ pub struct ProxyError {
     pub kind: ErrorKind,
     pub message: String,
     pub retry_after_secs: Option<u64>,
-    /// Response headers to surface (e.g. X-Prism-Fallback).
+    /// Response headers to surface (e.g. X-Kinetix-Fallback).
     pub headers: Vec<(String, String)>,
 }
 

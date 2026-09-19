@@ -78,7 +78,7 @@ impl VirtualKeyRow {
     pub fn allowed_ips(&self) -> Vec<String> {
         serde_json::from_str(&self.allowed_ips).unwrap_or_default()
     }
-    /// Whether a requested model name (alias/combo/model) is permitted.
+    /// Whether a requested model name (alias/route/model) is permitted.
     pub fn permits_model(&self, model: &str) -> bool {
         let allowed = self.allowed_models();
         if allowed.iter().any(|m| m == "*") {
@@ -699,11 +699,11 @@ pub async fn delete_alias(pool: &Pool, id: &str) -> Result<()> {
 }
 
 // ===========================================================================
-// Combos
+// Routes
 // ===========================================================================
 
 #[derive(Debug, Clone, FromRow, Serialize)]
-pub struct ComboRow {
+pub struct RouteRow {
     pub id: String,
     pub name: String,
     pub description: String,
@@ -717,9 +717,9 @@ pub struct ComboRow {
 }
 
 #[derive(Debug, Clone, FromRow, Serialize)]
-pub struct ComboTargetRow {
+pub struct RouteTargetRow {
     pub id: String,
-    pub combo_id: String,
+    pub route_id: String,
     pub account_id: Option<String>,
     pub model_id: String,
     pub priority: i64,
@@ -727,38 +727,38 @@ pub struct ComboTargetRow {
     pub param_overrides: String,
 }
 
-pub async fn list_combos(pool: &Pool) -> Result<Vec<ComboRow>> {
-    Ok(sqlx::query_as::<_, ComboRow>("SELECT * FROM combos ORDER BY created_at")
+pub async fn list_routes(pool: &Pool) -> Result<Vec<RouteRow>> {
+    Ok(sqlx::query_as::<_, RouteRow>("SELECT * FROM routes ORDER BY created_at")
         .fetch_all(pool)
         .await?)
 }
 
-pub async fn get_combo(pool: &Pool, id: &str) -> Result<Option<ComboRow>> {
-    Ok(sqlx::query_as::<_, ComboRow>("SELECT * FROM combos WHERE id = ?")
+pub async fn get_route(pool: &Pool, id: &str) -> Result<Option<RouteRow>> {
+    Ok(sqlx::query_as::<_, RouteRow>("SELECT * FROM routes WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
         .await?)
 }
 
-pub async fn get_combo_by_name(pool: &Pool, name: &str) -> Result<Option<ComboRow>> {
+pub async fn get_route_by_name(pool: &Pool, name: &str) -> Result<Option<RouteRow>> {
     Ok(
-        sqlx::query_as::<_, ComboRow>("SELECT * FROM combos WHERE name = ?")
+        sqlx::query_as::<_, RouteRow>("SELECT * FROM routes WHERE name = ?")
             .bind(name)
             .fetch_optional(pool)
             .await?,
     )
 }
 
-pub async fn combo_targets(pool: &Pool, combo_id: &str) -> Result<Vec<ComboTargetRow>> {
-    Ok(sqlx::query_as::<_, ComboTargetRow>(
-        "SELECT * FROM combo_targets WHERE combo_id = ? ORDER BY priority, weight DESC",
+pub async fn route_targets(pool: &Pool, route_id: &str) -> Result<Vec<RouteTargetRow>> {
+    Ok(sqlx::query_as::<_, RouteTargetRow>(
+        "SELECT * FROM route_targets WHERE route_id = ? ORDER BY priority, weight DESC",
     )
-    .bind(combo_id)
+    .bind(route_id)
     .fetch_all(pool)
     .await?)
 }
 
-pub struct NewCombo<'a> {
+pub struct NewRoute<'a> {
     pub name: &'a str,
     pub description: &'a str,
     pub strategy: &'a str,
@@ -768,10 +768,10 @@ pub struct NewCombo<'a> {
     pub max_attempts: Option<i64>,
 }
 
-pub async fn insert_combo(pool: &Pool, c: &NewCombo<'_>) -> Result<String> {
-    let id = format!("combo_{}", uuid::Uuid::new_v4().simple());
+pub async fn insert_route(pool: &Pool, c: &NewRoute<'_>) -> Result<String> {
+    let id = format!("route_{}", uuid::Uuid::new_v4().simple());
     sqlx::query(
-        "INSERT INTO combos (id, name, description, strategy, fallback_triggers, continuity_policy, sticky_routing, max_attempts, enabled, created_at)
+        "INSERT INTO routes (id, name, description, strategy, fallback_triggers, continuity_policy, sticky_routing, max_attempts, enabled, created_at)
          VALUES (?,?,?,?,?,?,?,?,1,?)",
     )
     .bind(&id)
@@ -788,7 +788,7 @@ pub async fn insert_combo(pool: &Pool, c: &NewCombo<'_>) -> Result<String> {
     Ok(id)
 }
 
-pub async fn update_combo(
+pub async fn update_route(
     pool: &Pool,
     id: &str,
     description: &str,
@@ -799,7 +799,7 @@ pub async fn update_combo(
     max_attempts: Option<i64>,
 ) -> Result<()> {
     sqlx::query(
-        "UPDATE combos SET description=?, strategy=?, fallback_triggers=?, continuity_policy=?, sticky_routing=?, max_attempts=? WHERE id=?",
+        "UPDATE routes SET description=?, strategy=?, fallback_triggers=?, continuity_policy=?, sticky_routing=?, max_attempts=? WHERE id=?",
     )
     .bind(description)
     .bind(strategy)
@@ -813,28 +813,28 @@ pub async fn update_combo(
     Ok(())
 }
 
-pub async fn clear_combo_targets(pool: &Pool, combo_id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM combo_targets WHERE combo_id = ?")
-        .bind(combo_id)
+pub async fn clear_route_targets(pool: &Pool, route_id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM route_targets WHERE route_id = ?")
+        .bind(route_id)
         .execute(pool)
         .await?;
     Ok(())
 }
 
-pub async fn insert_combo_target(
+pub async fn insert_route_target(
     pool: &Pool,
-    combo_id: &str,
+    route_id: &str,
     account_id: Option<&str>,
     model_id: &str,
     priority: i64,
     weight: i64,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO combo_targets (id, combo_id, account_id, model_id, priority, weight, param_overrides)
+        "INSERT INTO route_targets (id, route_id, account_id, model_id, priority, weight, param_overrides)
          VALUES (?,?,?,?,?,?,'{}')",
     )
     .bind(format!("tgt_{}", uuid::Uuid::new_v4().simple()))
-    .bind(combo_id)
+    .bind(route_id)
     .bind(account_id)
     .bind(model_id)
     .bind(priority)
@@ -844,8 +844,8 @@ pub async fn insert_combo_target(
     Ok(())
 }
 
-pub async fn delete_combo(pool: &Pool, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM combos WHERE id = ?")
+pub async fn delete_route(pool: &Pool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM routes WHERE id = ?")
         .bind(id)
         .execute(pool)
         .await?;
@@ -866,8 +866,8 @@ pub struct UsageLogRow {
     pub client_format: String,
     pub requested_model: String,
     pub effective_model: Option<String>,
-    pub combo_id: Option<String>,
-    pub combo_name: Option<String>,
+    pub route_id: Option<String>,
+    pub route_name: Option<String>,
     pub fallback_hops: i64,
     pub fallback_path: String,
     pub status: String,
@@ -893,8 +893,8 @@ pub struct UsageLogRow {
 pub async fn insert_usage_log(pool: &Pool, u: &UsageLogRow) -> Result<()> {
     sqlx::query(
         "INSERT INTO usage_logs
-        (id, request_id, ts, key_id, key_name, client_format, requested_model, effective_model, combo_id,
-         combo_name, fallback_hops, fallback_path, status, status_code, latency_ms, ttft_ms, input_tokens,
+        (id, request_id, ts, key_id, key_name, client_format, requested_model, effective_model, route_id,
+         route_name, fallback_hops, fallback_path, status, status_code, latency_ms, ttft_ms, input_tokens,
          output_tokens, cached_tokens, thinking_tokens, cost_usd, cost_known, price_version_id, cache_status,
          serving_account_id, serving_account, serving_provider, upstream_request_id, flagged, error_message)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -907,8 +907,8 @@ pub async fn insert_usage_log(pool: &Pool, u: &UsageLogRow) -> Result<()> {
     .bind(&u.client_format)
     .bind(&u.requested_model)
     .bind(&u.effective_model)
-    .bind(&u.combo_id)
-    .bind(&u.combo_name)
+    .bind(&u.route_id)
+    .bind(&u.route_name)
     .bind(u.fallback_hops)
     .bind(&u.fallback_path)
     .bind(&u.status)

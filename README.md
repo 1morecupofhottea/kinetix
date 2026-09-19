@@ -1,13 +1,14 @@
 # Kinetix
 
-**Kinetix** is the working codename for the product specified as *Prism: Multi-Protocol
-LLM Proxy* (see `docs/prism-llm-proxy-requirements.md`). It is a single self-hosted Rust
-service that speaks the OpenAI Chat Completions and Anthropic Messages wire formats
-(streaming first) in front of admin-configured upstream LLM APIs (Gemini first), and
-layers on virtual keys, account pools with automatic fallback, cost tracking, and
-an embedded admin dashboard.
+**Kinetix** is a single self-hosted Rust service that speaks the OpenAI Chat Completions
+and Anthropic Messages wire formats (streaming first) in front of admin-configured
+upstream LLM APIs (Gemini first), and layers on virtual keys, account pools with
+executable Routes and automatic fallback, cost tracking, and an embedded admin
+dashboard. It is built for developers and small technical teams running AI coding
+agents such as [Pi](https://pi.dev).
 
-> Product name: **Prism**. Repository/project codename: **kinetix**.
+See `docs/kinetix-llm-proxy-requirements-r4.md` for the current (revision 4)
+requirements; `docs/prism-llm-proxy-requirements.md` is the earlier draft.
 
 ## What works today (Milestone 1 + 2)
 
@@ -18,14 +19,15 @@ an embedded admin dashboard.
   OpenAI-compatible (`/chat/completions`), and Anthropic (`/messages`). All three are
   selected by the provider's configured `wire_format`, not by vendor name.
 - **Virtual keys** (`sk-kinetix-...`): shown once, stored only as a SHA-256 hash,
-  with per-key allowed models/aliases/combos, RPM/TPM limits, daily/monthly USD
+  with per-key allowed models/aliases/routes, RPM/TPM limits, daily/monthly USD
   budgets, expiry, allowed IPs, and optional body logging.
 - **Account pools & health**: per-account cooldown on 429 (honoring `Retry-After`),
   exhaustion on quota, disable on auth errors, soft spend quotas, and automatic
   failover to another account before any bytes reach the client.
-- **Combos**: named `(account, model)` target lists with priority / round-robin /
+- **Routes**: named `(account, model)` target lists with priority / round-robin /
   weighted / least-used selection, configurable fallback triggers, a cross-provider
   continuity policy (strip vendor thinking signatures), and sticky routing.
+  (Renamed from "combos" in r4.)
 - **Cost tracking**: versioned per-model prices, cached/thinking-aware billing, and
   usage rows written to SQLite through a non-blocking queue.
 - **Admin API** under `/admin/api/*` (session-cookie auth, optional Cloudflare
@@ -84,7 +86,7 @@ Single Rust binary, one process:
 | Auth (virtual keys, admin session, CF Access) | `src/auth.rs` |
 | SQLite persistence + migrations | `src/db.rs`, `migrations/` |
 | Cost, usage log queue, crypto, credentials | `src/cost.rs`, `src/logqueue.rs`, `src/crypto.rs`, `src/credentials.rs` |
-| Embedded dashboard | `src/assets.rs`, `dashboard/` |
+| Embedded dashboard (React 19; r4 specifies SvelteKit — documented deviation) | `src/assets.rs`, `dashboard/` |
 
 Tech: Rust + Tokio, Axum 0.8, reqwest (rustls, HTTP/2), SQLite in WAL mode via sqlx,
 `rust-embed` for the dashboard, Cloudflare Tunnel + systemd for deployment.
@@ -97,7 +99,13 @@ the fixture suite from the requirements (FR-9).
 
 ## Status
 
-Milestone 1 (walking skeleton) and Milestone 2 (dashboard, combos, limits, cost,
-audit) are implemented and verified end-to-end against a live Gemini upstream.
-Milestone 3+ (passthrough byte-forwarding, cross-provider combos polish, plugin host)
-remain future work; see the requirements document.
+Milestone 1 (walking skeleton) and Milestone 2 (dashboard, Routes, limits, cost,
+audit) are implemented and verified end-to-end against live Gemini and
+OpenAI-compatible upstreams. Revision 4 renamed the product to Kinetix (Prism is the
+old name), renamed Combos to Routes, and promoted several behaviours to MUST that are
+**not yet implemented**: same-format passthrough (FR-2.7), executable Route predicates
+and the Route Trace (FR-12.3/12.14), the diagnostic flight recorder (FR-13),
+cache-aware sticky routing (FR-7.3), the explicit non-portable-state policy (FR-2.11),
+topology hiding via `X-Kinetix-Route-Id` (FR-12.15), usage confidence states (FR-6.8),
+Validate/Dry Run (FR-8.6/8.7), and the protocol torture/fuzz harness (FR-9.4/9.5).
+See the r4 requirements document for the full delta.

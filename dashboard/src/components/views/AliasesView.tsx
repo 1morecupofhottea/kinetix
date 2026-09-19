@@ -1,12 +1,12 @@
 import React, { useState } from 'react';
 import { Compass, Plus, ArrowRight, Trash2 } from 'lucide-react';
-import { ModelAlias, Combo, ModelConfig } from '../../types';
+import { ModelAlias, Route, ModelConfig } from '../../types';
 import { WobblyCard, SketchButton, SketchBadge } from '../HandDrawnElements';
 import { DESIGN_TOKENS } from '../../lib/designSystem';
 
 interface AliasesViewProps {
   aliases: ModelAlias[];
-  combos: Combo[];
+  routes: Route[];
   models: ModelConfig[];
   onAddAlias: (alias: ModelAlias) => void;
   onDeleteAlias: (id: string) => void;
@@ -14,15 +14,15 @@ interface AliasesViewProps {
 
 export const AliasesView: React.FC<AliasesViewProps> = ({
   aliases,
-  combos,
+  routes,
   models,
   onAddAlias,
   onDeleteAlias,
 }) => {
   const [showAddModal, setShowAddModal] = useState(false);
   const [aliasName, setAliasName] = useState('');
-  const [targetType, setTargetType] = useState<'combo' | 'model'>('combo');
-  const [targetId, setTargetId] = useState(combos[0]?.id || '');
+  const [targetType, setTargetType] = useState<'route' | 'model'>('route');
+  const [targetId, setTargetId] = useState(routes[0]?.id || '');
   const [description, setDescription] = useState('');
 
   const handleCreateSubmit = (e: React.FormEvent) => {
@@ -30,9 +30,9 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
     if (!aliasName.trim()) return;
 
     let targetDisplayName = '';
-    if (targetType === 'combo') {
-      const c = combos.find((x) => x.id === targetId) || combos[0];
-      targetDisplayName = `Combo: ${c?.name || ''}`;
+    if (targetType === 'route') {
+      const c = routes.find((x) => x.id === targetId) || routes[0];
+      targetDisplayName = `Route: ${c?.name || ''}`;
     } else {
       const m = models.find((x) => x.id === targetId) || models[0];
       targetDisplayName = `Model: ${m?.displayName || ''}`;
@@ -64,7 +64,7 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
             </SketchBadge>
           </h2>
           <p className="text-base font-body text-[#2d2d2d]/80">
-            Expose clean, stable model names (like <code>coder</code> or <code>fast</code>) to tools like Pi, routing them to combos or specific upstream models.
+            Expose clean, stable model names (like <code>coder</code> or <code>fast</code>) to tools like Pi, routing them to routes or specific upstream models.
           </p>
         </div>
 
@@ -101,8 +101,8 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
                     </h3>
                   </div>
 
-                  <SketchBadge variant={alias.targetType === 'combo' ? 'yellow' : 'blue'}>
-                    {alias.targetType === 'combo' ? '⚡ Combo' : 'Direct Model'}
+                  <SketchBadge variant={alias.targetType === 'route' ? 'yellow' : 'blue'}>
+                    {alias.targetType === 'route' ? '⚡ Route' : 'Direct Model'}
                   </SketchBadge>
                 </div>
 
@@ -175,7 +175,7 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
                       className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none"
                       style={{ borderRadius: DESIGN_TOKENS.radii.wobblyMd }}
                     >
-                      <option value="combo">Combo (With Fallback)</option>
+                      <option value="route">Route (With Fallback)</option>
                       <option value="model">Direct Model</option>
                     </select>
                   </div>
@@ -190,8 +190,8 @@ export const AliasesView: React.FC<AliasesViewProps> = ({
                       className="w-full bg-white border-2 border-[#2d2d2d] px-3 py-2 text-base font-body sketch-shadow-sm focus:outline-none"
                       style={{ borderRadius: DESIGN_TOKENS.radii.wobbly }}
                     >
-                      {targetType === 'combo'
-                        ? combos.map((c) => (
+                      {targetType === 'route'
+                        ? routes.map((c) => (
                             <option key={c.id} value={c.id}>
                               ⚡ {c.name}
                             </option>
