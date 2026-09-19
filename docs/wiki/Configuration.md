@@ -1,0 +1,122 @@
+# Configuration
+
+## Where Kinetix stores things
+
+Kinetix follows the XDG base-directory spec. All state is easy to back up or
+remove:
+
+| Purpose | Default | Env override |
+| --- | --- | --- |
+| Config (`config.toml`, `master.key`, `admin_password.hash`) | `~/.config/kinetix` | `KINETIX_CONFIG_DIR` |
+| Data (`kinetix.db`, `exports/`, `backups/`) | `~/.local/share/kinetix` | `KINETIX_DATA_DIR` |
+| State (logs) | `~/.local/state/kinetix` | `KINETIX_STATE_DIR` |
+
+`--home <DIR>` (or `KINETIX_HOME`) roots all three under `<DIR>/config`,
+`<DIR>/data`, `<DIR>/state` and **ignores any `.env`** — ideal for isolated or
+test instances.
+
+## Configuration precedence
+
+```
+CLI flag  >  environment variable  >  config file  >  default
+```
+
+A normal install needs no `.env` and no config file; everything is set with the
+[CLI](CLI-Reference) and persisted in SQLite. The database is **authoritative**
+after the first run.
+
+## Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `KINETIX_BIND` | `127.0.0.1:8080` | Listen address. Keep it on localhost behind cloudflared. |
+| `KINETIX_PUBLIC_BASE_URL` | bind value | Public URL used in diagnostics/links. |
+| `KINETIX_DATABASE_URL` | `sqlite://<data>/kinetix.db?mode=rwc` | SQLite URL. |
+| `KINETIX_MASTER_KEY` / `KINETIX_MASTER_KEY_FILE` | generated | 64-hex, base64 (32 bytes), or a ≥16-char passphrase used to encrypt upstream credentials at rest. |
+| `KINETIX_ADMIN_TOKEN` | generated | Pre-set the admin password (≥8 chars). If unset, one is generated and printed once. |
+| `KINETIX_BOOTSTRAP_FILE` | unset | TOML seeded into an empty database (see below). |
+| `KINETIX_DATA_DIR` | XDG | Data directory (also where backups/exports live). |
+| `KINETIX_SHUTDOWN_GRACE_SECS` | `30` | Graceful-shutdown drain window (NFR-2.3). |
+| `KINETIX_IP_RATE_LIMIT_PER_MIN` | `600` | Per-IP abuse limit applied before virtual-key auth (`0` disables). |
+| `KINETIX_SESSION_TTL_MINUTES` | `720` | Admin session lifetime; sessions are in-memory, so a restart forces re-login. |
+| `KINETIX_EXPORT_RETENTION_DAYS` | `30` | How long per-day usage exports are kept. |
+| `KINETIX_LOG_JSON` | `false` | Emit JSON logs. |
+| `KINETIX_ALLOW_PRIVATE_UPSTREAMS` | `false` | Allow private/internal upstream endpoints (SSRF bypass). **Dev only.** |
+| `KINETIX_ALLOW_INSECURE_TLS` | `false` | Allow plain-HTTP upstreams. **Dev only** (NFR-3.12). |
+| `KINETIX_CF_ACCESS_AUD` / `KINETIX_CF_ACCESS_TEAM_DOMAIN` | unset | Cloudflare Access JWT validation for the admin surface. |
+| `KINETIX_ALERT_WEBHOOK_URL` | unset | Webhook for alerts (FR-6.6). Unset disables alerting. |
+| `KINETIX_ALERT_FALLBACK_RATE` | `0.25` | Fallback-rate alert threshold. |
+| `KINETIX_ALERT_ERROR_RATE` | `0.10` | Error-rate alert threshold. |
+| `KINETIX_ALERT_MIN_REQUESTS` | `20` | Minimum requests before rate alerts fire. |
+| `KINETIX_ALERT_INTERVAL_SECS` | `60` | Alert evaluation interval. |
+| `KINETIX_ALERT_P95_LATENCY_MS` | `100` | p95 added-proxy-latency alert threshold (sustained 10 min). |
+
+A documented template is in
+[`.env.example`](https://github.com/LazyGreed/kinetix/blob/main/.env.example).
+
+## Bootstrap file (optional)
+
+For a reproducible, file-driven first start you can seed an empty database from a
+TOML file (`KINETIX_BOOTSTRAP_FILE=config.toml`). It is used **only when the
+database has no providers**; afterwards the database is authoritative. A
+documented example is
+[`config.toml.example`](https://github.com/LazyGreed/kinetix/blob/main/config.toml.example).
+
+```toml
+[[virtual_keys]]
+name = "Local Dev Key"
+owner = "admin"
+allowed_models = ["*"]
+
+[[providers]]
+name = "Google Gemini"
+base_url = "https://generativelanguage.googleapis.com/v1beta"
+wire_format = "gemini"
+auth_scheme = "custom_header"
+custom_header_name = "x-goog-api-key"
+
+  [[providers.accounts]]
+  label = "primary"
+  api_key = "..."
+
+  [[providers.models]]
+  upstream_id = "gemini-2.5-flash"
+  display_name = "Gemini 2.5 Flash"
+
+[[aliases]]
+alias = "coder"
+target_type = "model"
+target = "Google Gemini/gemini-2.5-flash"
+
+[[routes]]
+name = "resilient"
+strategy = "priority"
+portability_policy = "strip_with_warning"
+targets = [
+  { account = "primary", model = "Google Gemini/gemini-2.5-flash" },
+]
+```
+
+## Moving configuration between installs
+
+Use the admin API's user-authored export/import (FR-10.12):
+
+```bash
+curl -b cookie.txt http://127.0.0.1:8080/admin/api/config/export            # secret-free
+curl -b cookie.txt 'http://127.0.0.1:8080/admin/api/config/export?include_secrets=true'
+curl -b cookie.txt -X POST http://127.0.0.1:8080/admin/api/config/import \
+  -H 'content-type: application/json' -d '{"config": {...}, "apply": false}'   # dry run
+```
+
+Import is upsert-by-name, never deletes, and never overwrites an existing
+credential.
+
+## Backups and restore
+
+- A pre-migration backup is written before any schema migration.
+- `VACUUM INTO` snapshots run every 6 hours, keeping the newest 14, in
+  `$KINETIX_DATA_DIR/backups`. A `RESTORE.txt` is written alongside them.
+- Restore: stop the server, copy the snapshot over `kinetix.db`, delete the
+  `-wal`/`-shm` files, fix ownership, and start.
+
+See [Deployment](Deployment) for the full runbook.

@@ -1,0 +1,125 @@
+# Admin API
+
+The admin API lives under `/admin/api/*` on the same host as the proxy. It is
+guarded by admin auth (see [Authentication](Authentication)). In production,
+expose it behind Cloudflare Access plus the in-Kinetix password/session check.
+
+> r4 lists admin paths without the `/api` segment; Kinetix uses `/admin/api/*` as
+> a documented deviation (so the SPA's `/admin/<tab>` routes never collide).
+
+## Auth & session
+
+| Method & path | Purpose |
+| --- | --- |
+| `POST /admin/api/login` | `{"password": "..."}` → sets the session cookie, `{ok, user}`. |
+| `POST /admin/api/logout` | Clears the session. |
+| `GET /admin/api/me` | `{authenticated, user}`. |
+| `POST /admin/api/password` | `{current_password, new_password}` → change password (invalidates all sessions). |
+
+## Overview & metrics
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/overview` | Active streams, totals, spend, fallback rate, latency, key/account counts, queue depth, uptime, usage-confidence counts. |
+| `GET /admin/api/metrics` | Prometheus text (`kinetix_*`). See [Observability](Observability). |
+
+## Virtual keys
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/keys` | List keys (masked; never the secret) with lifetime totals and current spend. |
+| `POST /admin/api/keys` | Create a key; returns `{key, full_key}` (the secret is shown **once**). |
+| `PUT /admin/api/keys/{id}` | Update limits/budgets/expiry/status/`allowed_ips`/`body_logging`. |
+| `DELETE /admin/api/keys/{id}` | Delete the key (and its usage). |
+
+## Providers
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/providers` | List with `accounts_count` / `models_count` / `healthy_accounts`. |
+| `POST /admin/api/providers` | Create; optional `api_key` + `account_label` create the first account. |
+| `GET /admin/api/providers/{id}` | Full config (incl. `follow_redirects`, `credential_hosts`, `allow_insecure_tls`). |
+| `PUT /admin/api/providers/{id}` | Update; a non-empty `api_key` rotates the first account's credential. |
+| `DELETE /admin/api/providers/{id}` | Delete. |
+| `POST /admin/api/providers/{id}/discover` | Fetch the upstream model list; flags already-imported and disappeared models. |
+| `POST /admin/api/providers/{id}/test` | Minimal connectivity probe; returns status + latency + a bounded preview. |
+
+## Models
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/models` | List (all providers). |
+| `POST /admin/api/providers/{id}/models` | Create a model for a provider. |
+| `PUT /admin/api/models/{id}` | Update. |
+| `DELETE /admin/api/models/{id}` | Delete. |
+
+## Accounts
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/accounts` | List (label, `key_mask`, status, quotas, totals). |
+| `POST /admin/api/accounts` | Create (requires `api_key`). |
+| `PUT /admin/api/accounts/{id}` | Update fields; a non-empty `api_key` rotates the credential. |
+| `POST /admin/api/accounts/{id}/reset` | Clear cooldown/exhaustion/circuit state. |
+| `DELETE /admin/api/accounts/{id}` | Delete. |
+
+## Routes
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/routes` | List with resolved targets and policy fields. |
+| `POST /admin/api/routes` | Create (name, strategy, fallback triggers, `portability_policy`, `cache_affinity`, `max_attempts`, targets). |
+| `PUT /admin/api/routes/{id}` | Update (replaces targets). |
+| `DELETE /admin/api/routes/{id}` | Delete. |
+| `POST /admin/api/routes/dry-run` | Route Dry Run (FR-8.7): returns candidate ordering, predicate outcomes, eligibility, and the would-be selection **without** touching production. |
+
+## Aliases
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/aliases` | List. |
+| `POST /admin/api/aliases` | Create (`alias`, `target_type`, `target_id`/`target`). |
+| `DELETE /admin/api/aliases/{id}` | Delete. |
+
+## Validate / Dry Run
+
+| Method & path | Purpose |
+| --- | --- |
+| `POST /admin/api/validate` | Generic endpoint/connectivity validation (resolved IPs; ASN shown `unknown` when it cannot be resolved). |
+| `POST /admin/api/validate/provider` | Provider schema + outbound security + credential-host binding. |
+| `POST /admin/api/validate/model` | Model metadata; unknown prices/capabilities reported as `unknown` (never assumed). |
+| `POST /admin/api/validate/account` | Account label/credential/quota validation. |
+
+## Config export / import (FR-10.12)
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/config/export` | Export portable config (secret-free; `?include_secrets=true` adds encrypted blobs). |
+| `POST /admin/api/config/import` | Two-phase: `apply:false` = Validate/Dry Run (no writes); `apply:true` = upsert by name. |
+
+## Usage, requests, traces
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/usage` (alias `GET /admin/api/requests`) | Usage rows + summary (`limit` capped). |
+| `GET /admin/api/requests/live` | Live in-flight view (metadata only). |
+| `GET /admin/api/requests/{id}/route-trace` | Route Trace for a request. |
+| `GET /admin/api/requests/{id}/diagnostics` | Flight-recorder diagnostics + trace + usage. |
+| `GET /admin/api/route-traces/{opaque_id}` | Resolve an opaque `krt_…` id to its Route Trace. |
+
+## Audit, exports, testing
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/audit` | Append-only audit rows. |
+| `GET /admin/api/exports` | List per-day export files + days. |
+| `POST /admin/api/exports` | Export a day (default yesterday UTC). |
+| `DELETE /admin/api/exports/{name}` | Delete an export file. |
+| `POST /admin/api/test-stream` | Run a real request through the pipeline for a key id + model (used by the Live Tester; the raw key never enters the browser). |
+
+## Error shape
+
+Errors are JSON `{ "error": "..." }` with the HTTP status from the error kind
+(401 unauthorized, 403 forbidden, 404 not found, 429 rate-limited, 503
+all-targets-unavailable / service-unavailable, 502 upstream/internal). Non-GET
+admin requests return 503 when the control-plane store is degraded (fail closed).

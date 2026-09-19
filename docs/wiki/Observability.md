@@ -1,0 +1,94 @@
+# Observability
+
+Kinetix exposes Prometheus metrics, a structured Route Trace, a bounded flight
+recorder, a live in-flight view, and webhook alerts. All diagnostics are
+**metadata-only** by default — never prompt/completion bodies.
+
+## Health
+
+`GET /healthz`:
+
+```json
+{"status":"ok","uptime_secs":3,"database":"ok","data_plane":"serving","control_plane":"ok"}
+```
+
+It stays **HTTP 200** while the data plane is serviceable. `control_plane:
+degraded` means the store is unavailable but inference still works from the
+in-memory snapshot, so the instance is not dropped from a load balancer.
+
+## Metrics
+
+`GET /admin/api/metrics` emits Prometheus text (requires admin auth):
+
+| Metric | Meaning |
+| --- | --- |
+| `kinetix_requests_total` | Total requests. |
+| `kinetix_error_rate` | Error fraction (gauge). |
+| `kinetix_cost_usd_total` | Total known spend. |
+| `kinetix_avg_latency_ms` / `kinetix_avg_ttft_ms` | Averages. |
+| `kinetix_cached_tokens_total` | Cached-token total. |
+| `kinetix_fallback_hops_total` / `kinetix_route_fallbacks_total` / `kinetix_route_skip_total` | Routing. |
+| `kinetix_failures_pre_commit_total` / `kinetix_failures_post_commit_total` | Failures before/after the commit point. |
+| `kinetix_cancellations_total` / `kinetix_cancellation_latency_ms` | Client disconnects + detection latency. |
+| `kinetix_active_streams` / `kinetix_live_view_dropped_total` | Live view. |
+| `kinetix_log_queue_depth` / `kinetix_log_queue_dropped_total` | Usage-log queue. |
+| `kinetix_flight_recorder_requests` / `kinetix_flight_recorder_dropped_total` | Flight recorder. |
+| `kinetix_account_status{status}` | Accounts by state. |
+| `kinetix_control_plane_degraded` | `1` when the store is down. |
+| `kinetix_usage_unknown_total` / `kinetix_usage_estimated_total` / `kinetix_usage_unknown_cost_total` | Accounting confidence. |
+| `kinetix_credential_failures_total` | Credential-strategy failures. |
+| `kinetix_ip_rate_limited_total` | Per-IP rejections. |
+| `kinetix_allocations_total` / `kinetix_alloc_bytes_total` | Allocations per request (only when built `--features alloc-stats`; `0` otherwise = honestly "not measured"). |
+
+## Route Trace (FR-12.14)
+
+Every request produces a Route Trace: candidate enumeration, predicate/capability
+results, skip reasons, the selected account/model (internally), attempt outcomes,
+fallback causes, the commit point, and the final result.
+
+- Retrieve by request: `GET /admin/api/requests/{id}/route-trace`.
+- Retrieve by the client's opaque id: `GET /admin/api/route-traces/{krt_…}`.
+
+Trace steps look like `resolve → candidate → skip → attempt → commit → result`
+with per-step timings and warnings.
+
+## Flight recorder (FR-13)
+
+A bounded, metadata-only ring of lifecycle events (request accepted, auth
+complete, upstream connect/headers/first frame, tool/reasoning event classes,
+commit, cancellation, usage finalized), correlated with the request id. Retrieve
+via `GET /admin/api/requests/{id}/diagnostics`. Bounded by count/bytes/time so it
+can never grow unbounded.
+
+## Live in-flight view (FR-8.3)
+
+`GET /admin/api/requests/live` returns in-flight requests (phase
+`selecting → committed → done`, commit state, fallback hops, retries, tokens,
+latency, TTFT). Surfaced in the dashboard's Request Inspector and reflected in the
+`kinetix_active_streams` metric.
+
+> Client disconnects after commit are detected immediately; a disconnect during
+> the pre-commit connect window is bounded only by the provider timeout (there is
+> no response body to observe yet).
+
+## Alerts (FR-6.6)
+
+Set `KINETIX_ALERT_WEBHOOK_URL` to receive JSON webhooks (`{event: "alert"|"resolved", ...}`).
+Alerts are **edge-triggered** (fire once, resolve when clear) and are control-plane
+only — a webhook failure never affects inference. Covered conditions:
+
+- high fallback rate / high error rate,
+- an account unhealthy (exhausted / circuit-open / disabled),
+- a Route with no healthy target,
+- a key crossing 80% of its monthly budget,
+- usage-log queue saturation (≥80%) or dropped rows,
+- scheduled-backup failure,
+- p95 added proxy latency above `KINETIX_ALERT_P95_LATENCY_MS` sustained 10 min,
+- repeated credential-strategy failures.
+
+## Logging
+
+Operational JSON logs (stdout/journald) cover startup, config activation, upstream
+errors, retries, account-state transitions, DNS destinations, control-plane
+degradation, and admin actions — with secrets redacted. Prompts/completions,
+virtual keys, credentials, and auth headers are **never** logged by default.

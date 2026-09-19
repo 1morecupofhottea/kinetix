@@ -1,0 +1,70 @@
+# Kinetix — Docker Compose
+#
+#   docker compose up -d --build          # build + start Kinetix on :8080
+#   docker compose logs -f kinetix        # follow logs
+#   docker compose exec kinetix kinetix status
+#
+# State (database, exports, backups, master key, admin password) lives in the
+# named volume `kinetix-data`, mounted at KINETIX_HOME=/data. Remove it with
+# `docker compose down -v` (this deletes all Kinetix data).
+#
+# Secrets: set them in a `.env` file next to this compose file (see
+# `.env.docker.example`) or export them in your shell. If KINETIX_MASTER_KEY is
+# left unset, a key is generated on first start and persisted to the volume.
+services:
+  kinetix:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kinetix:local
+    container_name: kinetix
+    restart: unless-stopped
+    ports:
+      # Bind to localhost only by default — put cloudflared (or another reverse
+      # proxy) in front. Change to "8080:8080" only if you understand the risk.
+      - "127.0.0.1:8080:8080"
+    environment:
+      # KINETIX_MASTER_KEY: 64-hex / base64(32) / passphrase. Leave unset to
+      # generate + persist one in the volume on first run.
+      KINETIX_MASTER_KEY: ${KINETIX_MASTER_KEY:-}
+      # Optional: pre-set the admin password. Leave unset to have `kinetix init`
+      # generate one and print it once (see logs).
+      KINETIX_ADMIN_TOKEN: ${KINETIX_ADMIN_TOKEN:-}
+      KINETIX_LOG_JSON: "true"
+      # Development-only switches. Do NOT enable in production (NFR-3.9/3.12):
+      # KINETIX_ALLOW_PRIVATE_UPSTREAMS lets Kinetix reach private/internal
+      # upstreams; KINETIX_ALLOW_INSECURE_TLS permits plain-HTTP upstreams.
+      KINETIX_ALLOW_PRIVATE_UPSTREAMS: ${KINETIX_ALLOW_PRIVATE_UPSTREAMS:-false}
+      KINETIX_ALLOW_INSECURE_TLS: ${KINETIX_ALLOW_INSECURE_TLS:-false}
+      # Optional alerting (FR-6.6).
+      KINETIX_ALERT_WEBHOOK_URL: ${KINETIX_ALERT_WEBHOOK_URL:-}
+    volumes:
+      - kinetix-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8080/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    # The binary is also the admin tool, so you can configure the running
+    # instance's database directly:
+    #   docker compose exec kinetix kinetix provider list
+    #   docker compose exec kinetix kinetix key create --name pi --owner me
+
+  # Optional Cloudflare Tunnel (NFR-3.1). Enable with:
+  #   docker compose --profile tunnel up -d
+  # Provide TUNNEL_TOKEN in .env (from the Cloudflare Zero Trust dashboard) and
+  # point the tunnel's public hostnames at http://kinetix:8080.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: kinetix-cloudflared
+    restart: unless-stopped
+    profiles: ["tunnel"]
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${TUNNEL_TOKEN:-}
+    depends_on:
+      - kinetix
+
+volumes:
+  kinetix-data:

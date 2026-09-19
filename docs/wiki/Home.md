@@ -1,0 +1,48 @@
+# Kinetix Wiki
+
+Kinetix is a single self-hosted Rust service that speaks the **OpenAI Chat
+Completions** and **Anthropic Messages** wire formats (streaming first) in front
+of admin-configured upstream LLM APIs, and layers on virtual keys, account pools
+with executable **Routes** and automatic fallback, cost tracking, and an embedded
+admin dashboard. It is built for developers and small technical teams running AI
+coding agents such as [Pi](https://pi.dev).
+
+This wiki is the detailed, task-oriented companion to the repo
+[`README.md`](https://github.com/LazyGreed/kinetix/blob/main/README.md).
+
+## Start here
+
+| Page | What it covers |
+| --- | --- |
+| [Getting Started](Getting-Started) | Install, first run, point a client at it |
+| [CLI Reference](CLI-Reference) | Every subcommand and flag |
+| [Configuration](Configuration) | XDG layout, env vars, precedence, bootstrap TOML |
+| [Architecture](Architecture) | Modules, request lifecycle, data/control plane |
+| [Routing and Fallback](Routing-and-Fallback) | Routes, predicates, strategies, continuity |
+| [Admin API](Admin-API) | Every `/admin/api/*` endpoint |
+| [Dashboard](Dashboard) | The embedded web UI |
+| [Authentication](Authentication) | Virtual keys, admin sessions, Cloudflare Access |
+| [Providers](Providers) | Wire formats, auth schemes, discovery, security |
+| [Usage, Cost and Accounting](Usage-Cost-and-Accounting) | Tokens, prices, budgets, truthfulness |
+| [Observability](Observability) | Metrics, Route Trace, flight recorder, live view, alerts |
+| [Deployment](Deployment) | systemd, Cloudflare Tunnel, Docker, backups |
+| [Docker](Docker) | Running Kinetix in a container |
+| [Security](Security) | Threat model and hardening |
+| [Testing and Benchmarks](Testing-and-Benchmarks) | Fixtures, torture tests, benchmark rigs |
+| [Troubleshooting](Troubleshooting) | Common problems and fixes |
+| [FAQ](FAQ) | Short answers |
+
+## What it is (and isn't)
+
+- **Is**: a private, single-binary gateway for coding agents; correctness of the
+  wire protocol and routing decisions matters more than breadth.
+- **Isn't**: a general-purpose AI platform, a multi-tenant SaaS, or a bundled
+  provider-preset library. See the non-goals in
+  [`docs/kinetix-llm-proxy-requirements-r4.md`](https://github.com/LazyGreed/kinetix/blob/main/docs/kinetix-llm-proxy-requirements-r4.md).
+
+## Editing this wiki
+
+The wiki pages are generated from the markdown files in
+[`docs/wiki/`](https://github.com/LazyGreed/kinetix/tree/main/docs/wiki). Edit
+them there (so changes are reviewed and versioned with the code) and mirror them
+to the GitHub wiki. `Home.md` here is the wiki landing page.

@@ -1,0 +1,81 @@
+# Usage, Cost and Accounting
+
+Kinetix records a usage row per request (asynchronously, never blocking the data
+plane) and computes cost from the model's configured prices. A guiding principle
+is **"unknown means unknown"** (FR-6.2/6.3/6.8/6.9): Kinetix never invents token
+counts or costs.
+
+## What is recorded
+
+Each usage row holds: request id, timestamp, key id/name, client format,
+requested/effective model, Route id/name, fallback hops/path, status + status
+code, latency, TTFT, input/output/cached/thinking tokens, cost + `cost_known`,
+`usage_confidence`, `commit_state`, retry count, cache status, serving
+account/provider (admin-only), the opaque Route id, the upstream request id, a
+`flagged` marker, and any error message.
+
+## Confidence states
+
+| Field | Values | Meaning |
+| --- | --- | --- |
+| `usage_confidence` | `provider_reported` | The upstream reported the counts. |
+| | `estimated` | A derived/partial count. |
+| | `unknown` | Not known (e.g. a client disconnect). |
+| `cost_known` | `1` / `0` | Whether the model has prices so cost could be computed. |
+
+Unknown token counts are **omitted** from client responses rather than coerced to
+zero. A spend total is never presented as complete when some usage is unpriced —
+the overview/metrics also expose `unknown_usage_requests`, `estimated_usage_requests`,
+and `unknown_cost_requests`.
+
+## Cost
+
+Cost is billed per 1M tokens: `(input − cached) × input + cached × cached_price +
+output × output + thinking × thinking_price`. Cached defaults to the input price
+and thinking to the output price. **If prices are unconfigured, cost is `None`
+(unknown), not `0.0`.** A `price_versions` table keeps price history so past costs
+stay reproducible.
+
+## Per-key limits and budgets
+
+Enforced before proxying:
+
+- **RPM** / **TPM** over the last 60 seconds.
+- **Daily** / **monthly** USD budgets.
+- Status (revoked → 401, disabled → 403), expiry, allowed models, IP allowlist.
+
+Counter reads fail **open** on a database error (log + serve) so a brief
+control-plane outage cannot fail a serviceable request; the in-memory
+status/expiry/allowed-model checks still apply.
+
+> Budget **reservation** is intentionally not implemented (FR-6.9): concurrent
+> requests may briefly overshoot a budget. This is a documented, accepted residual
+> risk, not a bug.
+
+## Usage views
+
+- **Dashboard → Usage & Spend** — spend vs budgets per key, a Today / 24h / 7d /
+  30d window, and per-day exports.
+- **Dashboard → Request Inspector** — per-request rows with a live view.
+- **Admin API** — `GET /admin/api/usage` (alias `/requests`) returns rows +
+  summary.
+
+## Exports (JSONL + CSV)
+
+Per-day exports are written to `$KINETIX_DATA_DIR/exports`:
+
+- `usage-<day>.jsonl` — one JSON object per usage row.
+- `usage-<day>.csv` — a flat per-request table.
+- `summary-<day>.csv` — day totals.
+
+An hourly task exports the last 40 days (skipping days already exported) and
+prunes files older than `KINETIX_EXPORT_RETENTION_DAYS` (default 30). You can also
+export on demand from the dashboard or with `kinetix export run [--day DATE]`.
+
+## Body logging (opt-in, FR-6.5)
+
+Off by default. When a virtual key sets `body_logging`, Kinetix stores a
+**redacted** request body (every path) and, for non-streaming requests, a redacted
+response body, retained 7 days and purged hourly. Streaming responses are **not**
+buffered (NFR-1.3), so only their request is retained. Redaction replaces anything
+that looks like a secret (`sk-`, `AIza`, `AQ.`, `gsk_`, `sk-ant`, `ya29.`).

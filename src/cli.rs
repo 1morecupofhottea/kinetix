@@ -8,6 +8,7 @@
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -71,6 +72,8 @@ pub enum Command {
     Export(ExportArgs),
     /// Run or list database backups.
     Backup(BackupArgs),
+    /// Remove Kinetix state (config, database, exports, backups, logs).
+    Uninstall(UninstallArgs),
 }
 
 #[derive(Args, Debug, Clone)]
@@ -334,6 +337,22 @@ pub enum BackupAction {
     List,
 }
 
+#[derive(Args, Debug, Clone)]
+pub struct UninstallArgs {
+    /// Delete everything without asking (otherwise you must confirm).
+    #[arg(long)]
+    pub yes: bool,
+    /// Also remove the `kinetix` binary from ~/.local/bin.
+    #[arg(long)]
+    pub remove_binary: bool,
+    /// Keep the SQLite database (removes config/state/exports/backups only).
+    #[arg(long)]
+    pub keep_data: bool,
+    /// Print what would be removed without deleting anything.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
 fn overrides(cli: &Cli) -> CliOverrides {
     CliOverrides {
         bind: cli.bind.clone(),
@@ -388,6 +407,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Alias(a) => cmd_alias(&cli, a).await,
         Command::Export(a) => cmd_export(&cli, a).await,
         Command::Backup(a) => cmd_backup(&cli, a).await,
+        Command::Uninstall(a) => cmd_uninstall(&cli, a).await,
     }
 }
 
@@ -1011,6 +1031,65 @@ async fn cmd_backup(cli: &Cli, args: BackupArgs) -> Result<()> {
             Ok(())
         }
     }
+}
+
+async fn cmd_uninstall(cli: &Cli, args: UninstallArgs) -> Result<()> {
+    // Resolve paths without requiring a working database (the point is to
+    // remove it), so build the config directly.
+    let config = config_from_cli(cli)?;
+    let paths = &config.paths;
+
+    let mut targets: Vec<PathBuf> = vec![paths.config_dir.clone(), paths.state_dir.clone()];
+    if !args.keep_data {
+        targets.push(paths.data_dir.clone());
+    }
+
+    println!("Kinetix uninstall");
+    for t in &targets {
+        let mark = if t.exists() { "remove" } else { "absent" };
+        println!("  [{mark}] {}", t.display());
+    }
+    let bin = crate::paths::bin_dir().join("kinetix");
+    if args.remove_binary {
+        let mark = if bin.exists() { "remove" } else { "absent" };
+        println!("  [{mark}] {}", bin.display());
+    }
+
+    if args.dry_run {
+        println!("\nDry run — nothing was deleted.");
+        return Ok(());
+    }
+
+    if !args.yes {
+        print!("\nDelete the items above? This cannot be undone. [y/N] ");
+        use std::io::Write as _;
+        std::io::stdout().flush().ok();
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        let answer = line.trim().to_ascii_lowercase();
+        if answer != "y" && answer != "yes" {
+            println!("Aborted.");
+            return Ok(());
+        }
+    }
+
+    for t in &targets {
+        match std::fs::remove_dir_all(t) {
+            Ok(()) => println!("removed {}", t.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => println!("warning: could not remove {}: {e}", t.display()),
+        }
+    }
+    if args.remove_binary {
+        match std::fs::remove_file(&bin) {
+            Ok(()) => println!("removed {}", bin.display()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => println!("warning: could not remove {}: {e}", bin.display()),
+        }
+    }
+
+    println!("\nKinetix removed. Restart your shell if PATH still references the binary.");
+    Ok(())
 }
 
 /// Insert an account row with an encrypted credential.

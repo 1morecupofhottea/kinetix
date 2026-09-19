@@ -10,7 +10,20 @@ agents such as [Pi](https://pi.dev).
 See `docs/kinetix-llm-proxy-requirements-r4.md` for the current (revision 4)
 requirements; `docs/prism-llm-proxy-requirements.md` is the earlier draft.
 
-## What works today (Milestone 1 + 2)
+[![CI](https://github.com/LazyGreed/kinetix/actions/workflows/ci.yml/badge.svg)](https://github.com/LazyGreed/kinetix/actions/workflows/ci.yml)
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Wiki](https://img.shields.io/badge/docs-wiki-blueviolet)](https://github.com/LazyGreed/kinetix/wiki)
+
+## Documentation
+
+- **[Wiki](https://github.com/LazyGreed/kinetix/wiki)** — the detailed,
+  task-oriented documentation (getting started, CLI, configuration, architecture,
+  routing, admin API, dashboard, authentication, providers, observability,
+  deployment, Docker, security, testing, troubleshooting, FAQ). The wiki sources
+  live in [`docs/wiki/`](docs/wiki).
+- **This README** — a concise overview and quick start.
+
+## What Kinetix does
 
 - **Inbound wire formats**: OpenAI `POST /v1/chat/completions` and Anthropic
   `POST /v1/messages`, both streaming and non-streaming, plus `GET /v1/models`
@@ -164,6 +177,25 @@ the observed wire behavior is recorded in
 See `deploy/README.md` for the full runbook (systemd unit with auto-restart and
 graceful drain, Cloudflare Tunnel + Access setup, backup/restore, upgrades).
 `deploy/kinetix.service` is a ready systemd unit (NFR-2.2/2.3).
+
+### Docker
+
+A multi-stage `Dockerfile` and `docker-compose.yml` run Kinetix in a container
+with a persistent `/data` volume and an optional `cloudflared` service:
+
+```bash
+cp .env.docker.example .env      # optional: set KINETIX_MASTER_KEY / KINETIX_ADMIN_TOKEN
+docker compose up -d --build
+docker compose logs kinetix | grep -i password   # first-run admin password
+```
+
+### Uninstall
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/uninstall.sh | bash
+# or, equivalently, with the installed binary:
+kinetix uninstall [--yes] [--remove-binary] [--keep-data] [--dry-run]
+```
 
 ## Dashboard
 

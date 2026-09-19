@@ -1,0 +1,17 @@
+# Build artifacts
+/target
+/dashboard/node_modules
+/dashboard/dist
+node_modules
+dist
+
+# Local state
+*.db
+*.db-shm
+*.db-wal
+.env
+config.toml
+
+# Editor / OS
+.DS_Store
+*.swp
