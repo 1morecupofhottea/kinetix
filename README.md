@@ -107,6 +107,10 @@ Tech: Rust + Tokio, Axum 0.8, reqwest (rustls, HTTP/2), SQLite in WAL mode via s
   deterministic local upstream, measuring added latency and TTFT versus NFR-1.
 - `scripts/cancel_bench.py` measures client-disconnect cancellation latency
   (NFR-1.10).
+- `scripts/smoke.sh` is an end-to-end smoke test (synthetic upstream + a fresh
+  instance) covering the public API, passthrough, an OpenAI tool call, the
+  Anthropic format, the admin API, the Route Trace/diagnostics, and metrics.
+  CI runs it after the release build.
 - A local end-to-end harness exercises the public API, the admin API, streaming
   tool calls, and automatic fallback. CI will run the fixture suite from the
   requirements (FR-9).

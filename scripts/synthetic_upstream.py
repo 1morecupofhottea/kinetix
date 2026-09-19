@@ -82,13 +82,15 @@ class Handler(BaseHTTPRequestHandler):
         model = req.get("model", "syn")
         stream = bool(req.get("stream"))
 
+        want_tools = bool(req.get("tools"))
+
         if "/gemini/" in self.path:
             self._gemini(model)
         else:
-            self._openai(model, stream)
+            self._openai(model, stream, want_tools)
 
     # -- OpenAI-compatible SSE -------------------------------------------
-    def _openai(self, model, stream):
+    def _openai(self, model, stream, want_tools=False):
         if not stream:
             body = json.dumps(
                 {
@@ -128,6 +130,27 @@ class Handler(BaseHTTPRequestHandler):
             time.sleep(TTFT_MS / 1000.0)
             frame({"id": "syn-1", "object": "chat.completion.chunk", "model": model,
                    "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]})
+            if want_tools:
+                # Emit a function call with the arguments split across frames so
+                # the tool-argument reassembly path is exercised.
+                frame({"id": "syn-1", "object": "chat.completion.chunk", "model": model,
+                       "choices": [{"index": 0, "delta": {"tool_calls": [
+                           {"index": 0, "id": "call_syn_1", "type": "function",
+                            "function": {"name": "get_weather", "arguments": ""}}]},
+                           "finish_reason": None}]})
+                for frag in ['{"city"', ': "Par', 'is"}']:
+                    frame({"id": "syn-1", "object": "chat.completion.chunk", "model": model,
+                           "choices": [{"index": 0, "delta": {"tool_calls": [
+                               {"index": 0, "function": {"arguments": frag}}]},
+                               "finish_reason": None}]})
+                frame({"id": "syn-1", "object": "chat.completion.chunk", "model": model,
+                       "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]})
+                frame({"id": "syn-1", "object": "chat.completion.chunk", "model": model,
+                       "choices": [], "usage": {"prompt_tokens": 100, "completion_tokens": 12,
+                                                "total_tokens": 112}})
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+                return
             for _ in range(TOKENS):
                 frame({"id": "syn-1", "object": "chat.completion.chunk", "model": model,
                        "choices": [{"index": 0, "delta": {"content": WORD}, "finish_reason": None}]})

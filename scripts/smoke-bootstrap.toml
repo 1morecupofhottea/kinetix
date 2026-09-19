@@ -1,0 +1,57 @@
+# Smoke-test bootstrap: points Kinetix at the deterministic synthetic upstream
+# (scripts/synthetic_upstream.py) for scripts/smoke.sh.
+
+[[virtual_keys]]
+name = "Smoke Key"
+owner = "smoke"
+tag = "smoke"
+allowed_models = ["*"]
+rpm_limit = 100000
+tpm_limit = 100000000
+
+[[providers]]
+name = "Synth OpenAI"
+base_url = "http://127.0.0.1:9199/openai/v1"
+wire_format = "openai"
+auth_scheme = "bearer"
+timeout_ms = 120000
+capability_mode = "permissive"
+models_path = "/models"
+
+  [[providers.accounts]]
+  label = "synth-openai"
+  api_key = "smoke-openai-key"
+  priority = 1
+  quota_type = "none"
+
+  [[providers.models]]
+  upstream_id = "syn-openai"
+  display_name = "Synthetic OpenAI"
+  enabled = true
+  context_window = 200000
+  max_output_tokens = 8192
+  capabilities = ["text", "tool_calling"]
+
+[[providers]]
+name = "Synth Gemini"
+base_url = "http://127.0.0.1:9199/gemini/v1beta"
+wire_format = "gemini"
+auth_scheme = "custom_header"
+custom_header_name = "x-goog-api-key"
+timeout_ms = 120000
+capability_mode = "permissive"
+models_path = "/models"
+
+  [[providers.accounts]]
+  label = "synth-gemini"
+  api_key = "smoke-gemini-key"
+  priority = 1
+  quota_type = "none"
+
+  [[providers.models]]
+  upstream_id = "syn-gemini"
+  display_name = "Synthetic Gemini"
+  enabled = true
+  context_window = 200000
+  max_output_tokens = 8192
+  capabilities = ["text", "tool_calling"]

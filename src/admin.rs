@@ -2222,15 +2222,17 @@ fn validate_outbound_url(state: &AppState, url: &str) -> Result<(), ApiError> {
     let host = parsed
         .host_str()
         .ok_or_else(|| ApiError::bad("URL must have a host"))?;
-    if state.config.allow_private_upstreams {
-        return Ok(());
-    }
     // TLS is mandatory except in the explicit, visibly-marked dev mode
-    // (NFR-3.12). KINETIX_ALLOW_INSECURE_TLS is that override.
+    // (NFR-3.12). KINETIX_ALLOW_INSECURE_TLS is that override — the
+    // private-upstreams flag must NOT silently disable TLS.
     if parsed.scheme() != "https" && !state.config.allow_insecure_tls {
         return Err(ApiError::bad(
             "endpoint must use https (set KINETIX_ALLOW_INSECURE_TLS=true to override for local development)",
         ));
+    }
+    // The private-upstreams flag only relaxes the blocked-host check (NFR-3.9).
+    if state.config.allow_private_upstreams {
+        return Ok(());
     }
     if is_blocked_host(host) {
         return Err(ApiError::bad(format!(
