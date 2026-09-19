@@ -2085,6 +2085,24 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
         summary["fallback_hops"].as_i64().unwrap_or(0)
     ));
     body.push_str(
+        "# HELP kinetix_route_fallbacks_total Requests served after at least one fallback hop\n",
+    );
+    body.push_str("# TYPE kinetix_route_fallbacks_total counter\n");
+    body.push_str(&format!(
+        "kinetix_route_fallbacks_total {}\n",
+        state
+            .route_fallbacks
+            .load(std::sync::atomic::Ordering::Relaxed)
+    ));
+    body.push_str(
+        "# HELP kinetix_route_skip_total Route targets skipped during eligibility filtering\n",
+    );
+    body.push_str("# TYPE kinetix_route_skip_total counter\n");
+    body.push_str(&format!(
+        "kinetix_route_skip_total {}\n",
+        state.route_skips.load(std::sync::atomic::Ordering::Relaxed)
+    ));
+    body.push_str(
         "# HELP kinetix_flight_recorder_requests Requests tracked by the flight recorder\n",
     );
     body.push_str("# TYPE kinetix_flight_recorder_requests gauge\n");

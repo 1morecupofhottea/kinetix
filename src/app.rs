@@ -43,6 +43,10 @@ pub struct AppState {
     /// Requests rejected because the provider was at its RPM/TPM or the key hit
     /// a budget (dashboard counters).
     pub total_requests: Arc<AtomicU64>,
+    /// Route targets skipped during eligibility filtering (FR-12.11, NFR-4.2).
+    pub route_skips: Arc<AtomicU64>,
+    /// Requests that used at least one fallback hop (FR-12.6, NFR-4.2).
+    pub route_fallbacks: Arc<AtomicU64>,
 }
 
 #[derive(Clone)]
@@ -83,7 +87,19 @@ impl AppState {
             cancellations: Arc::new(AtomicU64::new(0)),
             cancellation_latency_ms_total: Arc::new(AtomicU64::new(0)),
             total_requests: Arc::new(AtomicU64::new(0)),
+            route_skips: Arc::new(AtomicU64::new(0)),
+            route_fallbacks: Arc::new(AtomicU64::new(0)),
         }
+    }
+
+    /// Count a route target skipped during eligibility filtering.
+    pub fn record_skip(&self) {
+        self.route_skips.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Count a request that required at least one fallback hop.
+    pub fn record_fallback(&self) {
+        self.route_fallbacks.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Round-robin counter for a route.

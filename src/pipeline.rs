@@ -39,6 +39,14 @@ const CIRCUIT_THRESHOLD: i64 = 4;
 /// within that window (NFR-1 / FR-9.4). Exposed for tests.
 pub const KEEPALIVE_INTERVAL_SECS: u64 = 15;
 const CIRCUIT_OPEN_SECS: i64 = 30;
+/// Bounded exponential backoff between pre-commit retry attempts (FR-4.4):
+/// 100ms, 200ms, 400ms, capped at 1s, so a failing pool cannot be hot-looped.
+const BACKOFF_BASE_MS: u64 = 100;
+const BACKOFF_CAP_MS: u64 = 1000;
+/// How long a target with an open circuit is deferred when an alternative
+/// target is available (FR-4.2). It is never removed from the candidate list,
+/// so if no alternative serves it is still tried and can recover (FR-4.7).
+const CIRCUIT_DEFER: Duration = Duration::from_secs(5);
 
 /// Request-scoped metadata carried into the usage log and Route Trace.
 pub struct RequestMeta {
@@ -288,6 +296,32 @@ pub async fn run(
     });
     let _ = before;
 
+    // Circuit-open deferral (FR-4.2/FR-4.7): a target whose circuit is open and
+    // is not yet due for a probe is moved behind all other candidates, but is
+    // NOT removed — if every alternative fails it is still attempted and can
+    // recover the account (half-open probing still applies in the loop).
+    let (mut probeable, mut deferred): (Vec<_>, Vec<_>) = (Vec::new(), Vec::new());
+    for t in targets.drain(..) {
+        let status = pool::effective_status(&t.account);
+        if matches!(status, pool::AccountStatus::CircuitOpen) && !pool::should_probe(&t.account) {
+            deferred.push(t);
+        } else {
+            probeable.push(t);
+        }
+    }
+    if !probeable.is_empty() && !deferred.is_empty() {
+        trace.step(
+            "candidate",
+            None,
+            format!(
+                "{} circuit-open target(s) deferred behind healthy candidates",
+                deferred.len()
+            ),
+        );
+    }
+    probeable.append(&mut deferred);
+    let mut targets = probeable;
+
     if targets.is_empty() {
         trace.finish("no_eligible_target");
         state
@@ -361,6 +395,7 @@ pub async fn run(
                 let why = format!("{}:skipped({})", target.account.label, status.as_str());
                 meta.fallback_path.push(why.clone());
                 trace.step("skip", Some(target.account.label.clone()), why);
+                state.record_skip();
                 continue;
             }
         }
@@ -382,6 +417,7 @@ pub async fn run(
                 Some(target.account.label.clone()),
                 "soft quota reached",
             );
+            state.record_skip();
             continue;
         }
 
@@ -432,6 +468,12 @@ pub async fn run(
         let use_passthrough =
             req.raw_body.is_some() && passthrough::is_passthrough(format, target.provider.wire());
 
+        // Bounded exponential backoff between attempts (FR-4.4). Never applied
+        // before the first attempt, and capped so a healthy pool is not slowed.
+        if attempts_done > 0 {
+            let exp = BACKOFF_BASE_MS.saturating_mul(1u64 << (attempts_done - 1).min(4));
+            tokio::time::sleep(Duration::from_millis(exp.min(BACKOFF_CAP_MS))).await;
+        }
         attempts_done += 1;
         state.live.set_fallback_hops(
             &meta.request_id,
@@ -464,6 +506,9 @@ pub async fn run(
                 if resp.status().is_success() {
                     meta.fallback_hops = (attempts_done - 1) as i64;
                     meta.retry_count = (attempts_done - 1) as i64;
+                    if attempts_done > 1 {
+                        state.record_fallback();
+                    }
                     meta.fallback_path
                         .push(format!("{}:200", target.account.label));
                     trace.step(
