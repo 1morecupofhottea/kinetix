@@ -182,13 +182,13 @@ pub enum Role {
     Tool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ImageData {
     Base64 { mime: String, data: String },
     Url(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Part {
     Text(String),
     Image(ImageData),

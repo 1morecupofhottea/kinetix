@@ -43,10 +43,6 @@ const CIRCUIT_OPEN_SECS: i64 = 30;
 /// 100ms, 200ms, 400ms, capped at 1s, so a failing pool cannot be hot-looped.
 const BACKOFF_BASE_MS: u64 = 100;
 const BACKOFF_CAP_MS: u64 = 1000;
-/// How long a target with an open circuit is deferred when an alternative
-/// target is available (FR-4.2). It is never removed from the candidate list,
-/// so if no alternative serves it is still tried and can recover (FR-4.7).
-const CIRCUIT_DEFER: Duration = Duration::from_secs(5);
 
 /// Request-scoped metadata carried into the usage log and Route Trace.
 pub struct RequestMeta {

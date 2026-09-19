@@ -1,0 +1,213 @@
+//! Inbound decode fixtures (FR-9.1, FR-9.6).
+//!
+//! The fixture suite must cover plain chat, tools, parallel tools, reasoning
+//! state, images, usage, errors, and unknown fields for every supported
+//! frontend. These tests assert the canonical decode of representative client
+//! bodies, so a regression in inbound decoding is caught.
+
+use kinetix::frontends::{self, FrontendFormat};
+use kinetix::types::{Part, Role, ThinkingLevel};
+
+fn openai(body: &str) -> kinetix::types::InternalRequest {
+    frontends::decode(FrontendFormat::OpenAi, serde_json::from_str(body).unwrap())
+        .expect("openai decode")
+}
+
+fn anthropic(body: &str) -> kinetix::types::InternalRequest {
+    frontends::decode(
+        FrontendFormat::Anthropic,
+        serde_json::from_str(body).unwrap(),
+    )
+    .expect("anthropic decode")
+}
+
+#[test]
+fn openai_plain_chat_and_system_hoist() {
+    let req = openai(
+        r#"{
+          "model": "gpt-x",
+          "stream": true,
+          "temperature": 0.4,
+          "max_tokens": 128,
+          "messages": [
+            { "role": "system", "content": "be terse" },
+            { "role": "user", "content": "hi" }
+          ]
+        }"#,
+    );
+    assert_eq!(req.requested_model, "gpt-x");
+    assert!(req.stream);
+    assert_eq!(req.system, vec!["be terse".to_string()]);
+    assert_eq!(req.messages.len(), 1);
+    assert_eq!(req.messages[0].role, Role::User);
+    assert_eq!(req.messages[0].parts, vec![Part::Text("hi".into())]);
+    assert_eq!(req.params.temperature, Some(0.4));
+    assert_eq!(req.params.max_tokens, Some(128));
+}
+
+#[test]
+fn openai_parallel_tool_calls_and_tool_result() {
+    let req = openai(
+        r#"{
+          "model": "gpt-x",
+          "messages": [
+            { "role": "assistant", "content": null, "tool_calls": [
+                { "id": "call_a", "type": "function",
+                  "function": { "name": "get_weather", "arguments": "{\"city\":\"Paris\"}" } },
+                { "id": "call_b", "type": "function",
+                  "function": { "name": "get_time", "arguments": "{\"tz\":\"UTC\"}" } }
+            ]},
+            { "role": "tool", "tool_call_id": "call_a", "content": "18C" }
+          ],
+          "tools": [
+            { "type": "function", "function": { "name": "get_weather",
+              "description": "w", "parameters": { "type": "object" } } }
+          ]
+        }"#,
+    );
+    // Two parallel tool calls survive as distinct parts with stable ids.
+    assert_eq!(req.messages.len(), 2);
+    let calls: Vec<_> = req.messages[0]
+        .parts
+        .iter()
+        .filter_map(|p| match p {
+            Part::ToolCall { id, name, .. } => Some((id.clone(), name.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        calls,
+        vec![
+            (Some("call_a".into()), "get_weather".into()),
+            (Some("call_b".into()), "get_time".into()),
+        ]
+    );
+    // The tool result carries its tool_call_id.
+    match &req.messages[1].parts[0] {
+        Part::ToolResult {
+            tool_call_id,
+            content,
+            ..
+        } => {
+            assert_eq!(tool_call_id, "call_a");
+            assert_eq!(content, "18C");
+        }
+        other => panic!("expected tool result, got {other:?}"),
+    }
+    assert_eq!(req.tools.len(), 1);
+    assert_eq!(req.tools[0].name, "get_weather");
+}
+
+#[test]
+fn openai_image_data_url_is_detected() {
+    let req = openai(
+        r#"{
+          "model": "gpt-x",
+          "messages": [
+            { "role": "user", "content": [
+              { "type": "text", "text": "what is this" },
+              { "type": "image_url", "image_url": { "url": "data:image/png;base64,QUJD" } }
+            ]}
+          ]
+        }"#,
+    );
+    let parts = &req.messages[0].parts;
+    assert!(matches!(parts[0], Part::Text(_)));
+    match &parts[1] {
+        Part::Image(kinetix::types::ImageData::Base64 { mime, data }) => {
+            assert_eq!(mime, "image/png");
+            assert_eq!(data, "QUJD");
+        }
+        other => panic!("expected a base64 image part, got {other:?}"),
+    }
+}
+
+#[test]
+fn openai_reasoning_effort_maps_to_thinking_level() {
+    assert_eq!(
+        openai(r#"{"model":"m","reasoning_effort":"high","messages":[]}"#).thinking,
+        Some(ThinkingLevel::High)
+    );
+    assert_eq!(
+        openai(r#"{"model":"m","reasoning_effort":"low","messages":[]}"#).thinking,
+        Some(ThinkingLevel::Low)
+    );
+    assert_eq!(
+        openai(r#"{"model":"m","reasoning_effort":"none","messages":[]}"#).thinking,
+        Some(ThinkingLevel::Off)
+    );
+    // Absent reasoning control means no thinking request (nothing invented).
+    assert_eq!(openai(r#"{"model":"m","messages":[]}"#).thinking, None);
+}
+
+#[test]
+fn openai_unknown_top_level_fields_are_captured_as_extra() {
+    // FR-2.8/2.10: unknown fields are captured, not lost, so the translation
+    // path can decide (reject/preserve) rather than silently dropping them.
+    let req = openai(r#"{"model":"m","messages":[],"n":2,"logprobs":true,"my_vendor_flag":"x"}"#);
+    assert_eq!(req.extra.get("n").and_then(|v| v.as_i64()), Some(2));
+    assert_eq!(
+        req.extra.get("logprobs").and_then(|v| v.as_bool()),
+        Some(true)
+    );
+    assert_eq!(
+        req.extra.get("my_vendor_flag").and_then(|v| v.as_str()),
+        Some("x")
+    );
+    // Behaviorally-significant fields are rejected on a translating path...
+    assert!(frontends::translation_unsupported(&req.extra).is_some());
+    // ...but a purely cosmetic/unknown field alone is not.
+    let cosmetic = openai(r#"{"model":"m","messages":[],"my_vendor_flag":"x"}"#);
+    assert!(frontends::translation_unsupported(&cosmetic.extra).is_none());
+}
+
+#[test]
+fn anthropic_plain_chat_tools_and_thinking_round_trip() {
+    let req = anthropic(
+        r#"{
+          "model": "claude-x",
+          "system": "be terse",
+          "max_tokens": 64,
+          "messages": [
+            { "role": "user", "content": "hi" },
+            { "role": "assistant", "content": [
+                { "type": "thinking", "thinking": "hmm", "signature": "sig-1" },
+                { "type": "tool_use", "id": "toolu_1", "name": "get_weather",
+                  "input": { "city": "Paris" } }
+            ]},
+            { "role": "user", "content": [
+                { "type": "tool_result", "tool_use_id": "toolu_1", "content": "18C" }
+            ]}
+          ],
+          "tools": [
+            { "name": "get_weather", "description": "w",
+              "input_schema": { "type": "object" } }
+          ],
+          "thinking": { "type": "enabled", "budget_tokens": 4096 }
+        }"#,
+    );
+    assert_eq!(req.system, vec!["be terse".to_string()]);
+    assert_eq!(req.params.max_tokens, Some(64));
+    // thinking budget 4096 -> Medium on the canonical scale.
+    assert_eq!(req.thinking, Some(ThinkingLevel::Medium));
+    // The opaque signature survives decode for later round-trip (FR-2.10).
+    match &req.messages[1].parts[0] {
+        Part::Thinking { text, signature } => {
+            assert_eq!(text, "hmm");
+            assert_eq!(signature.as_deref(), Some("sig-1"));
+        }
+        other => panic!("expected thinking part, got {other:?}"),
+    }
+    assert_eq!(req.tools[0].name, "get_weather");
+}
+
+#[test]
+fn decode_rejects_malformed_bodies_with_a_format_native_error() {
+    // A body that is valid JSON but has the wrong shape must be a bad_request,
+    // never a panic.
+    let err = frontends::decode(
+        FrontendFormat::OpenAi,
+        serde_json::json!({ "messages": "not-an-array" }),
+    );
+    assert!(err.is_err());
+}

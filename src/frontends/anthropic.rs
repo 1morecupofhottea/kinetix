@@ -277,7 +277,6 @@ fn decode_tool_choice(tc: Option<&Value>) -> (Option<ToolChoice>, Option<String>
 enum BlockState {
     Text,
     Thinking,
-    Tool { id: String, name: String },
 }
 
 pub struct AnthropicEncoder {
@@ -383,13 +382,7 @@ impl AnthropicEncoder {
         out.push(sse_frame(Some("content_block_start"), &frame.to_string()));
         self.tool_blocks
             .insert(index, (block_idx, id.to_string(), name.to_string()));
-        self.open_block = Some((
-            block_idx,
-            BlockState::Tool {
-                id: id.to_string(),
-                name: name.to_string(),
-            },
-        ));
+        self.open_block = Some((block_idx, BlockState::Text));
     }
 
     pub fn encode(&mut self, event: StreamEvent) -> Vec<Bytes> {
