@@ -151,12 +151,14 @@ graceful drain, Cloudflare Tunnel + Access setup, backup/restore, upgrades).
 
 ## Status
 
-Milestone 1 (walking skeleton) and Milestone 2 (dashboard, Routes, limits, cost,
-audit) are implemented and verified end-to-end against live Gemini and
-OpenAI-compatible upstreams. Revision 4 renamed the product to Kinetix (Prism is the
-old name), renamed Combos to Routes, and promoted several behaviours to MUST.
+All four r4 milestones (M1 Correct streaming skeleton, M2 Operable routing
+service, M3 Anthropic + cross-provider fidelity, M4 Operational polish) are
+implemented and verified end-to-end against live Gemini and OpenAI-compatible
+upstreams, plus real Pi acceptance sessions. Revision 4 renamed the product to
+Kinetix (Prism is the old name), renamed Combos to Routes, and promoted several
+behaviours to MUST.
 
-**Implemented in this pass** (r4 M1 + M2):
+**Implemented** (r4 M1–M4):
 
 - Same-format passthrough (FR-2.7/2.10) for OpenAI→OpenAI-compatible and
   Anthropic→Anthropic, preserving unknown/provider-specific fields verbatim while
