@@ -29,8 +29,10 @@ Verified acceptance behaviour (Milestone 1 / FR-9.2):
 - `GET /v1/models` lists the aliases and Routes the key may use, plus bare
   upstream model IDs.
 - Request headers Kinetix adds: `X-Request-Id`, `X-Kinetix-Route-Id` (opaque),
-  `X-Kinetix-Fallback` when a fallback occurred, and `X-Kinetix-Warning` when a
-  `strip_with_warning` portability action affected the request. Serving
+  `X-Kinetix-Fallback: 1` when a fallback occurred, and `X-Kinetix-Warning` when
+  a `strip_with_warning` portability action affected the request. The fallback
+  header is a presence flag (the hop count is internal routing detail and is not
+  exposed); resolve the opaque route id for the full trace. Serving
   account/provider names are **not** exposed to clients (FR-12.15).
 
 ### Session identity for cache affinity

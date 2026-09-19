@@ -1152,10 +1152,11 @@ fn stream_response(
         .header("x-kinetix-route-id", &trace.opaque_route_id)
         .header("x-kinetix-cache", meta.cache_status);
     if meta.fallback_hops > 0 {
-        builder = builder.header("x-kinetix-fallback", meta.fallback_hops.to_string());
-        if let Ok(t) = serde_json::to_string(&meta.fallback_path) {
-            builder = builder.header("x-kinetix-fallback-path", t);
-        }
+        // r4 specifies the literal value '1' (present only when a fallback
+        // occurred). The hop count and hop trace are internal routing detail and
+        // are not exposed on the ordinary response; the full trace is
+        // admin-resolvable through the opaque route id.
+        builder = builder.header("x-kinetix-fallback", "1");
     }
     if !trace.warnings.is_empty() {
         if let Ok(w) = serde_json::to_string(&trace.warnings) {

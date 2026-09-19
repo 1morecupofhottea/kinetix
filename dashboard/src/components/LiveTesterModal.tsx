@@ -52,6 +52,29 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
   const [meta, setMeta] = useState<ExecMeta | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Resolve the real hop trace from the opaque route id (admin-only). Called
+  // after a fallback stream completes, since the hop path is no longer exposed
+  // on the client response.
+  const loadTracePath = async (routeId: string) => {
+    try {
+      const res = await fetch(`/admin/api/route-traces/${encodeURIComponent(routeId)}`, {
+        credentials: 'same-origin',
+      });
+      if (!res.ok) return;
+      const j = await res.json();
+      const steps: any[] = Array.isArray(j?.steps) ? j.steps : [];
+      const path = steps.map((s: any) =>
+        s?.target ? `${s.target}: ${s.detail ?? ''}`.trim() : String(s?.detail ?? s?.stage ?? ''),
+      );
+      const hops = steps.filter((s: any) => s?.stage === 'attempt').length;
+      setMeta((m) =>
+        m ? { ...m, fallbackHops: hops > 1 ? hops - 1 : m.fallbackHops, fallbackPath: path } : m,
+      );
+    } catch {
+      /* trace is best-effort */
+    }
+  };
+
   // Keys/routes/models arrive asynchronously; default the selection once they load.
   useEffect(() => {
     if (!selectedKeyId && keys.length > 0) setSelectedKeyId(keys[0].id);
@@ -128,10 +151,10 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
       const routeId = res.headers.get('x-kinetix-route-id') || '';
       const warnings = parseWarningsHeader(res.headers.get('x-kinetix-warning') || '');
       const fallback = res.headers.get('x-kinetix-fallback') || '';
-      const parsedFallback = parseFallbackHeader(
-        fallback,
-        res.headers.get('x-kinetix-fallback-path') || '',
-      );
+      // The fallback header is a presence flag ('1'); the hop trace is not
+      // exposed on the response. It is fetched from the opaque route id below
+      // (admin-only) after the stream completes.
+      const parsedFallback = parseFallbackHeader(fallback);
 
       if (!res.ok) {
         const text = await res.text();
@@ -195,6 +218,10 @@ export const LiveTesterModal: React.FC<LiveTesterModalProps> = ({
         latencyMs: Math.round(performance.now() - started),
         statusCode: res.status,
       });
+      // Real hop trace from the opaque route id (admin-only).
+      if (parsedFallback.hops > 0 && routeId) {
+        void loadTracePath(routeId);
+      }
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         setError(e instanceof Error ? e.message : String(e));
@@ -579,22 +606,10 @@ function extractNonStreamText(j: any, protocol: 'openai' | 'anthropic'): string 
   }
 }
 
-function parseFallbackHeader(
-  value: string,
-  pathHeader: string,
-): { hops: number; path: string[] } {
-  if (!value) return { hops: 0, path: [] };
-  const hops = Number(value);
-  let path: string[] = [];
-  if (pathHeader) {
-    try {
-      const parsed = JSON.parse(pathHeader);
-      if (Array.isArray(parsed)) path = parsed.map(String);
-    } catch {
-      /* ignore malformed trace */
-    }
-  }
-  return { hops: isFinite(hops) ? hops : 0, path };
+function parseFallbackHeader(value: string): { hops: number; path: string[] } {
+  // Presence flag only; the hop count/path are not on the response.
+  const present = value.trim() !== '' && value.trim() !== '0';
+  return { hops: present ? 1 : 0, path: [] };
 }
 
 /** Split the `X-Kinetix-Served-By` header ("Account (Provider)") into its parts. */
