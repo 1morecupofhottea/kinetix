@@ -75,6 +75,16 @@ scripts/bench-rust.sh "1 10 100 200 500 1000" 3000
   **no corruption** — the required characterization for levels above the gate.
   The plateau near ~26 ms TTFT is Kinetix's own single-process connection setup.
 
+## Cold start and idle footprint (NFR-1.5/1.6)
+
+Measured on the release binary with a fresh throwaway database:
+
+| Metric | Target | Measured |
+|---|---|---|
+| Cold start to `/healthz` ready | ≤ 2 s | ~75 ms |
+| Idle RSS | ≤ 50 MB | ~13 MB |
+| Idle CPU | negligible | ~1% |
+
 ## Reproduce
 
 ```sh
