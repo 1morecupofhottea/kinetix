@@ -165,6 +165,17 @@ See `deploy/README.md` for the full runbook (systemd unit with auto-restart and
 graceful drain, Cloudflare Tunnel + Access setup, backup/restore, upgrades).
 `deploy/kinetix.service` is a ready systemd unit (NFR-2.2/2.3).
 
+## Dashboard
+
+The embedded React dashboard at `/admin` covers the whole control plane: virtual
+keys, Routes, upstream providers and their accounts, model aliases, usage/spend
+(with a Today/24h/7d/30d window and per-day JSONL/CSV exports you can download or
+delete), the Request Inspector (live in-flight view plus inline Route Trace and
+flight-recorder diagnostics), the append-only audit log, and a **Settings &
+Security** page to change the admin password. Destructive actions (revoke a key,
+remove an alias, delete an export file, delete a provider/model/account/route)
+ask for confirmation first.
+
 ## Admin authentication
 
 - `kinetix init` (or the first `kinetix serve`) generates an admin password and
