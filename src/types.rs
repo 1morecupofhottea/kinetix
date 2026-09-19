@@ -62,7 +62,8 @@ pub struct Capabilities {
     pub vision: bool,
     #[serde(default)]
     pub reasoning: bool,
-    #[serde(default)]
+    // Accept the dashboard's camelCase spelling too; always serialized snake_case.
+    #[serde(default, alias = "toolCalling")]
     pub tool_calling: bool,
     #[serde(default)]
     pub audio: bool,

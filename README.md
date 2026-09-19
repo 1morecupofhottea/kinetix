@@ -44,7 +44,7 @@ everything is set with subcommands and stored under your XDG directories
 
 ```bash
 # 1. Install (builds from source and drops the binary in ~/.local/bin)
-curl -fsSL https://raw.githubusercontent.com/PrightCord/kinetix/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/install.sh | bash
 
 # 2. Add an upstream and its credential, a model, and a virtual key
 kinetix provider add --name "My Provider" --base-url https://api.example.com/v1 \

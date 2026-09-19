@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Kinetix installer (Linux x86_64 / aarch64).
 #
-#   curl -fsSL https://raw.githubusercontent.com/PrightCord/kinetix/main/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/install.sh | bash
 #
 # It installs the `kinetix` binary to ~/.local/bin, creates the XDG config/data/
 # state directories, and prints the generated admin password once. Everything is
@@ -10,10 +10,10 @@
 # Environment overrides:
 #   KINETIX_VERSION   git tag/branch to install (default: main)
 #   KINETIX_PREFIX    install prefix (default: ~/.local)
-#   KINETIX_REPO      git URL (default: https://github.com/PrightCord/kinetix)
+#   KINETIX_REPO      git URL (default: https://github.com/LazyGreed/kinetix)
 set -euo pipefail
 
-REPO="${KINETIX_REPO:-https://github.com/PrightCord/kinetix}"
+REPO="${KINETIX_REPO:-https://github.com/LazyGreed/kinetix}"
 VERSION="${KINETIX_VERSION:-main}"
 PREFIX="${KINETIX_PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
@@ -30,23 +30,53 @@ case "$(uname -m)" in
   *) err "unsupported architecture $(uname -m) (need x86_64 or aarch64)" ;;
 esac
 
-command -v cargo >/dev/null 2>&1 || err "cargo (Rust) is required to build Kinetix; install from https://rustup.rs"
-command -v git   >/dev/null 2>&1 || err "git is required"
+command -v git   >/dev/null 2>&1 || :  # git only needed for the source-build fallback
 
-WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+case "$(uname -m)" in
+  x86_64)  RUST_TARGET="x86_64-unknown-linux-gnu" ;;
+  aarch64) RUST_TARGET="aarch64-unknown-linux-gnu" ;;
+esac
 
-log "Fetching Kinetix ($VERSION)"
-git clone --depth 1 --branch "$VERSION" "$REPO" "$WORK/kinetix" 2>/dev/null \
-  || git clone --depth 1 "$REPO" "$WORK/kinetix"
+# --- Prefer a prebuilt release binary (no toolchain needed) ----------------
+# When KINETIX_VERSION looks like a release tag (vX.Y.Z) we fetch the matching
+# asset from GitHub Releases; otherwise we fall back to building from source.
+installed=0
+if printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+'; then
+  ASSET="kinetix-${VERSION}-${RUST_TARGET}.tar.gz"
+  URL="https://github.com/LazyGreed/kinetix/releases/download/${VERSION}/${ASSET}"
+  log "Downloading prebuilt binary ($ASSET)"
+  if curl -fsSL "$URL" -o /tmp/kinetix-dl.tar.gz 2>/dev/null; then
+    mkdir -p "$BIN_DIR"
+    tar -xzf /tmp/kinetix-dl.tar.gz -C "$BIN_DIR" kinetix 2>/dev/null \
+      || tar -xzf /tmp/kinetix-dl.tar.gz -C /tmp && install -m 0755 /tmp/kinetix "$BIN_DIR/kinetix"
+    chmod 0755 "$BIN_DIR/kinetix"
+    rm -f /tmp/kinetix-dl.tar.gz /tmp/kinetix
+    log "Installed prebuilt $BIN_DIR/kinetix"
+    installed=1
+  else
+    log "No prebuilt asset found for $VERSION; building from source instead"
+  fi
+fi
 
-cd "$WORK/kinetix"
-log "Building release binary (this may take a few minutes)"
-cargo build --release --locked 2>/dev/null || cargo build --release
+if [ "$installed" -eq 0 ]; then
+  command -v cargo >/dev/null 2>&1 || err "cargo (Rust) is required to build Kinetix; install from https://rustup.rs (or install a released tag: KINETIX_VERSION=vX.Y.Z)"
+  command -v git   >/dev/null 2>&1 || err "git is required to build Kinetix from source"
 
-mkdir -p "$BIN_DIR"
-install -m 0755 target/release/kinetix "$BIN_DIR/kinetix"
-log "Installed $BIN_DIR/kinetix"
+  WORK="$(mktemp -d)"
+  trap 'rm -rf "$WORK"' EXIT
+
+  log "Fetching Kinetix ($VERSION)"
+  git clone --depth 1 --branch "$VERSION" "$REPO" "$WORK/kinetix" 2>/dev/null \
+    || git clone --depth 1 "$REPO" "$WORK/kinetix"
+
+  cd "$WORK/kinetix"
+  log "Building release binary (this may take a few minutes)"
+  cargo build --release --locked 2>/dev/null || cargo build --release
+
+  mkdir -p "$BIN_DIR"
+  install -m 0755 target/release/kinetix "$BIN_DIR/kinetix"
+  log "Installed $BIN_DIR/kinetix"
+fi
 
 # Ensure ~/.local/bin is on PATH for future shells.
 if ! printf '%s' ":$PATH:" | grep -q ":$BIN_DIR:"; then

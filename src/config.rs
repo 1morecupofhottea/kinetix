@@ -346,7 +346,9 @@ fn resolve_admin_token(
         // explicitly-provided password would be silently ignored once a hash file
         // existed, contradicting the documented CLI > env > file precedence.
         let want = crate::crypto::hash_virtual_key(pw.trim());
-        let current = std::fs::read_to_string(&hash_file).ok().map(|s| s.trim().to_string());
+        let current = std::fs::read_to_string(&hash_file)
+            .ok()
+            .map(|s| s.trim().to_string());
         if current.as_deref() != Some(want.as_str()) {
             write_secret_file(&hash_file, &want)?;
         }

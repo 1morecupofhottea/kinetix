@@ -1,0 +1,55 @@
+name: release
+
+# Publishes prebuilt Linux binaries (x86_64 + aarch64) to a GitHub Release when
+# a version tag is pushed, e.g. `git tag v0.1.0 && git push origin v0.1.0`.
+#
+# Releases are intentionally tag-driven: nothing is published unless a version
+# tag is explicitly created (the maintainer decides which versions ship).
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to (re)build a release for, e.g. v0.1.0'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - name: Build dashboard (embedded into the binary)
+        working-directory: dashboard
+        run: |
+          npm ci
+          npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Builds the requested targets (using `cross` for the non-native one) and
+      # uploads `kinetix-<tag>-<target>.tar.gz` to the release, creating it if
+      # needed. The asset name matches the installer's download convention.
+      - name: Build and upload binaries
+        uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: kinetix
+          target: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+          archive: kinetix-$tag-$target
+          token: ${{ secrets.GITHUB_TOKEN }}
+          ref: ${{ github.event.inputs.tag || github.ref }}

@@ -724,7 +724,7 @@ pub async fn create_provider(
         db::insert_account(
             &state.pool,
             &id,
-            body.account_label.as_deref().unwrap_or("Default key"),
+            &account_label_or_default(&body.name, body.account_label.as_deref()),
             &enc,
             &crypto::mask_secret(&api_key),
             1,
@@ -792,7 +792,7 @@ pub async fn update_provider(
         db::insert_account(
             &state.pool,
             &id,
-            body.account_label.as_deref().unwrap_or("Default key"),
+            &account_label_or_default(&body.name, body.account_label.as_deref()),
             &enc,
             &crypto::mask_secret(&api_key),
             1,
@@ -2679,6 +2679,16 @@ fn truncate(s: &str, max: usize) -> String {
         s.to_string()
     } else {
         format!("{}…", &s[..max])
+    }
+}
+
+/// Label for an account auto-created alongside a provider. Uses the supplied
+/// label when given; otherwise derives it from the provider name so the pool key
+/// is not misleadingly called "Default key".
+fn account_label_or_default(provider_name: &str, label: Option<&str>) -> String {
+    match label.map(str::trim).filter(|l| !l.is_empty()) {
+        Some(l) => l.to_string(),
+        None => format!("{} (primary)", provider_name.trim()),
     }
 }
 
