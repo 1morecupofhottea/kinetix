@@ -2286,6 +2286,18 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
         "kinetix_requests_total {}\n",
         summary["requests"].as_i64().unwrap_or(0)
     ));
+    // Request/error rate (NFR-4.2): errors over total requests, including
+    // client disconnects, so the ratio matches the alert loop's definition.
+    {
+        let reqs = summary["requests"].as_i64().unwrap_or(0).max(1);
+        let errs = summary["error_requests"].as_i64().unwrap_or(0);
+        body.push_str("# HELP kinetix_error_rate Request error ratio (0..1)\n");
+        body.push_str("# TYPE kinetix_error_rate gauge\n");
+        body.push_str(&format!(
+            "kinetix_error_rate {}\n",
+            errs as f64 / reqs as f64
+        ));
+    }
     body.push_str("# HELP kinetix_cost_usd_total Total computed cost in USD\n");
     body.push_str("# TYPE kinetix_cost_usd_total counter\n");
     body.push_str(&format!(
@@ -2341,6 +2353,18 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
     body.push_str("# HELP kinetix_cancellation_latency_ms Average cancellation latency (ms)\n");
     body.push_str("# TYPE kinetix_cancellation_latency_ms gauge\n");
     body.push_str(&format!("kinetix_cancellation_latency_ms {avg_cancel}\n"));
+    body.push_str("# HELP kinetix_avg_latency_ms Average end-to-end latency (ms)\n");
+    body.push_str("# TYPE kinetix_avg_latency_ms gauge\n");
+    body.push_str(&format!(
+        "kinetix_avg_latency_ms {}\n",
+        summary["avg_latency_ms"].as_f64().unwrap_or(0.0)
+    ));
+    body.push_str("# HELP kinetix_avg_ttft_ms Average time-to-first-token (ms)\n");
+    body.push_str("# TYPE kinetix_avg_ttft_ms gauge\n");
+    body.push_str(&format!(
+        "kinetix_avg_ttft_ms {}\n",
+        summary["avg_ttft_ms"].as_f64().unwrap_or(0.0)
+    ));
     body.push_str("# HELP kinetix_cached_tokens_total Provider-reported cached prompt tokens\n");
     body.push_str("# TYPE kinetix_cached_tokens_total counter\n");
     body.push_str(&format!(

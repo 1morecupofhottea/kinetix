@@ -1253,8 +1253,10 @@ pub async fn usage_summary(pool: &Pool) -> Result<Value> {
             COALESCE(SUM(CASE WHEN cost_known = 0 THEN 1 ELSE 0 END),0) as unknown_cost_rows,
             COALESCE(SUM(CASE WHEN usage_confidence = 'unknown' THEN 1 ELSE 0 END),0) as unknown_usage_rows,
             COALESCE(SUM(CASE WHEN usage_confidence = 'estimated' THEN 1 ELSE 0 END),0) as estimated_usage_rows,
+            COALESCE(SUM(CASE WHEN status IN ('upstream_error','stream_error','rate_limited','quota_exhausted','client_error') THEN 1 ELSE 0 END),0) as error_rows,
             COALESCE(SUM(fallback_hops),0) as fallback_hops,
-            COALESCE(AVG(latency_ms),0.0) as avg_latency
+            COALESCE(AVG(latency_ms),0.0) as avg_latency,
+            COALESCE(AVG(ttft_ms),0.0) as avg_ttft
          FROM usage_logs",
     )
     .fetch_one(pool)
@@ -1274,8 +1276,10 @@ pub async fn usage_summary(pool: &Pool) -> Result<Value> {
         // unknown. Estimated/unknown rows must never be read as exact.
         "unknown_usage_requests": row.get::<i64, _>("unknown_usage_rows"),
         "estimated_usage_requests": row.get::<i64, _>("estimated_usage_rows"),
+        "error_requests": row.get::<i64, _>("error_rows"),
         "fallback_hops": row.get::<i64, _>("fallback_hops"),
         "avg_latency_ms": row.get::<f64, _>("avg_latency"),
+        "avg_ttft_ms": row.get::<f64, _>("avg_ttft"),
     }))
 }
 
