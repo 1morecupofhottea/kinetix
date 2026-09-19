@@ -137,10 +137,12 @@ impl Registry {
                     return Some(route);
                 }
             } else if let Some(m) = snap.models.get(&alias.target_id) {
-                return Some(Resolved::Single {
-                    provider_id: m.provider_id.clone(),
-                    model_id: m.id.clone(),
-                });
+                if m.enabled != 0 {
+                    return Some(Resolved::Single {
+                        provider_id: m.provider_id.clone(),
+                        model_id: m.id.clone(),
+                    });
+                }
             }
         }
 
@@ -163,17 +165,23 @@ impl Registry {
                     .get(&(p.id.clone(), model_part.to_string()))
                 {
                     if let Some(m) = snap.models.get(mid) {
-                        return Some(Resolved::Single {
-                            provider_id: m.provider_id.clone(),
-                            model_id: m.id.clone(),
-                        });
+                        if m.enabled != 0 {
+                            return Some(Resolved::Single {
+                                provider_id: m.provider_id.clone(),
+                                model_id: m.id.clone(),
+                            });
+                        }
                     }
                 }
             }
         }
 
         // 4. Bare upstream model id.
-        if let Some(m) = snap.models.values().find(|m| m.upstream_id == requested) {
+        if let Some(m) = snap
+            .models
+            .values()
+            .find(|m| m.upstream_id == requested && m.enabled != 0)
+        {
             return Some(Resolved::Single {
                 provider_id: m.provider_id.clone(),
                 model_id: m.id.clone(),
@@ -193,6 +201,10 @@ impl Registry {
             let Some(model) = snap.models.get(&t.model_id).cloned() else {
                 continue;
             };
+            // A disabled model is never a routable target (FR-10.2).
+            if model.enabled == 0 {
+                continue;
+            }
             let Some(provider) = snap.providers.get(&model.provider_id).cloned() else {
                 continue;
             };
@@ -258,6 +270,24 @@ impl Registry {
 
     pub fn aliases(&self) -> Vec<AliasRow> {
         self.snapshot().aliases.values().cloned().collect()
+    }
+
+    /// Enabled Routes whose target list is currently empty, i.e. no eligible
+    /// target (disabled model, missing account, or no targets configured).
+    /// Used by the startup diagnostic and alerting; it only reads the snapshot.
+    pub fn routes_with_no_targets(&self) -> Vec<String> {
+        let snap = self.snapshot();
+        snap.routes
+            .values()
+            .filter(|r| r.enabled != 0)
+            .filter(|r| {
+                snap.route_targets
+                    .get(&r.id)
+                    .map(|ts| ts.is_empty())
+                    .unwrap_or(true)
+            })
+            .map(|r| r.name.clone())
+            .collect()
     }
 }
 

@@ -63,6 +63,12 @@ async fn main() -> Result<()> {
     }
     let log_queue = UsageLogQueue::new(pool.clone(), 4096);
 
+    // Startup route-eligibility diagnostic (NFR-2.7 / Monitoring): warn once at
+    // boot if any enabled Route currently has no eligible target, so an
+    // operator sees a misconfiguration before traffic arrives. This never
+    // affects serving (it only reads the just-loaded snapshot).
+    warn_on_unroutable_routes(&registry);
+
     // HTTP client for upstreams: pooled, HTTP/2, bounded connect timeout.
     let http = reqwest::Client::builder()
         .pool_max_idle_per_host(64)
@@ -222,6 +228,19 @@ fn spawn_background_tasks(state: AppState) {
     // Recover cooled-down / exhausted accounts whose windows have elapsed
     // (FR-12.9): recovery is bounded by the registry reload above, which flips
     // `effective_status` back to healthy automatically once the window passes.
+}
+
+/// Startup diagnostic: warn about enabled Routes with no eligible target so an
+/// operator notices a misconfiguration at boot (NFR-2.7 / Monitoring). Reads the
+/// snapshot only; never affects serving.
+fn warn_on_unroutable_routes(registry: &Registry) {
+    let names = registry.routes_with_no_targets();
+    if !names.is_empty() {
+        tracing::warn!(
+            routes = ?names,
+            "enabled route(s) have no eligible target at startup; requests to them will fail until configured"
+        );
+    }
 }
 
 async fn shutdown_signal(grace_secs: u64) {
