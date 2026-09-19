@@ -184,13 +184,26 @@ fn spawn_background_tasks(state: AppState) {
             tick.tick().await; // skip the immediate first tick
             loop {
                 tick.tick().await;
-                let _ = db::scheduled_backup(
+                match db::scheduled_backup(
                     &st.pool,
                     &st.config.database_url,
                     &st.config.data_dir,
                     14,
                 )
-                .await;
+                .await
+                {
+                    Ok(Some(_)) => {
+                        *st.last_backup_at.lock() = Some(db::now_iso());
+                        st.last_backup_failed
+                            .store(false, std::sync::atomic::Ordering::Relaxed);
+                    }
+                    Ok(None) => {} // in-memory database: nothing to back up
+                    Err(e) => {
+                        tracing::error!(error = %e, "scheduled backup failed");
+                        st.last_backup_failed
+                            .store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
+                }
             }
         });
     }

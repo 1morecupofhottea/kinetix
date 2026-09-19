@@ -47,6 +47,11 @@ pub struct AppState {
     pub route_skips: Arc<AtomicU64>,
     /// Requests that used at least one fallback hop (FR-12.6, NFR-4.2).
     pub route_fallbacks: Arc<AtomicU64>,
+    /// Last successful scheduled backup timestamp (RFC3339), for backup-failure
+    /// alerting (Monitoring). None until a backup has run.
+    pub last_backup_at: Arc<parking_lot::Mutex<Option<String>>>,
+    /// Whether the last scheduled backup attempt failed.
+    pub last_backup_failed: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -89,6 +94,8 @@ impl AppState {
             total_requests: Arc::new(AtomicU64::new(0)),
             route_skips: Arc::new(AtomicU64::new(0)),
             route_fallbacks: Arc::new(AtomicU64::new(0)),
+            last_backup_at: Arc::new(parking_lot::Mutex::new(None)),
+            last_backup_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 

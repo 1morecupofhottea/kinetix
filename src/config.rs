@@ -48,6 +48,8 @@ pub struct Config {
     pub alert_min_requests: i64,
     /// Seconds between alert evaluations.
     pub alert_interval_secs: u64,
+    /// p95 added-proxy-latency alert threshold in milliseconds (Monitoring).
+    pub alert_p95_latency_ms: u64,
 }
 
 impl Config {
@@ -101,6 +103,9 @@ impl Config {
         let alert_interval_secs = env_or("KINETIX_ALERT_INTERVAL_SECS", "60")
             .parse::<u64>()
             .unwrap_or(60);
+        let alert_p95_latency_ms = env_or("KINETIX_ALERT_P95_LATENCY_MS", "100")
+            .parse::<u64>()
+            .unwrap_or(100);
 
         Ok(Config {
             bind,
@@ -125,6 +130,7 @@ impl Config {
             alert_error_rate,
             alert_min_requests,
             alert_interval_secs,
+            alert_p95_latency_ms,
         })
     }
 }

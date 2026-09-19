@@ -193,6 +193,11 @@ old name), renamed Combos to Routes, and promoted several behaviours to MUST.
   Trace at `GET /admin/api/route-traces/{opaque_id}` (admin-only), so serving
   topology stays hidden from clients while remaining explainable to operators
   (FR-12.15). The Live Tester can resolve the id it received.
+- Alerting (FR-6.6/FR-12.17) also covers the Monitoring section: high fallback
+  and error rates, unhealthy accounts, routes with no healthy target, virtual
+  keys crossing 80% of their monthly budget, usage-log queue saturation/drops,
+  scheduled-backup failure, and p95 added proxy latency above
+  `KINETIX_ALERT_P95_LATENCY_MS` sustained for 10 minutes.
 - Discovery never overwrites admin edits (FR-10.5): `POST
   /admin/api/providers/:id/discover` records a per-model `discovery` observation
   and returns a `disappeared` list flagging models no longer advertised

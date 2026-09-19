@@ -16,6 +16,7 @@ pub struct UsageLogQueue {
     tx: mpsc::Sender<UsageLogRow>,
     dropped: Arc<AtomicU64>,
     depth: Arc<AtomicU64>,
+    capacity: usize,
 }
 
 impl UsageLogQueue {
@@ -49,7 +50,17 @@ impl UsageLogQueue {
             }
         });
 
-        UsageLogQueue { tx, dropped, depth }
+        UsageLogQueue {
+            tx,
+            dropped,
+            depth,
+            capacity,
+        }
+    }
+
+    /// The bounded capacity, for queue-saturation alerting (Monitoring).
+    pub fn capacity(&self) -> usize {
+        self.capacity
     }
 
     /// Enqueue a usage row. Never blocks; drops (and counts) when full.

@@ -517,6 +517,11 @@ pub async fn run(
             let _ = db::touch_probe_at(&state.pool, &target.account.id).await;
         }
 
+        // Kinetix-attributable dispatch overhead (auth, limits, routing,
+        // predicates, body build) — recorded for the p95 added-latency alert
+        // (Monitoring). Excludes upstream network time.
+        crate::alerts::record_added_latency(started.elapsed().as_millis() as u64);
+
         match send_upstream(
             state,
             &adapter,

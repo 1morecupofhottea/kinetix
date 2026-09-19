@@ -17,6 +17,54 @@ use serde_json::{json, Value};
 use crate::app::AppState;
 use crate::db;
 
+/// One latency sample (NFR-1.1/1.2 added proxy latency).
+struct LatencySample {
+    at: std::time::Instant,
+    ms: u64,
+}
+
+/// Process-wide added-latency samples. Kept module-level so the data path can
+/// record overhead without threading an Arc through AppState.
+static LATENCY: once_cell::sync::Lazy<Mutex<std::collections::VecDeque<LatencySample>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(std::collections::VecDeque::new()));
+static LATENCY_BREACH_SINCE: once_cell::sync::Lazy<Mutex<Option<std::time::Instant>>> =
+    once_cell::sync::Lazy::new(|| Mutex::new(None));
+
+/// Record a Kinetix-attributable added-latency sample (routing/dispatch
+/// overhead). Called from the request path; O(1) and never blocking.
+pub fn record_added_latency(ms: u64) {
+    let mut q = LATENCY.lock();
+    q.push_back(LatencySample {
+        at: std::time::Instant::now(),
+        ms,
+    });
+    // Keep a bounded ~10 minute window.
+    let cutoff = std::time::Instant::now() - Duration::from_secs(600);
+    while let Some(front) = q.front() {
+        if front.at < cutoff {
+            q.pop_front();
+        } else {
+            break;
+        }
+    }
+    // Hard cap so a burst cannot grow memory (NFR-1.3).
+    while q.len() > 20000 {
+        q.pop_front();
+    }
+}
+
+/// p95 of the samples in the last 10 minutes, or None when too few.
+fn latency_p95() -> Option<u64> {
+    let q = LATENCY.lock();
+    if q.len() < 20 {
+        return None;
+    }
+    let mut v: Vec<u64> = q.iter().map(|s| s.ms).collect();
+    v.sort_unstable();
+    let idx = ((v.len() as f64 * 0.95) as usize).min(v.len() - 1);
+    Some(v[idx])
+}
+
 /// Alert conditions currently firing, so we only send on transitions.
 #[derive(Default)]
 pub struct AlertState {
@@ -181,6 +229,115 @@ async fn evaluate(state: &AppState, alerts: &AlertState, url: &str) -> anyhow::R
             }
         } else if alerts.should_resolve(&key) {
             resolve(state, url, &key).await;
+        }
+    }
+
+    // p95 added proxy latency > threshold sustained for >= 10 minutes
+    // (Monitoring). Measured from real requests, not guessed.
+    {
+        let key = "high_added_latency";
+        let breach = state.config.alert_p95_latency_ms;
+        match latency_p95() {
+            Some(p95) if p95 > breach => {
+                let sustained = {
+                    let mut since = LATENCY_BREACH_SINCE.lock();
+                    let started = *since.get_or_insert_with(std::time::Instant::now);
+                    started.elapsed() >= Duration::from_secs(600)
+                };
+                if sustained && alerts.should_fire(key) {
+                    fire(
+                        state,
+                        url,
+                        key,
+                        &format!(
+                            "p95 added proxy latency is {p95} ms (threshold {breach} ms for 10m)"
+                        ),
+                        json!({"p95_ms": p95, "threshold_ms": breach}),
+                    )
+                    .await;
+                }
+            }
+            _ => {
+                *LATENCY_BREACH_SINCE.lock() = None;
+                if alerts.should_resolve(key) {
+                    resolve(state, url, key).await;
+                }
+            }
+        }
+    }
+
+    // Bounded usage-log queue saturation / drops (Monitoring).
+    {
+        let key = "usage_queue_saturated";
+        let depth = state.log_queue.depth();
+        let cap = state.log_queue.capacity() as u64;
+        let dropped = state.log_queue.dropped();
+        let saturated = (cap > 0 && depth * 100 >= cap * 80) || dropped > 0;
+        if saturated {
+            if alerts.should_fire(key) {
+                fire(
+                    state,
+                    url,
+                    key,
+                    &format!("usage-log queue depth {depth}/{cap}, dropped {dropped}"),
+                    json!({"depth": depth, "capacity": cap, "dropped": dropped}),
+                )
+                .await;
+            }
+        } else if alerts.should_resolve(key) {
+            resolve(state, url, key).await;
+        }
+    }
+
+    // Scheduled backup failure (Monitoring). Fires when the last attempt failed.
+    if state
+        .last_backup_failed
+        .load(std::sync::atomic::Ordering::Relaxed)
+    {
+        let key = "backup_failed";
+        if alerts.should_fire(key) {
+            fire(
+                state,
+                url,
+                key,
+                "the last scheduled database backup failed",
+                json!({"last_backup_at": *state.last_backup_at.lock()}),
+            )
+            .await;
+        }
+    } else if alerts.should_resolve("backup_failed") {
+        resolve(state, url, "backup_failed").await;
+    }
+
+    // Virtual-key budget thresholds (Monitoring). Fires at >= 80% of the
+    // monthly budget.
+    {
+        let since = crate::pool::window_start("monthly", None);
+        let statuses = db::key_budget_status(&state.pool, &since).await?;
+        let mut fired: HashSet<String> = HashSet::new();
+        for (id, name, spend, budget) in statuses {
+            let Some(budget) = budget else { continue };
+            if budget <= 0.0 {
+                continue;
+            }
+            let key = format!("key_budget:{id}");
+            fired.insert(key.clone());
+            if spend >= budget * 0.8 {
+                if alerts.should_fire(&key) {
+                    fire(
+                        state,
+                        url,
+                        &key,
+                        &format!(
+                            "virtual key '{name}' has spent {spend:.2} of its {budget:.2} monthly budget"
+                        ),
+                        json!({"key": name, "spend_usd": spend, "budget_usd": budget}),
+                    )
+                    .await;
+                }
+            } else if alerts.should_resolve(&key) {
+                resolve(state, url, &key).await;
+            }
         }
     }
 

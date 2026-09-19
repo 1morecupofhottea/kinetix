@@ -87,24 +87,26 @@ pub fn backup_before_migration(database_url: &str, data_dir: &std::path::Path) -
 /// Unlike a raw file copy, `VACUUM INTO` produces a transactionally consistent
 /// snapshot even while the database is live. Returns the written path, or None
 /// for in-memory / unavailable databases.
+/// Run a consistent scheduled backup (NFR-2.4). Returns `Ok(None)` when the
+/// database is in-memory (nothing to back up) and `Err` when the backup failed,
+/// so the caller can distinguish "skipped" from "failed" for alerting.
 pub async fn scheduled_backup(
     pool: &Pool,
     database_url: &str,
     data_dir: &std::path::Path,
     retain: usize,
-) -> Option<PathBuf> {
-    let path = database_url
+) -> Result<Option<PathBuf>, String> {
+    let _path = match database_url
         .strip_prefix("sqlite://")
-        .or_else(|| database_url.strip_prefix("sqlite:"))?
-        .split('?')
-        .next()
-        .unwrap_or("");
-    if path.is_empty() || path == ":memory:" {
-        return None;
-    }
+        .or_else(|| database_url.strip_prefix("sqlite:"))
+        .map(|p| p.split('?').next().unwrap_or("").to_string())
+    {
+        Some(p) if !p.is_empty() && p != ":memory:" => p,
+        _ => return Ok(None),
+    };
     let backup_dir = data_dir.join("backups");
-    if std::fs::create_dir_all(&backup_dir).is_err() {
-        return None;
+    if let Err(e) = std::fs::create_dir_all(&backup_dir) {
+        return Err(format!("cannot create backup dir: {e}"));
     }
     let stamp = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
     let dst = backup_dir.join(format!("kinetix-{stamp}.db"));
@@ -114,7 +116,7 @@ pub async fn scheduled_backup(
     );
     if let Err(e) = sqlx::query(&sql).execute(pool).await {
         tracing::warn!(error = %e, "scheduled backup failed");
-        return None;
+        return Err(format!("VACUUM INTO failed: {e}"));
     }
     tracing::info!(backup = %dst.display(), "wrote scheduled backup");
     // Retention: keep the newest `retain` kinetix-*.db files.
@@ -135,7 +137,7 @@ pub async fn scheduled_backup(
             let _ = std::fs::remove_file(&old);
         }
     }
-    Some(dst)
+    Ok(Some(dst))
 }
 
 // ===========================================================================
@@ -1253,6 +1255,37 @@ pub async fn usage_summary(pool: &Pool) -> Result<Value> {
         "fallback_hops": row.get::<i64, _>("fallback_hops"),
         "avg_latency_ms": row.get::<f64, _>("avg_latency"),
     }))
+}
+
+/// Per-key spend over a window plus the key's configured budget, for budget
+/// threshold alerts. Only keys with a budget configured are returned.
+pub async fn key_budget_status(
+    pool: &Pool,
+    since_iso: &str,
+) -> Result<Vec<(String, String, f64, Option<f64>)>> {
+    let rows = sqlx::query(
+        "SELECT k.id as id, k.name as name,
+                COALESCE(SUM(u.cost_usd),0.0) as spend,
+                k.monthly_budget as monthly_budget
+         FROM virtual_keys k
+         LEFT JOIN usage_logs u ON u.key_id = k.id AND u.ts >= ?
+         GROUP BY k.id
+         HAVING k.monthly_budget IS NOT NULL",
+    )
+    .bind(since_iso)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            (
+                r.get::<String, _>("id"),
+                r.get::<String, _>("name"),
+                r.get::<f64, _>("spend"),
+                r.get::<Option<f64>, _>("monthly_budget"),
+            )
+        })
+        .collect())
 }
 
 /// Sum of cost for a key within a time window (ISO timestamp lower bound).
