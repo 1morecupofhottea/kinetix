@@ -426,6 +426,7 @@ pub async fn run(
             Ok(c) => c.secret,
             Err(e) => {
                 tracing::error!(account = %target.account.id, error = %e, "credential resolution failed");
+                crate::alerts::record_credential_failure();
                 last_error = Some(ProxyError::internal("credential unavailable"));
                 trace.step(
                     "skip",

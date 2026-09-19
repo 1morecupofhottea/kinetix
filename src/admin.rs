@@ -772,7 +772,10 @@ pub async fn discover_models(
         .credentials
         .resolve(&account)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(|e| {
+            crate::alerts::record_credential_failure();
+            ApiError::internal(e)
+        })?
         .secret;
 
     let wire = provider.wire();
@@ -914,7 +917,10 @@ pub async fn test_provider(
         .credentials
         .resolve(&account)
         .await
-        .map_err(ApiError::internal)?
+        .map_err(|e| {
+            crate::alerts::record_credential_failure();
+            ApiError::internal(e)
+        })?
         .secret;
 
     let upstream_id = body
@@ -2362,6 +2368,12 @@ pub async fn metrics(State(state): State<AppState>, _auth: AdminAuth) -> Respons
     body.push_str(&format!(
         "kinetix_usage_unknown_cost_total {}\n",
         summary["unknown_cost_requests"].as_i64().unwrap_or(0)
+    ));
+    body.push_str("# HELP kinetix_credential_failures_total Credential-strategy failures\n");
+    body.push_str("# TYPE kinetix_credential_failures_total counter\n");
+    body.push_str(&format!(
+        "kinetix_credential_failures_total {}\n",
+        crate::alerts::credential_failures()
     ));
     body.push_str("# HELP kinetix_fallback_hops_total Total fallback hops across requests\n");
     body.push_str("# TYPE kinetix_fallback_hops_total counter\n");

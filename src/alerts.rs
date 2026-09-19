@@ -30,6 +30,24 @@ static LATENCY: once_cell::sync::Lazy<Mutex<std::collections::VecDeque<LatencySa
 static LATENCY_BREACH_SINCE: once_cell::sync::Lazy<Mutex<Option<std::time::Instant>>> =
     once_cell::sync::Lazy::new(|| Mutex::new(None));
 
+/// Count of credential-strategy failures (key decrypt/refresh). Incremented
+/// from the request path and admin discovery; read by the alert loop to detect
+/// repeated credential failures (Monitoring: "built-in credential strategy …
+/// refresh fails repeatedly"). Edge-triggered via the fired marker below.
+static CREDENTIAL_FAILURES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CREDENTIAL_FAILURE_ALERTED: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Record a credential-strategy failure (never blocks; data-plane safe).
+pub fn record_credential_failure() {
+    CREDENTIAL_FAILURES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Number of credential failures seen since the process started.
+pub fn credential_failures() -> u64 {
+    CREDENTIAL_FAILURES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Record a Kinetix-attributable added-latency sample (routing/dispatch
 /// overhead). Called from the request path; O(1) and never blocking.
 pub fn record_added_latency(ms: u64) {
@@ -337,6 +355,34 @@ async fn evaluate(state: &AppState, alerts: &AlertState, url: &str) -> anyhow::R
                 }
             } else if alerts.should_resolve(&key) {
                 resolve(state, url, &key).await;
+            }
+        }
+    }
+
+    // Repeated credential/discovery-refresh failure (Monitoring). Edge-triggered
+    // so a persistent failure alerts once until it clears.
+    {
+        let key = "credential_refresh_failed";
+        let fails = credential_failures();
+        if fails > 0 {
+            if !CREDENTIAL_FAILURE_ALERTED.swap(true, std::sync::atomic::Ordering::Relaxed)
+                && alerts.should_fire(key)
+            {
+                fire(
+                    state,
+                    url,
+                    key,
+                    &format!(
+                        "credential strategy reported {fails} failure(s); check account keys/rotation"
+                    ),
+                    json!({"credential_failures": fails}),
+                )
+                .await;
+            }
+        } else {
+            CREDENTIAL_FAILURE_ALERTED.store(false, std::sync::atomic::Ordering::Relaxed);
+            if alerts.should_resolve(key) {
+                resolve(state, url, key).await;
             }
         }
     }
