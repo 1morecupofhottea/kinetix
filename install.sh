@@ -8,13 +8,13 @@
 # then configurable through the CLI — no .env file, no dashboard required.
 #
 # Environment overrides:
-#   KINETIX_VERSION   git tag/branch to install (default: main)
+#   KINETIX_VERSION   release tag or branch to install (default: latest release, fallback: main)
 #   KINETIX_PREFIX    install prefix (default: ~/.local)
-#   KINETIX_REPO      git URL (default: https://github.com/LazyGreed/kinetix)
+#   KINETIX_REPO      git / release repository URL (default: https://github.com/LazyGreed/kinetix)
 set -euo pipefail
 
 REPO="${KINETIX_REPO:-https://github.com/LazyGreed/kinetix}"
-VERSION="${KINETIX_VERSION:-main}"
+REPO="${REPO%/}"
 PREFIX="${KINETIX_PREFIX:-$HOME/.local}"
 BIN_DIR="$PREFIX/bin"
 
@@ -37,48 +37,65 @@ case "$(uname -m)" in
   aarch64) RUST_TARGET="aarch64-unknown-linux-gnu" ;;
 esac
 
+# Resolve target version: prefer the latest release tag if unspecified.
+if [ -z "${KINETIX_VERSION:-}" ] || [ "${KINETIX_VERSION:-}" = "latest" ]; then
+  LATEST_URL="$(curl -fsSL -o /dev/null -w "%{url_effective}" "${REPO}/releases/latest" 2>/dev/null || :)"
+  LATEST_TAG="${LATEST_URL##*/}"
+  if printf '%s' "$LATEST_TAG" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+    VERSION="$LATEST_TAG"
+  else
+    VERSION="main"
+  fi
+else
+  VERSION="$KINETIX_VERSION"
+fi
+
 # --- Prefer a prebuilt release binary (no toolchain needed) ----------------
-# When KINETIX_VERSION looks like a release tag (vX.Y.Z) we fetch the matching
+# When VERSION looks like a release tag (vX.Y.Z) we fetch the matching
 # asset from GitHub Releases; otherwise we fall back to building from source.
 installed=0
 if printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+'; then
   ASSET="kinetix-${VERSION}-${RUST_TARGET}.tar.gz"
-  URL="https://github.com/LazyGreed/kinetix/releases/download/${VERSION}/${ASSET}"
-  SUMS_URL="https://github.com/LazyGreed/kinetix/releases/download/${VERSION}/SHA256SUMS"
+  URL="${REPO}/releases/download/${VERSION}/${ASSET}"
+  SUMS_URL="${REPO}/releases/download/${VERSION}/SHA256SUMS"
   log "Downloading prebuilt binary ($ASSET)"
-  if curl -fsSL "$URL" -o /tmp/kinetix-dl.tar.gz 2>/dev/null; then
+
+  DL_DIR="$(mktemp -d)"
+  dl_cleanup() { rm -rf "$DL_DIR"; }
+
+  if curl -fsSL "$URL" -o "$DL_DIR/$ASSET" 2>/dev/null; then
     # Verify SHA256 checksum if SHA256SUMS asset exists on release
-    if curl -fsSL "$SUMS_URL" -o /tmp/kinetix-sha256sums 2>/dev/null; then
-      EXPECTED="$(grep -E "[[:space:]]${ASSET}$" /tmp/kinetix-sha256sums 2>/dev/null | awk '{print $1}' || :)"
+    if curl -fsSL "$SUMS_URL" -o "$DL_DIR/SHA256SUMS" 2>/dev/null; then
+      EXPECTED="$(grep -E "[[:space:]]${ASSET}$" "$DL_DIR/SHA256SUMS" 2>/dev/null | awk '{print $1}' || :)"
       if [ -n "$EXPECTED" ]; then
         if command -v sha256sum >/dev/null 2>&1; then
-          ACTUAL="$(sha256sum /tmp/kinetix-dl.tar.gz | awk '{print $1}')"
+          ACTUAL="$(sha256sum "$DL_DIR/$ASSET" | awk '{print $1}')"
         elif command -v shasum >/dev/null 2>&1; then
-          ACTUAL="$(shasum -a 256 /tmp/kinetix-dl.tar.gz | awk '{print $1}')"
+          ACTUAL="$(shasum -a 256 "$DL_DIR/$ASSET" | awk '{print $1}')"
         else
           ACTUAL=""
         fi
         if [ -n "$ACTUAL" ]; then
           if [ "$ACTUAL" != "$EXPECTED" ]; then
-            rm -f /tmp/kinetix-dl.tar.gz /tmp/kinetix-sha256sums
+            dl_cleanup
             err "Checksum mismatch for $ASSET! Expected $EXPECTED, got $ACTUAL"
           fi
           log "Verified SHA256 checksum: $ACTUAL"
         fi
       fi
-      rm -f /tmp/kinetix-sha256sums
     fi
 
     mkdir -p "$BIN_DIR"
-    if ! tar -xzf /tmp/kinetix-dl.tar.gz -C "$BIN_DIR" kinetix 2>/dev/null; then
-      tar -xzf /tmp/kinetix-dl.tar.gz -C /tmp
-      install -m 0755 /tmp/kinetix "$BIN_DIR/kinetix"
+    if ! tar -xzf "$DL_DIR/$ASSET" -C "$BIN_DIR" kinetix 2>/dev/null; then
+      tar -xzf "$DL_DIR/$ASSET" -C "$DL_DIR"
+      install -m 0755 "$DL_DIR/kinetix" "$BIN_DIR/kinetix"
     fi
     chmod 0755 "$BIN_DIR/kinetix"
-    rm -f /tmp/kinetix-dl.tar.gz /tmp/kinetix
+    dl_cleanup
     log "Installed prebuilt $BIN_DIR/kinetix"
     installed=1
   else
+    dl_cleanup
     log "No prebuilt asset found for $VERSION; building from source instead"
   fi
 fi
