@@ -89,7 +89,7 @@ pub fn models_body(format: FrontendFormat, registry: &Registry, key_allowed: &[S
     });
 
     match format {
-        FrontendFormat::OpenAi => {
+        FrontendFormat::OpenAi | FrontendFormat::OpenAiResponses => {
             let data: Vec<Value> = entries
                 .iter()
                 .map(|(name, ctx, max, caps)| {
@@ -160,7 +160,7 @@ fn declared_caps(m: &ModelRow) -> Option<Value> {
 /// Encode an error body in the calling frontend's format (FR-2.8, NFR-6.2).
 pub fn error_body(format: FrontendFormat, err: &ProxyError) -> Value {
     match format {
-        FrontendFormat::OpenAi => {
+        FrontendFormat::OpenAi | FrontendFormat::OpenAiResponses => {
             let etype = match err.kind {
                 ErrorKind::BadRequest | ErrorKind::Unsupported => "invalid_request_error",
                 ErrorKind::Unauthorized => "authentication_error",

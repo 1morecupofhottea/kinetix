@@ -21,6 +21,14 @@ fn anthropic(body: &str) -> kinetix::types::InternalRequest {
     .expect("anthropic decode")
 }
 
+fn responses(body: &str) -> kinetix::types::InternalRequest {
+    frontends::decode(
+        FrontendFormat::OpenAiResponses,
+        serde_json::from_str(body).unwrap(),
+    )
+    .expect("responses decode")
+}
+
 #[test]
 fn openai_plain_chat_and_system_hoist() {
     let req = openai(
@@ -202,6 +210,84 @@ fn anthropic_plain_chat_tools_and_thinking_round_trip() {
 }
 
 #[test]
+fn responses_plain_string_input_and_instructions() {
+    let req = responses(
+        r#"{
+          "model": "gpt-5",
+          "instructions": "You are a helpful coding assistant.",
+          "input": "Solve 2+2",
+          "stream": true,
+          "temperature": 0.2,
+          "max_output_tokens": 256
+        }"#,
+    );
+    assert_eq!(req.requested_model, "gpt-5");
+    assert!(req.stream);
+    assert_eq!(
+        req.system,
+        vec!["You are a helpful coding assistant.".to_string()]
+    );
+    assert_eq!(req.params.temperature, Some(0.2));
+    assert_eq!(req.params.max_tokens, Some(256));
+    assert_eq!(req.messages.len(), 1);
+    assert_eq!(req.messages[0].role, Role::User);
+    match &req.messages[0].parts[0] {
+        Part::Text(t) => assert_eq!(t, "Solve 2+2"),
+        other => panic!("expected text part, got {other:?}"),
+    }
+}
+
+#[test]
+fn responses_multi_turn_with_function_call_and_output() {
+    let req = responses(
+        r#"{
+          "model": "gpt-5",
+          "input": [
+            { "type": "message", "role": "user", "content": "What is the weather in Berlin?" },
+            { "type": "function_call", "call_id": "call_berlin", "name": "get_weather", "arguments": "{\"city\":\"Berlin\"}" },
+            { "type": "function_call_output", "call_id": "call_berlin", "output": "{\"temp\":\"15C\"}" }
+          ],
+          "tools": [
+            { "type": "function", "name": "get_weather", "description": "Fetch weather", "parameters": { "type": "object" } }
+          ],
+          "reasoning": { "effort": "high" }
+        }"#,
+    );
+    assert_eq!(req.requested_model, "gpt-5");
+    assert_eq!(req.thinking, Some(ThinkingLevel::High));
+    assert_eq!(req.tools.len(), 1);
+    assert_eq!(req.tools[0].name, "get_weather");
+    assert_eq!(req.messages.len(), 3);
+    assert_eq!(req.messages[0].role, Role::User);
+    assert_eq!(req.messages[1].role, Role::Assistant);
+    match &req.messages[1].parts[0] {
+        Part::ToolCall {
+            id,
+            name,
+            arguments,
+            ..
+        } => {
+            assert_eq!(id.as_deref(), Some("call_berlin"));
+            assert_eq!(name, "get_weather");
+            assert_eq!(arguments, "{\"city\":\"Berlin\"}");
+        }
+        other => panic!("expected ToolCall, got {other:?}"),
+    }
+    assert_eq!(req.messages[2].role, Role::Tool);
+    match &req.messages[2].parts[0] {
+        Part::ToolResult {
+            tool_call_id,
+            content,
+            ..
+        } => {
+            assert_eq!(tool_call_id, "call_berlin");
+            assert_eq!(content, "{\"temp\":\"15C\"}");
+        }
+        other => panic!("expected ToolResult, got {other:?}"),
+    }
+}
+
+#[test]
 fn decode_rejects_malformed_bodies_with_a_format_native_error() {
     // A body that is valid JSON but has the wrong shape must be a bad_request,
     // never a panic.
@@ -210,4 +296,10 @@ fn decode_rejects_malformed_bodies_with_a_format_native_error() {
         serde_json::json!({ "messages": "not-an-array" }),
     );
     assert!(err.is_err());
+
+    let err_resp = frontends::decode(
+        FrontendFormat::OpenAiResponses,
+        serde_json::json!({ "input": 12345 }),
+    );
+    assert!(err_resp.is_err());
 }

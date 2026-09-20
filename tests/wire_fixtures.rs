@@ -219,6 +219,94 @@ fn anthropic_error_frame_is_terminal_and_does_not_emit_message_stop() {
 }
 
 #[test]
+fn responses_streaming_wire_output_is_stable() {
+    let mut enc = frontends::Encoder::new(FrontendFormat::OpenAiResponses, ctx());
+    let mut out = Vec::new();
+    for ev in text_and_finish_events() {
+        out.extend(enc.encode(ev));
+    }
+    out.extend(enc.finalize());
+
+    let joined_out = joined(&out);
+    assert!(
+        joined_out.contains("event: response.created\n"),
+        "missing response.created event"
+    );
+    assert!(
+        joined_out.contains("event: response.in_progress\n"),
+        "missing response.in_progress event"
+    );
+    assert!(
+        joined_out.contains("event: response.output_item.added\n"),
+        "missing response.output_item.added event"
+    );
+    assert!(
+        joined_out.contains("event: response.output_text.delta\n"),
+        "missing response.output_text.delta event"
+    );
+    assert!(
+        joined_out.contains("\"delta\":\"Hello\""),
+        "missing Hello delta"
+    );
+    assert!(
+        joined_out.contains("event: response.completed\n"),
+        "missing response.completed event"
+    );
+    assert!(
+        joined_out.contains("\"status\":\"completed\""),
+        "missing status completed in response object"
+    );
+    assert!(
+        joined_out.ends_with("data: [DONE]\n\n"),
+        "stream must end with [DONE]"
+    );
+}
+
+#[test]
+fn responses_non_streaming_aggregation_is_stable() {
+    let usage = TokenUsage {
+        input: Some(10),
+        output: Some(5),
+        cached: Some(2),
+        thinking: None,
+    };
+    let agg = frontends::aggregate(
+        FrontendFormat::OpenAiResponses,
+        "test-model",
+        "req_fixture",
+        text_and_finish_events(),
+        &usage,
+    );
+    assert_eq!(agg["object"], "response");
+    assert_eq!(agg["status"], "completed");
+    assert_eq!(agg["model"], "test-model");
+    assert_eq!(agg["id"], "resp_reqfixture");
+    let output = agg["output"].as_array().expect("output array");
+    assert_eq!(output.len(), 1);
+    assert_eq!(output[0]["type"], "message");
+    assert_eq!(output[0]["role"], "assistant");
+    assert_eq!(output[0]["content"][0]["text"], "Hello, world");
+    assert_eq!(agg["usage"]["total_tokens"], 15);
+    assert_eq!(agg["usage"]["input_tokens"], 10);
+    assert_eq!(agg["usage"]["output_tokens"], 5);
+    assert_eq!(agg["usage"]["input_token_details"]["cached_tokens"], 2);
+}
+
+#[test]
+fn responses_error_frame_is_native() {
+    let mut enc = frontends::Encoder::new(FrontendFormat::OpenAiResponses, ctx());
+    let got = joined(&enc.error_frame("upstream failed"));
+    assert!(
+        got.starts_with("event: response.failed\n"),
+        "missing response.failed event: {got}"
+    );
+    assert!(
+        got.contains("\"type\":\"response.failed\""),
+        "missing type field: {got}"
+    );
+}
+
+#[test]
 fn format_native_error_bodies_are_stable() {
     // A 429 rate-limit error maps to the correct per-format error body shape.
     let err = ProxyError::rate_limited("slow down", Some(7));

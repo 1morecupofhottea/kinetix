@@ -380,7 +380,7 @@ optional/later. Phases refer to the Timeline.
 | FR-1.2 | Serve `GET /v1/models` returning models, aliases, and Routes visible to the calling key, including context/max-output metadata where known. | MUST | 1 |
 | FR-1.3 | Serve Anthropic Messages (`POST /v1/messages`) with streaming, including `x-api-key` and `anthropic-version` handling. | MUST | 3 |
 | FR-1.4 | Support `stream: false` as a lower-priority fallback by consuming the internal/upstream stream and aggregating it, keeping one behavioral path. | SHOULD | 2 |
-| FR-1.5 | Serve OpenAI Responses API (`/v1/responses`). | MAY | later |
+| FR-1.5 | Serve OpenAI Responses API (`/v1/responses`) with streaming SSE and non-streaming aggregation. | MUST | 1 |
 | FR-1.6 | Serve embeddings endpoints. | MAY | later |
 
 ### FR-2 Protocol translation, preservation, and streaming fidelity
@@ -683,7 +683,7 @@ latency cannot hide proxy overhead.
 - **Milestone 4: Operational polish.** Prometheus metrics, budget/health alerts, live request view,
   optional body logging with redaction, per-key IP allowlists, and **user-authored** configuration
   export/import. Exact response caching remains outside committed v1 scope.
-- **Later / separate decision:** Responses API, embeddings, additional inbound protocols, local
+- **Later / separate decision:** embeddings, additional inbound protocols, local
   response caching based on measured demand, enterprise auth, multi-instance operation, or any public
   plugin/runtime ABI.
 
@@ -694,6 +694,7 @@ data.
 
 **Public API (virtual-key auth):**
 - `POST /v1/chat/completions` (OpenAI)
+- `POST /v1/responses` (OpenAI Responses)
 - `GET /v1/models`
 - `POST /v1/messages` (Anthropic)
 - `GET /healthz`

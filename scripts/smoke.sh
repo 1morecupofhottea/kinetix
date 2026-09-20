@@ -92,6 +92,15 @@ ANTH="$(curl -s -N --max-time 20 -X POST "$BASE/v1/messages" -H "x-api-key: $KEY
 check "anthropic message_start" "$ANTH" 'message_start'
 check "anthropic message_stop" "$ANTH" 'message_stop'
 
+# OpenAI Responses API (streaming + non-streaming)
+RESP_STREAM="$(curl -s -N --max-time 20 -X POST "$BASE/v1/responses" -H "authorization: Bearer $KEY" -H 'content-type: application/json' -d '{"model":"syn-openai","stream":true,"input":"hi"}')"
+check "responses stream created event" "$RESP_STREAM" 'event: response.created'
+check "responses stream completed event" "$RESP_STREAM" 'event: response.completed'
+
+RESP_SYNC="$(curl -s --max-time 20 -X POST "$BASE/v1/responses" -H "authorization: Bearer $KEY" -H 'content-type: application/json' -d '{"model":"syn-openai","stream":false,"input":"hi"}')"
+check "responses sync object" "$RESP_SYNC" '"object":"response"'
+check "responses sync completed" "$RESP_SYNC" '"status":"completed"'
+
 # tool call
 TOOL="$(curl -s -N --max-time 20 -X POST "$BASE/v1/chat/completions" -H "authorization: Bearer $KEY" -H 'content-type: application/json' -d '{"model":"syn-openai","stream":true,"messages":[{"role":"user","content":"weather?"}],"tools":[{"type":"function","function":{"name":"get_weather","parameters":{"type":"object"}}}]}')"
 check "tool_calls delta present" "$TOOL" 'tool_calls'

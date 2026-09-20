@@ -23,6 +23,7 @@ pub fn is_passthrough(inbound: FrontendFormat, outbound: WireFormat) -> bool {
     match inbound {
         FrontendFormat::OpenAi => outbound == WireFormat::Openai,
         FrontendFormat::Anthropic => outbound == WireFormat::Anthropic,
+        FrontendFormat::OpenAiResponses => false,
     }
 }
 
@@ -60,6 +61,10 @@ mod tests {
             WireFormat::Anthropic
         ));
         assert!(!is_passthrough(FrontendFormat::OpenAi, WireFormat::Gemini));
+        assert!(!is_passthrough(
+            FrontendFormat::OpenAiResponses,
+            WireFormat::Openai
+        ));
     }
 
     #[test]

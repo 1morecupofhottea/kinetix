@@ -33,6 +33,7 @@ pub fn build(state: AppState) -> Router {
     let public = Router::new()
         .route("/healthz", get(api::healthz))
         .route("/v1/chat/completions", post(api::chat_completions))
+        .route("/v1/responses", post(api::responses))
         .route("/v1/messages", post(api::messages))
         .route("/v1/models", get(api::list_models));
 

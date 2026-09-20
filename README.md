@@ -27,9 +27,10 @@ agents such as [Pi](https://pi.dev).
 
 ## What Kinetix does
 
-- **Inbound wire formats**: OpenAI `POST /v1/chat/completions` and Anthropic
-  `POST /v1/messages`, both streaming and non-streaming, plus `GET /v1/models`
-  (content-negotiated between OpenAI and Anthropic shapes) and `GET /healthz`.
+- **Inbound wire formats**: OpenAI `POST /v1/chat/completions`, OpenAI Responses
+  `POST /v1/responses`, and Anthropic `POST /v1/messages`, all streaming and
+  non-streaming, plus `GET /v1/models` (content-negotiated between OpenAI and
+  Anthropic shapes) and `GET /healthz`.
 - **Outbound adapters**: Gemini (`generateContent` / `streamGenerateContent`),
   OpenAI-compatible (`/chat/completions`), and Anthropic (`/messages`). All three are
   selected by the provider's configured `wire_format`, not by vendor name.

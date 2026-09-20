@@ -133,6 +133,24 @@ pub async fn chat_completions(
     handle(state, FrontendFormat::OpenAi, headers, json, body).await
 }
 
+pub async fn responses(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    body: String,
+) -> Response {
+    let json: Value = match serde_json::from_str(&body) {
+        Ok(v) => v,
+        Err(e) => {
+            return error_response(
+                FrontendFormat::OpenAiResponses,
+                &new_request_id(),
+                ProxyError::bad_request(format!("invalid JSON body: {e}")),
+            )
+        }
+    };
+    handle(state, FrontendFormat::OpenAiResponses, headers, json, body).await
+}
+
 pub async fn messages(State(state): State<AppState>, headers: HeaderMap, body: String) -> Response {
     let json: Value = match serde_json::from_str(&body) {
         Ok(v) => v,

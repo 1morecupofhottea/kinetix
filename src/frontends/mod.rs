@@ -5,6 +5,7 @@
 pub mod anthropic;
 pub mod models;
 pub mod openai;
+pub mod responses;
 
 use bytes::Bytes;
 use serde_json::Value;
@@ -15,6 +16,7 @@ use crate::types::{FinishReason, InternalRequest, ProxyError, StreamEvent};
 pub enum FrontendFormat {
     OpenAi,
     Anthropic,
+    OpenAiResponses,
 }
 
 impl FrontendFormat {
@@ -22,6 +24,7 @@ impl FrontendFormat {
         match self {
             FrontendFormat::OpenAi => "openai",
             FrontendFormat::Anthropic => "anthropic",
+            FrontendFormat::OpenAiResponses => "openai-responses",
         }
     }
 }
@@ -38,6 +41,7 @@ pub fn decode(format: FrontendFormat, body: Value) -> Result<InternalRequest, Pr
     match format {
         FrontendFormat::OpenAi => openai::decode_request(body),
         FrontendFormat::Anthropic => anthropic::decode_request(body),
+        FrontendFormat::OpenAiResponses => responses::decode_request(body),
     }
 }
 
@@ -46,6 +50,7 @@ pub fn decode(format: FrontendFormat, body: Value) -> Result<InternalRequest, Pr
 pub enum Encoder {
     OpenAi(openai::OpenAiEncoder),
     Anthropic(anthropic::AnthropicEncoder),
+    Responses(responses::ResponsesEncoder),
 }
 
 impl Encoder {
@@ -53,6 +58,9 @@ impl Encoder {
         match format {
             FrontendFormat::OpenAi => Encoder::OpenAi(openai::OpenAiEncoder::new(ctx)),
             FrontendFormat::Anthropic => Encoder::Anthropic(anthropic::AnthropicEncoder::new(ctx)),
+            FrontendFormat::OpenAiResponses => {
+                Encoder::Responses(responses::ResponsesEncoder::new(ctx))
+            }
         }
     }
 
@@ -61,6 +69,7 @@ impl Encoder {
         match self {
             Encoder::OpenAi(e) => e.encode(event),
             Encoder::Anthropic(e) => e.encode(event),
+            Encoder::Responses(e) => e.encode(event),
         }
     }
 
@@ -69,6 +78,7 @@ impl Encoder {
         match self {
             Encoder::OpenAi(e) => e.finalize(),
             Encoder::Anthropic(e) => e.finalize(),
+            Encoder::Responses(e) => e.finalize(),
         }
     }
 
@@ -77,6 +87,7 @@ impl Encoder {
         match self {
             Encoder::OpenAi(e) => e.error_frame(message),
             Encoder::Anthropic(e) => e.error_frame(message),
+            Encoder::Responses(e) => e.error_frame(message),
         }
     }
 }
@@ -257,6 +268,9 @@ pub fn aggregate(
                 "stop_sequence": Value::Null,
                 "usage": usage_obj
             })
+        }
+        FrontendFormat::OpenAiResponses => {
+            responses::aggregate_responses(model_name, request_id, events, usage)
         }
     }
 }
