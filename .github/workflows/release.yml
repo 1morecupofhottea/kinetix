@@ -21,9 +21,30 @@ permissions:
   attestations: write
 
 jobs:
+  create-release:
+    name: create release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Create release object if not present
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if ! gh release view "$TAG" --repo "${{ github.repository }}" >/dev/null 2>&1; then
+            gh release create "$TAG" --title "Kinetix $TAG" --generate-notes --repo "${{ github.repository }}"
+          fi
+
   binaries:
     name: build (${{ matrix.target }})
+    needs: [create-release]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
