@@ -44,7 +44,14 @@ async fn manager() -> (PluginManager, Pool) {
     db::migrate(&pool).await.unwrap();
     let crypto = Arc::new(Crypto::new(&[9u8; 32]));
     let http = reqwest::Client::new();
-    let manager = PluginManager::new(pool.clone(), crypto, http, HostPolicy::default()).unwrap();
+    let manager = PluginManager::new(
+        pool.clone(),
+        crypto,
+        http,
+        HostPolicy::default(),
+        dir.join("plugin-packages"),
+    )
+    .unwrap();
     (manager, pool)
 }
 
@@ -85,6 +92,56 @@ async fn install_is_disabled_and_records_provenance() {
         .await
         .unwrap();
     assert!(perms.is_empty());
+}
+
+#[tokio::test]
+async fn install_preserves_exact_package_and_provenance() {
+    let (m, pool) = manager().await;
+    let kxp = build_kxp(GOOD_MANIFEST, EMPTY_COMPONENT);
+    let outcome = m.install(&kxp, None, &[], false).await.unwrap();
+
+    let packages = kinetix::plugins::store::list_packages(&pool, "dev.example.foo")
+        .await
+        .unwrap();
+    assert_eq!(packages.len(), 1);
+    assert_eq!(packages[0].version, "1.2.0");
+    assert_eq!(packages[0].package_sha256, outcome.package_sha256);
+    assert_eq!(packages[0].source, "local");
+
+    let stored = std::fs::read(m.package_root().join(&packages[0].package_path)).unwrap();
+    assert_eq!(stored, kxp);
+}
+
+#[tokio::test]
+async fn compiled_component_cache_warms_lazily_after_restart() {
+    let (m, pool) = manager().await;
+    let kxp = build_kxp(GOOD_MANIFEST, EMPTY_COMPONENT);
+    m.install(&kxp, None, &[], false).await.unwrap();
+
+    let restarted = PluginManager::new(
+        pool,
+        Arc::new(Crypto::new(&[9u8; 32])),
+        HostPolicy::default(),
+        m.package_root().to_path_buf(),
+    )
+    .unwrap();
+
+    let before = restarted.counters();
+    assert_eq!(before.component_cache_hits, 0);
+    assert_eq!(before.component_cache_misses, 0);
+
+    // The test component intentionally lacks the complete guest world, so
+    // validation fails at instantiation after compilation. The compiled code
+    // must still remain reusable for the next attempt.
+    assert!(restarted.validate("dev.example.foo").await.is_err());
+    let after_first = restarted.counters();
+    assert_eq!(after_first.component_cache_hits, 0);
+    assert_eq!(after_first.component_cache_misses, 1);
+
+    assert!(restarted.validate("dev.example.foo").await.is_err());
+    let after_second = restarted.counters();
+    assert_eq!(after_second.component_cache_hits, 1);
+    assert_eq!(after_second.component_cache_misses, 1);
 }
 
 #[tokio::test]
@@ -135,6 +192,115 @@ async fn upgrade_disables_plugin_and_clears_previous_approvals() {
             .unwrap()
             .is_empty()
     );
+
+    let packages = kinetix::plugins::store::list_packages(&pool, "dev.example.foo")
+        .await
+        .unwrap();
+    assert_eq!(packages.len(), 2);
+    assert!(packages.iter().any(|p| p.version == "1.2.0"));
+    assert!(packages.iter().any(|p| p.version == "1.3.0"));
+}
+
+#[tokio::test]
+async fn rollback_revalidates_retained_package_and_clears_authority() {
+    let (m, pool) = manager().await;
+    let original = build_kxp(GOOD_MANIFEST, EMPTY_COMPONENT);
+    let original_outcome = m.install(&original, None, &[], false).await.unwrap();
+
+    let upgraded = GOOD_MANIFEST.replace("version = \"1.2.0\"", "version = \"1.3.0\"");
+    let upgraded_kxp = build_kxp(&upgraded, EMPTY_COMPONENT);
+    m.install(&upgraded_kxp, None, &[], false).await.unwrap();
+    m.approve_permissions("dev.example.foo").await.unwrap();
+    kinetix::plugins::store::set_enabled(&pool, "dev.example.foo", true)
+        .await
+        .unwrap();
+
+    let rolled_back = m
+        .rollback("dev.example.foo", &original_outcome.package_sha256)
+        .await
+        .unwrap();
+    assert_eq!(rolled_back.version, "1.2.0");
+
+    let row = m.get("dev.example.foo").await.unwrap().unwrap();
+    assert_eq!(row.version, "1.2.0");
+    assert_eq!(row.package_sha256, original_outcome.package_sha256);
+    assert_eq!(row.enabled, 0);
+    assert!(
+        kinetix::plugins::store::permissions(&pool, "dev.example.foo")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn rollback_preview_reports_semantic_permission_diff() {
+    let (m, _pool) = manager().await;
+    let original = build_kxp(GOOD_MANIFEST, EMPTY_COMPONENT);
+    let original_outcome = m.install(&original, None, &[], false).await.unwrap();
+
+    let upgraded = GOOD_MANIFEST
+        .replace("version = \"1.2.0\"", "version = \"1.3.0\"")
+        .replace(
+            "network_hosts = [\"api.foo.example\"]",
+            "network_hosts = [\"api.foo.example\", \"api.new.example\"]",
+        )
+        .replace(
+            "credential_scopes = [\"provider:foo\"]",
+            "credential_scopes = [\"provider:foo\", \"provider:bar\"]\ncredential_read = true",
+        );
+    m.install(&build_kxp(&upgraded, EMPTY_COMPONENT), None, &[], false)
+        .await
+        .unwrap();
+
+    let preview = m
+        .rollback_preview("dev.example.foo", &original_outcome.package_sha256)
+        .await
+        .unwrap();
+
+    assert_eq!(preview.current_version, "1.3.0");
+    assert_eq!(preview.target_version, "1.2.0");
+    assert!(preview.permission_diff.network_hosts.added.is_empty());
+    assert_eq!(
+        preview.permission_diff.network_hosts.removed,
+        vec!["api.new.example".to_string()]
+    );
+    assert!(preview.permission_diff.credential_scopes.added.is_empty());
+    assert_eq!(
+        preview.permission_diff.credential_scopes.removed,
+        vec!["provider:bar".to_string()]
+    );
+    assert!(preview.permission_diff.credential_read.changed);
+    assert!(preview.permission_diff.credential_read.from);
+    assert!(!preview.permission_diff.credential_read.to);
+}
+
+#[tokio::test]
+async fn rollback_rejects_tampered_retained_package() {
+    let (m, pool) = manager().await;
+    let original = build_kxp(GOOD_MANIFEST, EMPTY_COMPONENT);
+    let original_outcome = m.install(&original, None, &[], false).await.unwrap();
+
+    let upgraded = GOOD_MANIFEST.replace("version = \"1.2.0\"", "version = \"1.3.0\"");
+    m.install(&build_kxp(&upgraded, EMPTY_COMPONENT), None, &[], false)
+        .await
+        .unwrap();
+
+    let package = kinetix::plugins::store::get_package(
+        &pool,
+        "dev.example.foo",
+        &original_outcome.package_sha256,
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    std::fs::write(m.package_root().join(&package.package_path), b"tampered").unwrap();
+
+    let err = m
+        .rollback("dev.example.foo", &original_outcome.package_sha256)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("hash mismatch"), "{err}");
 }
 
 #[tokio::test]
@@ -219,6 +385,12 @@ async fn removing_a_plugin_cascades_stored_state() {
             .unwrap(),
         0
     );
+    // Immutable package provenance is intentionally independent of active
+    // plugin state and survives uninstall.
+    let packages = kinetix::plugins::store::list_packages(&pool, "dev.example.foo")
+        .await
+        .unwrap();
+    assert_eq!(packages.len(), 1);
 }
 
 #[tokio::test]

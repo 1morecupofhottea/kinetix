@@ -87,6 +87,14 @@ interface types {
     health: string,
   }
 
+  /// Result of a plugin-owned account authorization flow. Core persists
+  /// `secret-json` only after it validates one-time callback state.
+  record auth-result {
+    secret-json: string,
+    account-label: option<string>,
+    metadata-json: option<string>,
+  }
+
   /// A typed routing fact (§6.4). Never a target selection.
   record routing-fact {
     /// Fully-qualified fact name, e.g. "plugin.dev.example.foo.region".
@@ -113,10 +121,11 @@ interface host-storage {
   get: func(key: string) -> option<list<u8>>;
   put: func(key: string, value: list<u8>) -> result<_, string>;
   delete: func(key: string) -> result<_, string>;
-  /// Publish a cached routing fact under the reserved `_cache:<name>`
-  /// namespace. The host stamps `observed-at`, enforces `max-age-ms`, and makes
-  /// the value readable to `routing-facts` on the request path without any
-  /// network or heavy work (§6.4). `value-json` must be valid JSON.
+  /// Publish a cached routing fact during the core-owned background refresh.
+  /// The value is buffered for the current invocation; only after the guest
+  /// call succeeds does the host stamp `observed-at` and atomically replace
+  /// the complete reserved `_cache:<name>` snapshot (§6.4). Direct put/delete
+  /// access to the `_cache:` namespace is rejected. `value-json` must be JSON.
   cache-set: func(name: string, value-json: string, max-age-ms: u64) -> result<_, string>;
 }
 
@@ -198,6 +207,54 @@ world plugin {
     on-request-normalized: func(request-json: string) -> result<_, plugin-error>;
     on-target-candidate: func(target-json: string) -> result<_, plugin-error>;
     on-usage-finalized: func(usage-json: string) -> result<_, plugin-error>;
+  }
+}
+
+/// Account authorization world. Kept separate from `plugin` so existing API
+/// v1 components do not gain a mandatory export. Core owns CSRF state and PKCE
+/// material; the plugin owns provider-specific URLs/exchange behavior.
+world plugin-auth {
+  import host-http;
+  import host-storage;
+  import host-log;
+  import host-clock;
+
+  export auth-flow: interface {
+    use types.{plugin-error, auth-result};
+    begin: func(
+      flow-name: string,
+      redirect-uri: string,
+      state: string,
+      pkce-challenge: option<string>
+    ) -> result<string, plugin-error>;
+    exchange: func(
+      flow-name: string,
+      code: string,
+      redirect-uri: string,
+      pkce-verifier: option<string>
+    ) -> result<auth-result, plugin-error>;
+  }
+}
+
+/// Account-aware model discovery world. Kept separate from `plugin` so API-v1
+/// components using the legacy unauthenticated `model-source` export remain
+/// loadable. Core supplies an explicit account reference; host credential
+/// policy still decides whether the guest may use it.
+world plugin-model-source {
+  import host-http;
+  import host-storage;
+  import host-log;
+  import host-credential;
+  import host-clock;
+
+  export account-model-source: interface {
+    use types.{plugin-error, discovered-model, account-ref};
+    discover: func(
+      provider-id: string,
+      account: account-ref,
+      base-url: string,
+      models-path: string
+    ) -> result<list<discovered-model>, plugin-error>;
   }
 }
 

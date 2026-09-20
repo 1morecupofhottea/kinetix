@@ -126,7 +126,22 @@ pub fn build(state: AppState) -> Router {
         .route("/metrics", get(admin::metrics))
         // plugins (post-v1; docs/KINETIX-PLUGIN-ARCHITECTURE.md §20)
         .route("/plugins", get(admin::list_plugins))
+        .route("/plugins/catalog", get(admin::plugin_catalog))
+        .route(
+            "/plugins/catalog/{id}/preview",
+            get(admin::preview_catalog_plugin),
+        )
+        .route(
+            "/plugins/catalog/{id}/install",
+            post(admin::install_catalog_plugin),
+        )
         .route("/plugins/install", post(admin::install_plugin))
+        .route("/plugins/auth/start", post(admin::start_plugin_auth))
+        .route("/plugins/auth/callback", get(admin::plugin_auth_callback))
+        .route(
+            "/plugins/{id}/integrations/{integration}/provider",
+            post(admin::setup_plugin_integration_provider),
+        )
         .route(
             "/plugins/{id}",
             get(admin::get_plugin).delete(admin::remove_plugin),
@@ -134,6 +149,15 @@ pub fn build(state: AppState) -> Router {
         .route("/plugins/{id}/enable", post(admin::enable_plugin))
         .route("/plugins/{id}/disable", post(admin::disable_plugin))
         .route("/plugins/{id}/validate", post(admin::validate_plugin))
+        .route("/plugins/{id}/rollback", post(admin::rollback_plugin))
+        .route(
+            "/plugins/{id}/packages/{sha256}/preview",
+            get(admin::preview_plugin_rollback),
+        )
+        .route(
+            "/plugins/{id}/settings",
+            get(admin::plugin_settings).put(admin::update_plugin_settings),
+        )
         .route("/plugins/{id}/permissions", get(admin::plugin_permissions))
         .route(
             "/plugins/{id}/permissions/approve",

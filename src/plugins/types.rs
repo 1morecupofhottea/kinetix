@@ -17,7 +17,9 @@ pub const MANIFEST_VERSION: u32 = 1;
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     CredentialStrategy,
+    AuthFlow,
     ModelSource,
+    AccountModelSource,
     ProviderAdapter,
     RoutingFacts,
     HealthProbe,
@@ -29,7 +31,9 @@ impl Capability {
     pub fn manifest_key(&self) -> &'static str {
         match self {
             Capability::CredentialStrategy => "credential_strategies",
+            Capability::AuthFlow => "auth_flows",
             Capability::ModelSource => "model_sources",
+            Capability::AccountModelSource => "account_model_sources",
             Capability::ProviderAdapter => "provider_adapters",
             Capability::RoutingFacts => "routing_facts",
             Capability::HealthProbe => "health_probes",
@@ -146,6 +150,113 @@ fn default_storage() -> String {
     "2MiB".into()
 }
 
+fn default_integration_wire_format() -> String {
+    "plugin".into()
+}
+
+fn default_integration_auth_scheme() -> String {
+    "bearer".into()
+}
+
+fn default_integration_timeout_ms() -> u64 {
+    120_000
+}
+
+fn default_integration_capability_mode() -> String {
+    "permissive".into()
+}
+
+/// Host-owned provider defaults for a user-facing integration. Kinetix derives
+/// plugin capability bindings from the parent Integration; the template cannot
+/// point at capabilities from another plugin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IntegrationProvider {
+    pub base_url: String,
+    #[serde(default = "default_integration_wire_format")]
+    pub wire_format: String,
+    #[serde(default = "default_integration_auth_scheme")]
+    pub auth_scheme: String,
+    #[serde(default)]
+    pub custom_header_name: Option<String>,
+    #[serde(default)]
+    pub custom_param_name: Option<String>,
+    #[serde(default)]
+    pub extra_headers: std::collections::BTreeMap<String, String>,
+    #[serde(default = "default_integration_timeout_ms")]
+    pub timeout_ms: u64,
+    #[serde(default = "default_integration_capability_mode")]
+    pub capability_mode: String,
+    #[serde(default)]
+    pub models_path: Option<String>,
+    #[serde(default)]
+    pub follow_redirects: bool,
+    #[serde(default)]
+    pub credential_hosts: Vec<String>,
+}
+
+/// A user-facing integration assembled from one or more capabilities provided
+/// by the same plugin. This metadata is declarative only: it grants no
+/// authority and contains no browser-executable code.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Integration {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub provider_adapter: Option<String>,
+    #[serde(default)]
+    pub credential_strategy: Option<String>,
+    #[serde(default)]
+    pub auth_flow: Option<String>,
+    #[serde(default)]
+    pub model_source: Option<String>,
+    #[serde(default)]
+    pub provider: Option<IntegrationProvider>,
+}
+
+/// A native dashboard action declared by a plugin. Actions are metadata only:
+/// the dashboard renders host-owned controls and invokes an already-authorized
+/// Kinetix operation. No plugin JavaScript is loaded into the admin origin.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiAction {
+    pub id: String,
+    pub label: String,
+    /// v1 supports `auth`; future kinds can be added without exposing JS.
+    pub kind: String,
+    pub integration: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// A host-owned plugin setting rendered by the dashboard. Values are stored
+/// encrypted under the reserved `_config:` plugin-KV namespace. Guests may
+/// read that namespace but cannot mutate it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UiSetting {
+    pub key: String,
+    pub label: String,
+    /// text | secret | boolean | select
+    pub kind: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub required: bool,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub default: Option<String>,
+}
+
+/// Declarative dashboard metadata. Empty by default for backward compatibility.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PluginUi {
+    #[serde(default)]
+    pub actions: Vec<UiAction>,
+    #[serde(default)]
+    pub settings: Vec<UiSetting>,
+}
+
 /// A parsed `plugin.toml` (§5).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Manifest {
@@ -157,6 +268,10 @@ pub struct Manifest {
     #[serde(default)]
     pub provides: Provides,
     #[serde(default)]
+    pub integrations: Vec<Integration>,
+    #[serde(default)]
+    pub ui: PluginUi,
+    #[serde(default)]
     pub permissions: Permissions,
     #[serde(default)]
     pub limits: Limits,
@@ -164,10 +279,18 @@ pub struct Manifest {
     /// A `pure` plugin may not import outbound HTTP.
     #[serde(default = "default_routing_mode")]
     pub routing_facts_mode: String,
+    /// Host-owned refresh cadence for `cached` routing facts. Ignored in
+    /// `pure` mode.
+    #[serde(default = "default_routing_refresh_ms")]
+    pub routing_facts_refresh_ms: u64,
 }
 
 fn default_routing_mode() -> String {
     "pure".into()
+}
+
+fn default_routing_refresh_ms() -> u64 {
+    30_000
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -175,7 +298,11 @@ pub struct Provides {
     #[serde(default)]
     pub credential_strategies: Vec<String>,
     #[serde(default)]
+    pub auth_flows: Vec<String>,
+    #[serde(default)]
     pub model_sources: Vec<String>,
+    #[serde(default)]
+    pub account_model_sources: Vec<String>,
     #[serde(default)]
     pub provider_adapters: Vec<String>,
     #[serde(default)]
@@ -198,7 +325,9 @@ impl Provides {
             }
         };
         add(Capability::CredentialStrategy, &self.credential_strategies);
+        add(Capability::AuthFlow, &self.auth_flows);
         add(Capability::ModelSource, &self.model_sources);
+        add(Capability::AccountModelSource, &self.account_model_sources);
         add(Capability::ProviderAdapter, &self.provider_adapters);
         add(Capability::RoutingFacts, &self.routing_facts);
         add(Capability::HealthProbe, &self.health_probes);

@@ -25,6 +25,30 @@ pub mod bindings {
     });
 }
 
+/// Optional account-authorization world. Separate binding preserves API-v1
+/// compatibility for components that do not provide browser auth.
+pub mod auth_bindings {
+    wasmtime::component::bindgen!({
+        path: "wit/kinetix-plugin.wit",
+        world: "plugin-auth",
+        imports: { default: async | trappable },
+        exports: { default: async },
+        anyhow: true,
+    });
+}
+
+/// Optional account-aware model discovery world. Existing legacy model-source
+/// components continue to use the main `plugin` world.
+pub mod model_source_bindings {
+    wasmtime::component::bindgen!({
+        path: "wit/kinetix-plugin.wit",
+        world: "plugin-model-source",
+        imports: { default: async | trappable },
+        exports: { default: async },
+        anyhow: true,
+    });
+}
+
 /// Adapter world (§6.3, §7.1). Kept separate so the buffered host-http import
 /// can never be used as the adapter transport. Adapters are synchronous
 /// translation functions, so this world is bound synchronously and invoked via
@@ -44,6 +68,9 @@ pub use bindings::kinetix::plugin as wit;
 /// Reserved KV namespace for cached routing facts (§6.4). Values written here
 /// are host-stamped with `observed_at`/`max_age_ms`.
 pub const CACHE_PREFIX: &str = "_cache:";
+/// Reserved host-owned plugin configuration namespace. Guests may read values
+/// through host-storage but may not write or delete them.
+pub const CONFIG_PREFIX: &str = "_config:";
 
 /// Errors that terminate or fail a plugin invocation.
 #[derive(Debug, Clone)]
@@ -120,6 +147,8 @@ impl std::fmt::Display for PluginFault {
 pub struct HostCtx {
     /// The plugin id this store belongs to (namespaces storage and logs).
     pub plugin_id: String,
+    /// Capability label for observability (for example `credential_strategy`).
+    pub capability: String,
     /// Granted network hosts (already validated, §9).
     pub network_hosts: Vec<String>,
     /// Whether the plugin may read plaintext credentials (§8.2).
@@ -130,15 +159,27 @@ pub struct HostCtx {
     pub credential_scopes: Vec<String>,
     /// Storage quota in bytes.
     pub storage_quota: u64,
+    /// Cached routing facts published during one background refresh. These
+    /// remain invocation-local until the manager atomically commits the full
+    /// snapshot after a successful guest call.
+    pub pending_cache: std::collections::BTreeMap<String, (String, u64)>,
     /// Max outbound requests per invocation.
     pub max_outbound_requests: u32,
     /// Max outbound body size.
     pub max_http_body: u64,
     /// Whether the plugin may open the streaming adapter transport (§7.1).
     pub adapter_stream: bool,
-    /// Whether routing facts must be pure (no outbound HTTP on the request
-    /// path, §6.4). Set from the manifest's `routing_facts_mode`.
-    pub routing_facts_pure: bool,
+    /// Whether this specific invocation may use buffered host-http. Authority
+    /// is capability-scoped by the manager: routing-fact request-path calls and
+    /// provider-adapter calls set this to false even when the plugin has approved
+    /// network hosts.
+    pub buffered_http_allowed: bool,
+    /// Development-only private-network override inherited from host policy.
+    pub allow_private_network: bool,
+    /// Explicit deadline for one host-http request. Host futures are not
+    /// interrupted by the guest epoch timer, so the network call must carry its
+    /// own timeout.
+    pub http_timeout: Duration,
     /// Outbound request counter for the current invocation.
     pub outbound_count: u32,
     /// The HTTP client used for host-mediated outbound requests.
@@ -159,8 +200,24 @@ pub struct HostCtx {
 pub trait HostBacking: Send + Sync {
     /// Read a plugin KV value (already decrypted by the backing).
     async fn kv_get(&self, plugin_id: &str, key: &str) -> Result<Option<Vec<u8>>>;
-    async fn kv_put(&self, plugin_id: &str, key: &str, value: &[u8]) -> Result<()>;
+    async fn kv_put_limited(
+        &self,
+        plugin_id: &str,
+        key: &str,
+        value: &[u8],
+        quota: u64,
+    ) -> Result<()>;
     async fn kv_delete(&self, plugin_id: &str, key: &str) -> Result<()>;
+    /// Attribute an actual host-mediated outbound HTTP attempt.
+    fn record_http_request(&self, plugin_id: &str, capability: &str);
+    /// Check whether one of the approved credential scopes authorizes this
+    /// plugin to use credentials belonging to the target provider.
+    async fn credential_scope_allows(
+        &self,
+        plugin_id: &str,
+        provider_id: &str,
+        scopes: &[String],
+    ) -> Result<bool>;
     /// Emit a namespaced, redacted log line (§18).
     fn log(&self, plugin_id: &str, level: &str, message: &str);
     /// Resolve the plaintext secret for a credential ref (§8.1/§8.2). Only
@@ -241,6 +298,30 @@ impl PluginRuntime {
         bindings::Plugin::instantiate_async(store, component, linker)
             .await
             .map_err(|e| anyhow::anyhow!("instantiating plugin component: {e}"))
+    }
+
+    /// Instantiate the optional browser/account authorization world.
+    pub async fn instantiate_auth(
+        &self,
+        linker: &Linker<HostCtx>,
+        store: &mut Store<HostCtx>,
+        component: &Component,
+    ) -> Result<auth_bindings::PluginAuth> {
+        auth_bindings::PluginAuth::instantiate_async(store, component, linker)
+            .await
+            .map_err(|e| anyhow::anyhow!("instantiating plugin auth component: {e}"))
+    }
+
+    /// Instantiate the optional account-aware model discovery world.
+    pub async fn instantiate_model_source(
+        &self,
+        linker: &Linker<HostCtx>,
+        store: &mut Store<HostCtx>,
+        component: &Component,
+    ) -> Result<model_source_bindings::PluginModelSource> {
+        model_source_bindings::PluginModelSource::instantiate_async(store, component, linker)
+            .await
+            .map_err(|e| anyhow::anyhow!("instantiating plugin model-source component: {e}"))
     }
 
     /// Instantiate the adapter world (§6.3). Uses the same linker (the host
@@ -330,20 +411,112 @@ fn err(code: &str, message: impl Into<String>) -> wit::types::PluginError {
 
 impl bindings::kinetix::plugin::types::Host for HostCtx {}
 
+#[derive(Debug)]
+enum PluginEgressError {
+    Denied(String),
+    Unavailable(String),
+}
+
+impl PluginEgressError {
+    fn into_plugin_error(self) -> wit::types::PluginError {
+        match self {
+            PluginEgressError::Denied(message) => err("permission_denied", message),
+            PluginEgressError::Unavailable(message) => wit::types::PluginError {
+                code: "upstream_unavailable".into(),
+                message,
+                retryable: true,
+                retry_after: None,
+                reset_at: None,
+            },
+        }
+    }
+}
+
+/// Resolve the destination immediately before the request and reject the whole
+/// answer set if any address falls in a blocked range. The returned addresses
+/// are subsequently pinned into reqwest, closing the DNS rebinding/TOCTOU gap.
+async fn resolve_plugin_destination(
+    host: &str,
+    port: u16,
+    allow_private_network: bool,
+) -> Result<Vec<std::net::SocketAddr>, PluginEgressError> {
+    let mut addrs = if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        vec![std::net::SocketAddr::new(ip, port)]
+    } else {
+        tokio::net::lookup_host((host, port))
+            .await
+            .map_err(|e| {
+                PluginEgressError::Unavailable(format!("DNS resolution for '{host}' failed: {e}"))
+            })?
+            .collect::<Vec<_>>()
+    };
+
+    addrs.sort_unstable();
+    addrs.dedup();
+    validate_plugin_destination_addrs(host, addrs, allow_private_network)
+}
+
+fn validate_plugin_destination_addrs(
+    host: &str,
+    addrs: Vec<std::net::SocketAddr>,
+    allow_private_network: bool,
+) -> Result<Vec<std::net::SocketAddr>, PluginEgressError> {
+    if addrs.is_empty() {
+        return Err(PluginEgressError::Unavailable(format!(
+            "DNS resolution for '{host}' returned no addresses"
+        )));
+    }
+
+    if !allow_private_network {
+        if let Some(blocked) = addrs
+            .iter()
+            .find(|addr| crate::admin::is_blocked_ip(addr.ip()))
+        {
+            return Err(PluginEgressError::Denied(format!(
+                "host '{host}' resolves to a blocked private/reserved address ({})",
+                blocked.ip()
+            )));
+        }
+    }
+
+    Ok(addrs)
+}
+
+fn pinned_plugin_client(
+    host: &str,
+    addrs: &[std::net::SocketAddr],
+    timeout: Duration,
+) -> Result<reqwest::Client, PluginEgressError> {
+    let connect_timeout = std::cmp::min(timeout, Duration::from_secs(10));
+    let mut builder = reqwest::Client::builder()
+        .https_only(true)
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(connect_timeout)
+        .timeout(timeout)
+        .user_agent(concat!("kinetix-plugin-host/", env!("CARGO_PKG_VERSION")));
+
+    // IP literals already name the exact destination. DNS names are pinned to
+    // only the addresses that passed the policy check above; TLS SNI and
+    // certificate validation still use the original URL hostname.
+    if host.parse::<std::net::IpAddr>().is_err() {
+        builder = builder.resolve_to_addrs(host, addrs);
+    }
+
+    builder.build().map_err(|e| {
+        PluginEgressError::Unavailable(format!("building pinned HTTP client failed: {e}"))
+    })
+}
+
 impl bindings::kinetix::plugin::host_http::Host for HostCtx {
     async fn send(
         &mut self,
         req: wit::types::HttpRequest,
     ) -> anyhow::Result<Result<wit::types::HttpResponse, wit::types::PluginError>> {
-        // The buffered host-http is control-plane only: the adapter transport
-        // is a separate streaming capability (§7.1). A `pure` routing-fact
-        // plugin is also refused outbound HTTP so Routes stay deterministic
-        // (§6.4). NOTE: an adapter plugin is NOT refused here when it also
-        // legitimately imports the `plugin` world (e.g. a credential strategy
-        // that refreshes a token) — adapters import no network capability of
-        // their own, and the manifest forbids network_hosts for adapter-only
-        // plugins. For an adapter-world store the buffered HTTP is refused.
-        if self.routing_facts_pure {
+        // Buffered host-http is control-plane only. Authority is scoped per
+        // invocation by the manager: request-path routing facts and
+        // provider-adapter calls are denied even when network hosts are granted.
+        if !self.buffered_http_allowed {
             return Ok(Err(err(
                 "permission_denied",
                 "buffered host-http is not available to this plugin capability",
@@ -355,8 +528,9 @@ impl bindings::kinetix::plugin::host_http::Host for HostCtx {
                 "outbound request budget exhausted",
             )));
         }
+
         let parsed = match url::Url::parse(&req.url) {
-            Ok(u) => u,
+            Ok(url) => url,
             Err(_) => return Ok(Err(err("invalid_configuration", "invalid URL"))),
         };
         if parsed.scheme() != "https" {
@@ -365,14 +539,20 @@ impl bindings::kinetix::plugin::host_http::Host for HostCtx {
                 "only https outbound requests are permitted",
             )));
         }
-        let Some(host) = parsed.host_str().map(|h| h.to_ascii_lowercase()) else {
+        if !parsed.username().is_empty() || parsed.password().is_some() {
+            return Ok(Err(err(
+                "permission_denied",
+                "outbound URLs may not contain userinfo",
+            )));
+        }
+        let Some(host) = parsed.host_str().map(|value| value.to_ascii_lowercase()) else {
             return Ok(Err(err("invalid_configuration", "URL has no host")));
         };
-        // §9: manifest hostname check with conservative wildcard matching.
+
         let allowed = self
             .network_hosts
             .iter()
-            .any(|p| super::manifest::host_matches(p, &host));
+            .any(|pattern| super::manifest::host_matches(pattern, &host));
         if !allowed {
             return Ok(Err(err(
                 "permission_denied",
@@ -382,25 +562,48 @@ impl bindings::kinetix::plugin::host_http::Host for HostCtx {
         if req.body.len() as u64 > self.max_http_body {
             return Ok(Err(err("permission_denied", "request body too large")));
         }
+        if req
+            .headers
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case("host"))
+        {
+            return Ok(Err(err(
+                "permission_denied",
+                "plugins may not override the Host header",
+            )));
+        }
 
-        // Credential injection is a host responsibility (§8.1). The plugin only
-        // references a credential; it never sees the bytes.
+        // DNS itself is part of the bounded outbound attempt. Consume the
+        // request budget before resolution so repeated failures cannot create
+        // an unbounded resolver workload.
+        self.outbound_count += 1;
+        let port = parsed.port_or_known_default().unwrap_or(443);
+        let addrs = match resolve_plugin_destination(&host, port, self.allow_private_network).await
+        {
+            Ok(addrs) => addrs,
+            Err(error) => return Ok(Err(error.into_plugin_error())),
+        };
+        let client = match pinned_plugin_client(&host, &addrs, self.http_timeout) {
+            Ok(client) => client,
+            Err(error) => return Ok(Err(error.into_plugin_error())),
+        };
+
         let mut builder = match req.method.to_ascii_uppercase().as_str() {
-            "GET" => self.http.get(parsed.clone()),
-            "POST" => self.http.post(parsed.clone()),
-            "PUT" => self.http.put(parsed.clone()),
-            "DELETE" => self.http.delete(parsed.clone()),
-            "PATCH" => self.http.patch(parsed.clone()),
+            "GET" => client.get(parsed.clone()),
+            "POST" => client.post(parsed.clone()),
+            "PUT" => client.put(parsed.clone()),
+            "DELETE" => client.delete(parsed.clone()),
+            "PATCH" => client.patch(parsed.clone()),
             _ => return Ok(Err(err("invalid_configuration", "unsupported method"))),
         };
-        for (k, v) in &req.headers {
-            builder = builder.header(k, v);
+        for (name, value) in &req.headers {
+            builder = builder.header(name, value);
         }
-        if let Some(cred) = &req.credential {
-            match self.inject_credential(cred).await {
+        if let Some(credential) = &req.credential {
+            match self.inject_credential(credential).await {
                 Ok(Some((name, value))) => builder = builder.header(name, value),
                 Ok(None) => {}
-                Err(e) => return Ok(Err(err("permission_denied", e))),
+                Err(error) => return Ok(Err(err("permission_denied", error))),
             }
         }
         if !req.body.is_empty() {
@@ -408,12 +611,14 @@ impl bindings::kinetix::plugin::host_http::Host for HostCtx {
         }
 
         self.outbound_count += 1;
+        self.backing
+            .record_http_request(&self.plugin_id, &self.capability);
         let resp = match builder.send().await {
-            Ok(r) => r,
-            Err(e) => {
+            Ok(response) => response,
+            Err(error) => {
                 return Ok(Err(wit::types::PluginError {
                     code: "upstream_unavailable".into(),
-                    message: format!("outbound request failed: {}", classify_reqwest(&e)),
+                    message: format!("outbound request failed: {}", classify_reqwest(&error)),
                     retryable: true,
                     retry_after: None,
                     reset_at: None,
@@ -424,10 +629,8 @@ impl bindings::kinetix::plugin::host_http::Host for HostCtx {
         let headers: Vec<(String, String)> = resp
             .headers()
             .iter()
-            .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
+            .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
             .collect();
-        // Bound the buffered response; a truncated body is reported honestly
-        // rather than silently accepted as complete (§9, §14).
         let (body, body_truncated) = read_bounded(resp, self.max_http_body).await;
         Ok(Ok(wit::types::HttpResponse {
             status,
@@ -466,7 +669,11 @@ impl HostCtx {
                 return Err("named credentials are not resolvable in v1".into())
             }
         };
-        if !self.scope_allows(&provider_id) {
+        if !self
+            .scope_allows(&provider_id)
+            .await
+            .map_err(|e| format!("credential scope check failed: {e}"))?
+        {
             return Err(format!("plugin is not scoped to provider '{provider_id}'"));
         }
         let secret = self
@@ -480,11 +687,10 @@ impl HostCtx {
         )))
     }
 
-    fn scope_allows(&self, provider_id: &str) -> bool {
-        let wanted = format!("provider:{provider_id}");
-        self.credential_scopes
-            .iter()
-            .any(|s| s == &wanted || s == "*")
+    async fn scope_allows(&self, provider_id: &str) -> Result<bool> {
+        self.backing
+            .credential_scope_allows(&self.plugin_id, provider_id, &self.credential_scopes)
+            .await
     }
 }
 
@@ -499,24 +705,23 @@ impl bindings::kinetix::plugin::host_storage::Host for HostCtx {
     }
 
     async fn put(&mut self, key: String, value: Vec<u8>) -> anyhow::Result<Result<(), String>> {
-        let used = self
-            .backing
-            .kv_get(&self.plugin_id, "")
-            .await
-            .ok()
-            .flatten()
-            .map(|v| v.len() as u64)
-            .unwrap_or(0);
-        if used + value.len() as u64 > self.storage_quota {
-            return Ok(Err("storage quota exceeded".into()));
+        if key.starts_with(CONFIG_PREFIX) || key.starts_with(CACHE_PREFIX) {
+            return Ok(Err("host-owned storage namespace is read-only".into()));
         }
-        match self.backing.kv_put(&self.plugin_id, &key, &value).await {
+        match self
+            .backing
+            .kv_put_limited(&self.plugin_id, &key, &value, self.storage_quota)
+            .await
+        {
             Ok(()) => Ok(Ok(())),
             Err(e) => Ok(Err(format!("storage write failed: {e}"))),
         }
     }
 
     async fn delete(&mut self, key: String) -> anyhow::Result<Result<(), String>> {
+        if key.starts_with(CONFIG_PREFIX) || key.starts_with(CACHE_PREFIX) {
+            return Ok(Err("host-owned storage namespace is read-only".into()));
+        }
         match self.backing.kv_delete(&self.plugin_id, &key).await {
             Ok(()) => Ok(Ok(())),
             Err(e) => Ok(Err(format!("storage delete failed: {e}"))),
@@ -529,30 +734,43 @@ impl bindings::kinetix::plugin::host_storage::Host for HostCtx {
         value_json: String,
         max_age_ms: u64,
     ) -> anyhow::Result<Result<(), String>> {
-        // §6.4: cached routing facts are host-stamped so a `cached` provider
-        // cannot make Routes non-deterministic by lying about `observed_at`.
+        // §6.4: cache publication is allowed only during the core-owned
+        // background refresh. Values stay invocation-local until the complete
+        // refresh succeeds, then the manager host-stamps and atomically commits
+        // the snapshot.
+        if self.capability != "routing_facts.refresh" {
+            return Ok(Err(
+                "cache publication is only available during cached routing-fact refresh".into(),
+            ));
+        }
+        if name.is_empty()
+            || name.len() > 128
+            || !name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        {
+            return Ok(Err("invalid cached routing fact name".into()));
+        }
         if serde_json::from_str::<serde_json::Value>(&value_json).is_err() {
             return Ok(Err("cache value is not valid JSON".into()));
         }
         if max_age_ms == 0 || max_age_ms > 24 * 3600 * 1000 {
             return Ok(Err("max_age_ms out of range".into()));
         }
-        let envelope = serde_json::json!({
-            "value": serde_json::from_str::<serde_json::Value>(&value_json)
-                .unwrap_or(serde_json::Value::Null),
-            "observed_at": crate::db::now_iso(),
-            "max_age_ms": max_age_ms,
-        })
-        .to_string();
-        let key = format!("{CACHE_PREFIX}{name}");
-        match self
-            .backing
-            .kv_put(&self.plugin_id, &key, envelope.as_bytes())
-            .await
-        {
-            Ok(()) => Ok(Ok(())),
-            Err(e) => Ok(Err(format!("cache write failed: {e}"))),
+        if !self.pending_cache.contains_key(&name) && self.pending_cache.len() >= 256 {
+            return Ok(Err("cached routing fact count exceeds 256".into()));
         }
+        let current_bytes: usize = self
+            .pending_cache
+            .iter()
+            .filter(|(existing, _)| *existing != &name)
+            .map(|(_, (value, _))| value.len())
+            .sum();
+        if current_bytes.saturating_add(value_json.len()) as u64 > self.storage_quota {
+            return Ok(Err("cached routing facts exceed storage quota".into()));
+        }
+        self.pending_cache.insert(name, (value_json, max_age_ms));
+        Ok(Ok(()))
     }
 }
 
@@ -625,7 +843,8 @@ impl bindings::kinetix::plugin::host_credential::Host for HostCtx {
                 return Ok(Err(err("invalid_configuration", "named credential")));
             }
         };
-        if !self.scope_allows(&provider_id) {
+        let scoped = self.scope_allows(&provider_id).await.unwrap_or(false);
+        if !scoped {
             return Ok(Err(err(
                 "permission_denied",
                 format!("plugin is not scoped to provider '{provider_id}'"),
@@ -701,15 +920,19 @@ mod tests {
         let linker = rt.linker().unwrap();
         let ctx = HostCtx {
             plugin_id: "test".into(),
+            capability: "test".into(),
             network_hosts: vec![],
             credential_read: false,
             credential_sign: false,
             credential_scopes: vec![],
             storage_quota: 1024,
+            pending_cache: Default::default(),
             max_outbound_requests: 1,
             max_http_body: 1024,
             adapter_stream: false,
-            routing_facts_pure: true,
+            buffered_http_allowed: false,
+            allow_private_network: false,
+            http_timeout: Duration::from_secs(1),
             outbound_count: 0,
             http: reqwest::Client::new(),
             backing: std::sync::Arc::new(NoBacking),
@@ -723,17 +946,173 @@ mod tests {
         );
     }
 
+    fn test_ctx(buffered_http_allowed: bool, network_hosts: Vec<String>) -> HostCtx {
+        HostCtx {
+            plugin_id: "test".into(),
+            capability: "test".into(),
+            network_hosts,
+            credential_read: false,
+            credential_sign: false,
+            credential_scopes: vec![],
+            storage_quota: 1024,
+            pending_cache: Default::default(),
+            max_outbound_requests: 1,
+            max_http_body: 1024,
+            adapter_stream: false,
+            buffered_http_allowed,
+            allow_private_network: false,
+            http_timeout: Duration::from_secs(1),
+            outbound_count: 0,
+            http: reqwest::Client::new(),
+            backing: std::sync::Arc::new(NoBacking),
+            limits: wasmtime::StoreLimitsBuilder::new().build(),
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_fact_namespace_is_host_owned_and_refresh_buffered() {
+        use bindings::kinetix::plugin::host_storage::Host as _;
+
+        let mut ctx = test_ctx(false, vec![]);
+        assert!(ctx
+            .put("_cache:direct".into(), b"bad".to_vec())
+            .await
+            .unwrap()
+            .is_err());
+        assert!(ctx.delete("_cache:direct".into()).await.unwrap().is_err());
+        assert!(ctx
+            .cache_set("capacity".into(), "true".into(), 30_000)
+            .await
+            .unwrap()
+            .is_err());
+
+        ctx.capability = "routing_facts.refresh".into();
+        ctx.cache_set("capacity".into(), "true".into(), 30_000)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            ctx.pending_cache.get("capacity"),
+            Some(&(String::from("true"), 30_000))
+        );
+    }
+
+    #[test]
+    fn plugin_egress_rejects_private_and_mixed_dns_answers() {
+        use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
+        let public = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(8, 8, 8, 8)), 443);
+        assert!(validate_plugin_destination_addrs("public.example", vec![public], false).is_ok());
+
+        let private = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1)), 443);
+        assert!(matches!(
+            validate_plugin_destination_addrs("private.example", vec![private], false),
+            Err(PluginEgressError::Denied(_))
+        ));
+        assert!(matches!(
+            validate_plugin_destination_addrs("rebind.example", vec![public, private], false,),
+            Err(PluginEgressError::Denied(_))
+        ));
+
+        let ula = SocketAddr::new(IpAddr::V6("fd00::1".parse::<Ipv6Addr>().unwrap()), 443);
+        let link_local = SocketAddr::new(IpAddr::V6("fe80::1".parse::<Ipv6Addr>().unwrap()), 443);
+        let mapped_loopback = SocketAddr::new(
+            IpAddr::V6("::ffff:127.0.0.1".parse::<Ipv6Addr>().unwrap()),
+            443,
+        );
+        for address in [ula, link_local, mapped_loopback] {
+            assert!(matches!(
+                validate_plugin_destination_addrs("ipv6.example", vec![address], false),
+                Err(PluginEgressError::Denied(_))
+            ));
+        }
+
+        assert!(
+            validate_plugin_destination_addrs("dev-private.example", vec![private], true,).is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn plugin_http_rejects_private_literals_before_connecting() {
+        use bindings::kinetix::plugin::host_http::Host;
+
+        let req = wit::types::HttpRequest {
+            method: "GET".into(),
+            url: "https://127.0.0.1/metadata".into(),
+            headers: vec![],
+            body: vec![],
+            credential: None,
+        };
+        let mut ctx = test_ctx(true, vec!["127.0.0.1".into()]);
+        let error = ctx.send(req).await.unwrap().unwrap_err();
+        assert_eq!(error.code, "permission_denied");
+        assert!(error.message.contains("blocked private/reserved"));
+    }
+
+    #[tokio::test]
+    async fn plugin_http_rejects_host_header_override() {
+        use bindings::kinetix::plugin::host_http::Host;
+
+        let req = wit::types::HttpRequest {
+            method: "GET".into(),
+            url: "https://api.example.com/".into(),
+            headers: vec![("Host".into(), "metadata.google.internal".into())],
+            body: vec![],
+            credential: None,
+        };
+        let mut ctx = test_ctx(true, vec!["api.example.com".into()]);
+        let error = ctx.send(req).await.unwrap().unwrap_err();
+        assert_eq!(error.code, "permission_denied");
+        assert!(error.message.contains("Host header"));
+    }
+
+    #[tokio::test]
+    async fn buffered_http_is_scoped_to_the_current_capability() {
+        use bindings::kinetix::plugin::host_http::Host;
+
+        let req = wit::types::HttpRequest {
+            method: "GET".into(),
+            url: "https://oauth2.googleapis.com/token".into(),
+            headers: vec![],
+            body: vec![],
+            credential: None,
+        };
+
+        let mut denied = test_ctx(false, vec!["oauth2.googleapis.com".into()]);
+        let err = denied.send(req.clone()).await.unwrap().unwrap_err();
+        assert_eq!(err.code, "permission_denied");
+        assert!(err
+            .message
+            .contains("not available to this plugin capability"));
+
+        // With capability-level HTTP enabled, the request advances to the
+        // manifest host allow-list instead of being rejected by capability policy.
+        let mut allowed_capability = test_ctx(true, vec!["api.example.com".into()]);
+        let err = allowed_capability.send(req).await.unwrap().unwrap_err();
+        assert_eq!(err.code, "permission_denied");
+        assert!(err.message.contains("network_hosts"));
+    }
+
     struct NoBacking;
     #[async_trait::async_trait]
     impl HostBacking for NoBacking {
         async fn kv_get(&self, _: &str, _: &str) -> anyhow::Result<Option<Vec<u8>>> {
             Ok(None)
         }
-        async fn kv_put(&self, _: &str, _: &str, _: &[u8]) -> anyhow::Result<()> {
+        async fn kv_put_limited(&self, _: &str, _: &str, _: &[u8], _: u64) -> anyhow::Result<()> {
             Ok(())
         }
         async fn kv_delete(&self, _: &str, _: &str) -> anyhow::Result<()> {
             Ok(())
+        }
+        fn record_http_request(&self, _: &str, _: &str) {}
+        async fn credential_scope_allows(
+            &self,
+            _: &str,
+            _: &str,
+            _: &[String],
+        ) -> anyhow::Result<bool> {
+            Ok(false)
         }
         fn log(&self, _: &str, _: &str, _: &str) {}
         async fn resolve_secret(&self, _: &str, _: &str, _: &str) -> anyhow::Result<String> {

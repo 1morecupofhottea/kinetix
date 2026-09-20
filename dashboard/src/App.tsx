@@ -24,6 +24,7 @@ import { SquiggleDivider, SketchButton, SketchBadge } from './components/HandDra
 import { EMPTY_METRICS } from './lib/mappers';
 import { Kinetix, ExportFile, UsageDay } from './lib/resources';
 import { SettingsView } from './components/views/SettingsView';
+import { PluginsView } from './components/views/PluginsView';
 import { ApiError } from './lib/api';
 import { useTheme } from './lib/theme';
 import {
@@ -305,6 +306,9 @@ export default function App() {
         credential_hosts: prov.credentialHosts || '',
         follow_redirects: !!prov.followRedirects,
         allow_insecure_tls: !!prov.allowInsecureTls,
+        wire_plugin: prov.wirePlugin || '',
+        credential_plugin: prov.credentialPlugin || '',
+        model_source_plugin: prov.modelSourcePlugin || '',
         api_key: prov.apiKey || null,
         account_label: prov.accountLabel || null,
       }),
@@ -326,6 +330,9 @@ export default function App() {
         credential_hosts: prov.credentialHosts || '',
         follow_redirects: !!prov.followRedirects,
         allow_insecure_tls: !!prov.allowInsecureTls,
+        wire_plugin: prov.wirePlugin || '',
+        credential_plugin: prov.credentialPlugin || '',
+        model_source_plugin: prov.modelSourcePlugin || '',
         api_key: prov.apiKey || null,
         account_label: prov.accountLabel || null,
       }),
@@ -548,6 +555,8 @@ export default function App() {
         )}
 
         {activeTab === 'audit' && <AuditView logs={auditLogs} />}
+
+        {activeTab === 'plugins' && <PluginsView />}
 
         {activeTab === 'settings' && <SettingsView onLogout={handleLogout} />}
         </main>

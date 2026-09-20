@@ -25,6 +25,9 @@ pub struct HostPolicy {
     pub max_outbound_requests: u32,
     pub max_http_body: u64,
     pub max_storage: u64,
+    /// Development-only escape hatch mirroring Kinetix's upstream SSRF
+    /// override. Production defaults to blocking private/reserved destinations.
+    pub allow_private_network: bool,
 }
 
 impl Default for HostPolicy {
@@ -35,6 +38,7 @@ impl Default for HostPolicy {
             max_outbound_requests: 4,
             max_http_body: 4 * 1024 * 1024,
             max_storage: 10 * 1024 * 1024,
+            allow_private_network: false,
         }
     }
 }
@@ -99,8 +103,337 @@ pub fn validate(manifest: Manifest, policy: HostPolicy) -> Result<ValidatedManif
         }
     }
 
+    let mut integration_ids = std::collections::HashSet::new();
+    for integration in &manifest.integrations {
+        validate_integration_id(&integration.id)?;
+        if !integration_ids.insert(integration.id.as_str()) {
+            bail!("duplicate integration id '{}'", integration.id);
+        }
+        if integration.name.trim().is_empty() {
+            bail!("integration '{}' name must not be empty", integration.id);
+        }
+        if integration.provider_adapter.is_none()
+            && integration.credential_strategy.is_none()
+            && integration.auth_flow.is_none()
+            && integration.model_source.is_none()
+        {
+            bail!(
+                "integration '{}' must reference at least one provided capability",
+                integration.id
+            );
+        }
+        if let Some(name) = &integration.provider_adapter {
+            if !manifest.provides.provider_adapters.contains(name) {
+                bail!(
+                    "integration '{}' references unknown provider_adapter '{}'",
+                    integration.id,
+                    name
+                );
+            }
+        }
+        if let Some(name) = &integration.credential_strategy {
+            if !manifest.provides.credential_strategies.contains(name) {
+                bail!(
+                    "integration '{}' references unknown credential_strategy '{}'",
+                    integration.id,
+                    name
+                );
+            }
+        }
+        if let Some(name) = &integration.auth_flow {
+            if !manifest.provides.auth_flows.contains(name) {
+                bail!(
+                    "integration '{}' references unknown auth_flow '{}'",
+                    integration.id,
+                    name
+                );
+            }
+        }
+        if let Some(name) = &integration.model_source {
+            let legacy = manifest.provides.model_sources.contains(name);
+            let account = manifest.provides.account_model_sources.contains(name);
+            if !legacy && !account {
+                bail!(
+                    "integration '{}' references unknown model_source '{}'",
+                    integration.id,
+                    name
+                );
+            }
+            if legacy && account {
+                bail!(
+                    "integration '{}' model_source '{}' is declared in both legacy and account-aware discovery lists",
+                    integration.id,
+                    name
+                );
+            }
+        }
+        if let Some(provider) = &integration.provider {
+            let parsed = url::Url::parse(&provider.base_url).map_err(|e| {
+                anyhow!(
+                    "integration '{}' provider base_url is invalid: {e}",
+                    integration.id
+                )
+            })?;
+            if parsed.scheme() != "https" {
+                bail!(
+                    "integration '{}' provider base_url must use https",
+                    integration.id
+                );
+            }
+            if !parsed.username().is_empty() || parsed.password().is_some() {
+                bail!(
+                    "integration '{}' provider base_url may not contain userinfo",
+                    integration.id
+                );
+            }
+            if parsed.host_str().is_none() {
+                bail!(
+                    "integration '{}' provider base_url has no host",
+                    integration.id
+                );
+            }
+
+            if !matches!(
+                provider.wire_format.as_str(),
+                "openai" | "anthropic" | "gemini" | "plugin"
+            ) {
+                bail!(
+                    "integration '{}' provider has unknown wire_format '{}'",
+                    integration.id,
+                    provider.wire_format
+                );
+            }
+            if integration.provider_adapter.is_some() && provider.wire_format != "plugin" {
+                bail!(
+                    "integration '{}' provider_adapter requires wire_format 'plugin'",
+                    integration.id
+                );
+            }
+            if provider.wire_format == "plugin" && integration.provider_adapter.is_none() {
+                bail!(
+                    "integration '{}' provider wire_format 'plugin' requires provider_adapter",
+                    integration.id
+                );
+            }
+
+            match provider.auth_scheme.as_str() {
+                "bearer" => {}
+                "custom_header" => {
+                    if provider
+                        .custom_header_name
+                        .as_deref()
+                        .unwrap_or("")
+                        .trim()
+                        .is_empty()
+                    {
+                        bail!(
+                            "integration '{}' custom_header auth requires custom_header_name",
+                            integration.id
+                        );
+                    }
+                }
+                "query_param" => {
+                    if provider
+                        .custom_param_name
+                        .as_deref()
+                        .unwrap_or("")
+                        .trim()
+                        .is_empty()
+                    {
+                        bail!(
+                            "integration '{}' query_param auth requires custom_param_name",
+                            integration.id
+                        );
+                    }
+                }
+                other => bail!(
+                    "integration '{}' provider has unknown auth_scheme '{}'",
+                    integration.id,
+                    other
+                ),
+            }
+
+            if provider.timeout_ms == 0 || provider.timeout_ms > 600_000 {
+                bail!(
+                    "integration '{}' provider timeout_ms must be 1..=600000",
+                    integration.id
+                );
+            }
+            if !matches!(provider.capability_mode.as_str(), "permissive" | "strict") {
+                bail!(
+                    "integration '{}' provider has invalid capability_mode '{}'",
+                    integration.id,
+                    provider.capability_mode
+                );
+            }
+            if let Some(path) = &provider.models_path {
+                if !path.starts_with('/') || path.contains("://") {
+                    bail!(
+                        "integration '{}' provider models_path must be an absolute URL path",
+                        integration.id
+                    );
+                }
+            }
+            for host in &provider.credential_hosts {
+                if host.trim().is_empty()
+                    || host.contains('/')
+                    || host.contains(':')
+                    || host.contains('*')
+                    || host.contains(' ')
+                {
+                    bail!(
+                        "integration '{}' provider credential host '{}' is invalid",
+                        integration.id,
+                        host
+                    );
+                }
+            }
+            for (name, value) in &provider.extra_headers {
+                if name.trim().is_empty()
+                    || name.chars().any(|c| matches!(c, '\r' | '\n' | ':'))
+                    || value.chars().any(|c| matches!(c, '\r' | '\n'))
+                {
+                    bail!(
+                        "integration '{}' provider contains an invalid extra header",
+                        integration.id
+                    );
+                }
+            }
+        }
+    }
+
+    let mut ui_setting_keys = std::collections::HashSet::new();
+    for setting in &manifest.ui.settings {
+        validate_ui_id(&setting.key)?;
+        if !ui_setting_keys.insert(setting.key.as_str()) {
+            bail!("duplicate ui setting key '{}'", setting.key);
+        }
+        if setting.label.trim().is_empty() {
+            bail!("ui setting '{}' label must not be empty", setting.key);
+        }
+        if !matches!(
+            setting.kind.as_str(),
+            "text" | "secret" | "boolean" | "select"
+        ) {
+            bail!(
+                "ui setting '{}' has unsupported kind '{}'",
+                setting.key,
+                setting.kind
+            );
+        }
+        if setting.kind == "select" {
+            if setting.options.is_empty() {
+                bail!("select ui setting '{}' requires options", setting.key);
+            }
+            let mut options = std::collections::HashSet::new();
+            for option in &setting.options {
+                if option.is_empty() || !options.insert(option.as_str()) {
+                    bail!(
+                        "ui setting '{}' has invalid or duplicate option",
+                        setting.key
+                    );
+                }
+            }
+            if let Some(default) = &setting.default {
+                if !setting.options.contains(default) {
+                    bail!(
+                        "ui setting '{}' default '{}' is not in options",
+                        setting.key,
+                        default
+                    );
+                }
+            }
+        } else if !setting.options.is_empty() {
+            bail!(
+                "ui setting '{}' options are only valid for select settings",
+                setting.key
+            );
+        }
+        if setting.kind == "boolean" {
+            if let Some(default) = &setting.default {
+                if !matches!(default.as_str(), "true" | "false") {
+                    bail!(
+                        "boolean ui setting '{}' default must be 'true' or 'false'",
+                        setting.key
+                    );
+                }
+            }
+        }
+        if setting.kind == "secret" && setting.default.is_some() {
+            bail!(
+                "secret ui setting '{}' may not declare a default",
+                setting.key
+            );
+        }
+    }
+
+    let mut ui_action_ids = std::collections::HashSet::new();
+    for action in &manifest.ui.actions {
+        validate_ui_id(&action.id)?;
+        if !ui_action_ids.insert(action.id.as_str()) {
+            bail!("duplicate ui action id '{}'", action.id);
+        }
+        if action.label.trim().is_empty() {
+            bail!("ui action '{}' label must not be empty", action.id);
+        }
+        if action.kind != "auth" {
+            bail!(
+                "ui action '{}' has unsupported kind '{}': expected 'auth'",
+                action.id,
+                action.kind
+            );
+        }
+        let integration = manifest
+            .integrations
+            .iter()
+            .find(|integration| integration.id == action.integration)
+            .ok_or_else(|| {
+                anyhow!(
+                    "ui action '{}' references unknown integration '{}'",
+                    action.id,
+                    action.integration
+                )
+            })?;
+        if integration.auth_flow.is_none() || integration.credential_strategy.is_none() {
+            bail!(
+                "auth ui action '{}' requires integration '{}' to declare auth_flow and credential_strategy",
+                action.id,
+                action.integration
+            );
+        }
+    }
+
     for host in &manifest.permissions.network_hosts {
         validate_network_host(host)?;
+    }
+    for scope in &manifest.permissions.credential_scopes {
+        if scope == "*" {
+            continue;
+        }
+        if let Some(provider_id) = scope.strip_prefix("provider:") {
+            if provider_id.trim().is_empty() {
+                bail!("credential scope 'provider:' requires a provider id");
+            }
+            continue;
+        }
+        if let Some(strategy) = scope.strip_prefix("credential_strategy:") {
+            if !manifest
+                .provides
+                .credential_strategies
+                .iter()
+                .any(|provided| provided == strategy)
+            {
+                bail!(
+                    "credential scope '{}' references a credential strategy this plugin does not provide",
+                    scope
+                );
+            }
+            continue;
+        }
+        bail!(
+            "invalid credential scope '{}': expected '*', 'provider:<id>', or 'credential_strategy:<name>'",
+            scope
+        );
     }
 
     // §6.4: a routing-fact provider must declare a determinism mode the host can
@@ -113,6 +446,12 @@ pub fn validate(manifest: Manifest, policy: HostPolicy) -> Result<ValidatedManif
             "invalid routing_facts_mode '{}': expected 'pure' or 'cached'",
             manifest.routing_facts_mode
         );
+    }
+    if !manifest.provides.routing_facts.is_empty()
+        && manifest.routing_facts_mode == "cached"
+        && !(5_000..=3_600_000).contains(&manifest.routing_facts_refresh_ms)
+    {
+        bail!("routing_facts_refresh_ms must be 5000..=3600000 for cached routing facts");
     }
 
     // §7.1: an adapter plugin is a pure translation library and must not hold
@@ -167,6 +506,32 @@ fn validate_id(id: &str) -> Result<()> {
     }
     if id.starts_with('.') || id.ends_with('.') || id.contains("..") {
         bail!("plugin id '{id}' has an invalid dot placement");
+    }
+    Ok(())
+}
+
+fn validate_ui_id(id: &str) -> Result<()> {
+    if id.is_empty() || id.len() > 64 {
+        bail!("ui action id must be 1..=64 characters");
+    }
+    let ok = id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if !ok {
+        bail!("ui action id '{id}' may only contain lowercase letters, digits, '-', '_'");
+    }
+    Ok(())
+}
+
+fn validate_integration_id(id: &str) -> Result<()> {
+    if id.is_empty() || id.len() > 64 {
+        bail!("integration id must be 1..=64 characters");
+    }
+    let ok = id
+        .chars()
+        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_');
+    if !ok {
+        bail!("integration id '{id}' may only contain lowercase letters, digits, '-', '_'");
     }
     Ok(())
 }
@@ -239,7 +604,23 @@ version = "1.2.0"
 plugin_api = "1"
 
 [provides]
+credential_strategies = ["foo-auth"]
+auth_flows = ["foo-login"]
 model_sources = ["foo-models"]
+
+[[integrations]]
+id = "foo"
+name = "Foo Cloud"
+description = "Foo provider integration"
+credential_strategy = "foo-auth"
+auth_flow = "foo-login"
+model_source = "foo-models"
+
+[[ui.actions]]
+id = "connect"
+label = "Connect account"
+kind = "auth"
+integration = "foo"
 
 [permissions]
 network_hosts = ["api.foo.example", "*.svc.example"]
@@ -266,8 +647,172 @@ storage = "2MiB"
 
     #[test]
     fn rejects_no_capabilities() {
-        let bad = GOOD.replace("model_sources = [\"foo-models\"]", "");
+        let bad = GOOD
+            .replace("credential_strategies = [\"foo-auth\"]", "")
+            .replace("auth_flows = [\"foo-login\"]", "")
+            .replace("model_sources = [\"foo-models\"]", "");
         assert!(parse_and_validate(&bad, HostPolicy::default()).is_err());
+    }
+
+    #[test]
+    fn rejects_integration_referencing_missing_capability() {
+        let bad = GOOD.replace(
+            "model_source = \"foo-models\"",
+            "model_source = \"missing-models\"",
+        );
+        let err = parse_and_validate(&bad, HostPolicy::default()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown model_source 'missing-models'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_integration_ids() {
+        let duplicate = format!(
+            "{GOOD}\n[[integrations]]\nid = \"foo\"\nname = \"Duplicate\"\nmodel_source = \"foo-models\"\n"
+        );
+        let err = parse_and_validate(&duplicate, HostPolicy::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("duplicate integration id 'foo'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_empty_integration_binding() {
+        let bad = GOOD
+            .replace("credential_strategy = \"foo-auth\"", "")
+            .replace("auth_flow = \"foo-login\"", "")
+            .replace("model_source = \"foo-models\"", "");
+        let err = parse_and_validate(&bad, HostPolicy::default()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("must reference at least one provided capability"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_integration_referencing_missing_auth_flow() {
+        let bad = GOOD.replace("auth_flow = \"foo-login\"", "auth_flow = \"missing-login\"");
+        let err = parse_and_validate(&bad, HostPolicy::default()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("unknown auth_flow 'missing-login'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_secret_setting_default() {
+        let bad = GOOD.replace(
+            "[[ui.actions]]",
+            "[[ui.settings]]\nkey = \"token\"\nlabel = \"Token\"\nkind = \"secret\"\ndefault = \"bad\"\n\n[[ui.actions]]",
+        );
+        let err = parse_and_validate(&bad, HostPolicy::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("may not declare a default"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_select_setting_without_options() {
+        let bad = GOOD.replace(
+            "[[ui.actions]]",
+            "[[ui.settings]]\nkey = \"region\"\nlabel = \"Region\"\nkind = \"select\"\n\n[[ui.actions]]",
+        );
+        let err = parse_and_validate(&bad, HostPolicy::default()).unwrap_err();
+        assert!(err.to_string().contains("requires options"), "{err}");
+    }
+
+    #[test]
+    fn rejects_adapter_provider_template_without_plugin_wire_sentinel() {
+        let bad = GOOD.replace(
+            "model_source = \"foo-models\"",
+            "provider_adapter = \"foo-adapter\"\nmodel_source = \"foo-models\"\n\n[integrations.provider]\nbase_url = \"https://api.foo.example\"\nwire_format = \"openai\"",
+        ).replace(
+            "model_sources = [\"foo-models\"]",
+            "model_sources = [\"foo-models\"]\nprovider_adapters = [\"foo-adapter\"]",
+        );
+        let err = parse_and_validate(&bad, HostPolicy::default()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("provider_adapter requires wire_format 'plugin'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_insecure_integration_provider_url() {
+        let bad = GOOD.replace(
+            "model_source = \"foo-models\"",
+            "model_source = \"foo-models\"\n\n[integrations.provider]\nbase_url = \"http://api.foo.example\"\nwire_format = \"gemini\"",
+        );
+        let err = parse_and_validate(&bad, HostPolicy::default()).unwrap_err();
+        assert!(err.to_string().contains("base_url must use https"), "{err}");
+    }
+
+    #[test]
+    fn rejects_ui_action_with_unknown_integration() {
+        let bad = GOOD.replace("integration = \"foo\"", "integration = \"missing\"");
+        let err = parse_and_validate(&bad, HostPolicy::default()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("references unknown integration 'missing'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_unsupported_ui_action_kind() {
+        let bad = GOOD.replace("kind = \"auth\"", "kind = \"script\"");
+        let err = parse_and_validate(&bad, HostPolicy::default()).unwrap_err();
+        assert!(
+            err.to_string().contains("unsupported kind 'script'"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn rejects_binding_scope_for_unknown_credential_strategy() {
+        let bad = GOOD.replace(
+            "network_hosts = [\"api.foo.example\", \"*.svc.example\"]",
+            "network_hosts = [\"api.foo.example\", \"*.svc.example\"]\ncredential_scopes = [\"credential_strategy:missing\"]",
+        );
+        let err = parse_and_validate(&bad, HostPolicy::default()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("references a credential strategy this plugin does not provide"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn cached_routing_facts_require_bounded_refresh_cadence() {
+        let cached = GOOD
+            .replace(
+                "plugin_api = \"1\"",
+                "plugin_api = \"1\"\nrouting_facts_mode = \"cached\"\nrouting_facts_refresh_ms = 30000",
+            )
+            .replace(
+                "model_sources = [\"foo-models\"]",
+                "model_sources = [\"foo-models\"]\nrouting_facts = [\"capacity\"]",
+            );
+        assert!(parse_and_validate(&cached, HostPolicy::default()).is_ok());
+
+        let too_fast = cached.replace(
+            "routing_facts_refresh_ms = 30000",
+            "routing_facts_refresh_ms = 1000",
+        );
+        let err = parse_and_validate(&too_fast, HostPolicy::default()).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("routing_facts_refresh_ms must be 5000..=3600000"),
+            "{err}"
+        );
     }
 
     #[test]

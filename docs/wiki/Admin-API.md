@@ -124,17 +124,27 @@ Manage WebAssembly Component plugins (`.kxp` packages).
 | Method & path | Purpose |
 | --- | --- |
 | `GET /admin/api/plugins` | List all installed plugins with manifest summaries, status, and provided capabilities. |
-| `POST /admin/api/plugins/install` | Install or upgrade a `.kxp` package from `package_base64` or a server-local `path`. Accepts `sha256`, `trusted_keys` array, and `allow_untrusted_signature`. Plugins are installed disabled. |
-| `GET /admin/api/plugins/{id}` | Plugin detail: manifest metadata, requested permissions, approved permission grants, and runtime circuit state. |
+| `GET /admin/api/plugins/catalog` | Return embedded official discovery metadata. Catalog metadata does not bypass package signature/hash/permission review. |
+| `GET /admin/api/plugins/catalog/{id}/preview` | Download and fully verify the catalog artifact without mutation, then return target permissions and the semantic authority delta relative to the installed version. |
+| `POST /admin/api/plugins/catalog/{id}/install` | Download and install an install-ready catalog package. Kinetix constrains HTTPS redirect hosts, package size, SHA-256, catalog id/version, and requires a signature from the separately trusted publisher key. Installs disabled. |
+| `POST /admin/api/plugins/install` | Install or upgrade a `.kxp` package from `package_base64` or a server-local `path`. Accepts `sha256`, `trusted_keys` array, and `allow_untrusted_signature`. Plugins are installed disabled; the response includes the computed SHA-256 and the exact package is retained in the content-addressed package store. |
+| `POST /admin/api/plugins/auth/start` | Start a named plugin browser-account flow for an existing provider binding. Requires admin auth and returns the provider authorization URL. |
+| `POST /admin/api/plugins/{id}/integrations/{integration}/provider` | Create or reuse the provider declared by an Integration template. Re-validates outbound URL security and requires every derived plugin capability binding to be enabled and approved. |
+| `GET /admin/api/plugins/auth/callback` | One-time provider callback authenticated by expiring random state. Exchanges the code inside WASM, validates/encrypts returned credential JSON, creates the account, and redirects to Plugins. |
+| `GET /admin/api/plugins/{id}` | Plugin detail: manifest metadata, requested/approved permissions, runtime circuit state, and retained `.kxp` package provenance/history. |
 | `DELETE /admin/api/plugins/{id}` | Remove a plugin and cascade-delete its permissions, circuit state, and encrypted KV storage. |
 | `POST /admin/api/plugins/{id}/enable` | Enable an installed plugin. Verifies component linking and registers capabilities. |
 | `POST /admin/api/plugins/{id}/disable` | Disable a plugin. Bound providers/routes fail closed immediately. |
 | `POST /admin/api/plugins/{id}/validate` | Re-instantiate the component in a test store to verify exports and linking. |
+| `GET /admin/api/plugins/{id}/packages/{sha256}/preview` | Re-hash/revalidate a retained package and return its manifest plus semantic permission delta relative to the current active manifest. |
+| `POST /admin/api/plugins/{id}/rollback` | Reactivate a retained package by SHA-256 after path/hash/manifest/compile checks. The plugin is left disabled and all permission grants are cleared. |
+| `GET /admin/api/plugins/{id}/settings` | Read declarative host-owned plugin settings. Secret values are never returned; only `configured` is exposed. |
+| `PUT /admin/api/plugins/{id}/settings` | Partially update manifest-declared plugin settings. Values are type-checked and encrypted; audit logs record keys/counts, never values. |
 | `GET /admin/api/plugins/{id}/permissions` | View requested permissions from manifest vs currently approved grants. |
 | `POST /admin/api/plugins/{id}/permissions/approve` | Approve all permissions declared by the plugin manifest (all-or-nothing). |
 | `POST /admin/api/plugins/{id}/permissions/revoke` | Revoke a single permission grant (`{"permission": "..."}`). Disables the plugin while retaining its KV state. |
 | `GET /admin/api/plugins/{id}/audit` | Filtered audit log entries where target is this plugin. |
-| `GET /admin/api/plugins/{id}/metrics` | Plugin metrics: host invocations, faults, timeouts, cancellations, HTTP calls, runtime state, and encrypted KV storage bytes. |
+| `GET /admin/api/plugins/{id}/metrics` | Per-plugin runtime state, storage bytes, host invocation totals, and `by_capability` counters for successes/faults/timeouts/cancellations/HTTP attempts/cumulative duration. |
 
 ## Error shape
 

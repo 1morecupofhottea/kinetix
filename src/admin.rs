@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::Json;
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::Deserialize;
@@ -642,6 +642,9 @@ fn provider_json(p: &db::ProviderRow) -> Value {
         "follow_redirects": p.follow_redirects != 0,
         "credential_hosts": p.credential_hosts,
         "allow_insecure_tls": p.allow_insecure_tls != 0,
+        "wire_plugin": p.wire_plugin,
+        "credential_plugin": p.credential_plugin,
+        "model_source_plugin": p.model_source_plugin,
         "created_at": p.created_at,
     })
 }
@@ -693,14 +696,97 @@ fn default_permissive() -> String {
     "permissive".into()
 }
 
+async fn provider_plugin_binding_problems(state: &AppState, body: &ProviderBody) -> Vec<String> {
+    use crate::plugins::Capability;
+
+    let bindings = [
+        (
+            "wire_plugin",
+            body.wire_plugin.as_str(),
+            Capability::ProviderAdapter,
+        ),
+        (
+            "credential_plugin",
+            body.credential_plugin.as_str(),
+            Capability::CredentialStrategy,
+        ),
+    ];
+
+    let mut problems = Vec::new();
+    for (field, reference, capability) in bindings {
+        let reference = reference.trim();
+        if reference.is_empty() {
+            continue;
+        }
+        if crate::plugins::PluginRef::parse(reference).is_none() {
+            problems.push(format!(
+                "{field} must use plugin:<id>/<capability-name> syntax"
+            ));
+            continue;
+        }
+        let Some(manager) = state.plugin_manager() else {
+            problems.push(format!(
+                "{field} references '{reference}' but the plugin host is unavailable"
+            ));
+            continue;
+        };
+        if manager
+            .resolve_binding(reference, capability)
+            .await
+            .is_none()
+        {
+            problems.push(format!(
+                "{field} reference '{reference}' does not resolve to an installed, enabled, approved plugin providing {}",
+                capability.manifest_key()
+            ));
+        }
+    }
+
+    let model_reference = body.model_source_plugin.trim();
+    if !model_reference.is_empty() {
+        if crate::plugins::PluginRef::parse(model_reference).is_none() {
+            problems
+                .push("model_source_plugin must use plugin:<id>/<capability-name> syntax".into());
+        } else if let Some(manager) = state.plugin_manager() {
+            let account_aware = manager
+                .resolve_binding(model_reference, Capability::AccountModelSource)
+                .await
+                .is_some();
+            let legacy = manager
+                .resolve_binding(model_reference, Capability::ModelSource)
+                .await
+                .is_some();
+            if !account_aware && !legacy {
+                problems.push(format!(
+                    "model_source_plugin reference '{model_reference}' does not resolve to an installed, enabled, approved plugin providing account_model_sources or model_sources"
+                ));
+            }
+        } else {
+            problems.push(format!(
+                "model_source_plugin references '{model_reference}' but the plugin host is unavailable"
+            ));
+        }
+    }
+
+    problems
+}
 pub async fn create_provider(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Json(body): Json<ProviderBody>,
 ) -> ApiResult {
     validate_outbound_url(&state, &body.base_url)?;
+    let binding_problems = provider_plugin_binding_problems(&state, &body).await;
+    if !binding_problems.is_empty() {
+        return Err(ApiError::bad(binding_problems.join("; ")));
+    }
     let wire =
         WireFormat::parse(&body.wire_format).ok_or_else(|| ApiError::bad("invalid wire_format"))?;
+    if wire == WireFormat::Plugin && body.wire_plugin.trim().is_empty() {
+        return Err(ApiError::bad(
+            "wire_format 'plugin' requires a wire_plugin binding",
+        ));
+    }
     let auth =
         AuthScheme::parse(&body.auth_scheme).ok_or_else(|| ApiError::bad("invalid auth_scheme"))?;
 
@@ -774,8 +860,17 @@ pub async fn update_provider(
     Json(body): Json<ProviderBody>,
 ) -> ApiResult {
     validate_outbound_url(&state, &body.base_url)?;
+    let binding_problems = provider_plugin_binding_problems(&state, &body).await;
+    if !binding_problems.is_empty() {
+        return Err(ApiError::bad(binding_problems.join("; ")));
+    }
     let wire =
         WireFormat::parse(&body.wire_format).ok_or_else(|| ApiError::bad("invalid wire_format"))?;
+    if wire == WireFormat::Plugin && body.wire_plugin.trim().is_empty() {
+        return Err(ApiError::bad(
+            "wire_format 'plugin' requires a wire_plugin binding",
+        ));
+    }
     let auth =
         AuthScheme::parse(&body.auth_scheme).ok_or_else(|| ApiError::bad("invalid auth_scheme"))?;
     db::update_provider(
@@ -880,30 +975,55 @@ pub async fn discover_models(
         if let Some(pref) = provider.model_source_plugin_ref() {
             let manager = plugin_manager(&state)?;
             let reference = format!("plugin:{}/{}", pref.plugin_id, pref.capability);
-            if manager
+            let account_aware = manager
+                .resolve_binding(&reference, crate::plugins::Capability::AccountModelSource)
+                .await
+                .is_some();
+            let legacy = manager
                 .resolve_binding(&reference, crate::plugins::Capability::ModelSource)
                 .await
-                .is_none()
-            {
+                .is_some();
+            if !account_aware && !legacy {
                 return Err(ApiError::bad(format!(
                     "provider is bound to unavailable plugin model source '{reference}'"
                 )));
             }
+
             let models_path = provider.models_path.clone().unwrap_or_default();
-            let list = manager
-                .model_discover(
-                    &pref.plugin_id,
-                    &provider.id,
-                    &provider.base_url,
-                    &models_path,
-                )
-                .await
-                .map_err(|f| {
-                    ApiError::bad(format!(
-                        "plugin model discovery failed: {}",
-                        crate::crypto::redact(&f.message())
-                    ))
-                })?;
+            let list = if account_aware {
+                let accounts = db::accounts_for_provider(&state.pool, &provider.id)
+                    .await
+                    .map_err(ApiError::internal)?;
+                let account = accounts
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| ApiError::bad("provider has no credentials to discover with"))?;
+                manager
+                    .account_model_discover(
+                        &pref.plugin_id,
+                        &provider.id,
+                        &account.id,
+                        &provider.base_url,
+                        &models_path,
+                    )
+                    .await
+            } else {
+                manager
+                    .model_discover(
+                        &pref.plugin_id,
+                        &provider.id,
+                        &provider.base_url,
+                        &models_path,
+                    )
+                    .await
+            }
+            .map_err(|f| {
+                ApiError::bad(format!(
+                    "plugin model discovery failed: {}",
+                    crate::crypto::redact(&f.message())
+                ))
+            })?;
+
             list.into_iter()
                 .map(|m| crate::adapters::DiscoveredModel {
                     id: m.id,
@@ -1975,6 +2095,10 @@ pub async fn validate_provider(
         body.custom_header_name.as_deref(),
         body.custom_param_name.as_deref(),
     );
+    problems.extend(provider_plugin_binding_problems(&state, &body).await);
+    if body.wire_format == "plugin" && body.wire_plugin.trim().is_empty() {
+        problems.push("wire_format 'plugin' requires a wire_plugin binding".into());
+    }
     let mut warnings: Vec<String> = Vec::new();
     let mut security: Value = Value::String("not_checked".into());
     if body.base_url.trim().is_empty() {
@@ -2805,14 +2929,32 @@ fn is_blocked_host(host: &str) -> bool {
 pub fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
     match ip {
         std::net::IpAddr::V4(v4) => {
+            let octets = v4.octets();
+            let shared_address_space = octets[0] == 100 && (64..=127).contains(&octets[1]);
+            let benchmarking = octets[0] == 198 && matches!(octets[1], 18 | 19);
             v4.is_loopback()
                 || v4.is_private()
                 || v4.is_link_local()
                 || v4.is_unspecified()
                 || v4.is_broadcast()
-                || v4.octets()[0] == 169 && v4.octets()[1] == 254
+                || v4.is_multicast()
+                || octets[0] == 0
+                || shared_address_space
+                || benchmarking
         }
-        std::net::IpAddr::V6(v6) => v6.is_loopback() || v6.is_unspecified(),
+        std::net::IpAddr::V6(v6) => {
+            if let Some(mapped) = v6.to_ipv4_mapped() {
+                return is_blocked_ip(std::net::IpAddr::V4(mapped));
+            }
+            let first = v6.segments()[0];
+            let unique_local = first & 0xfe00 == 0xfc00;
+            let link_local = first & 0xffc0 == 0xfe80;
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || unique_local
+                || link_local
+        }
     }
 }
 
@@ -3517,6 +3659,269 @@ pub(crate) async fn register_enabled_plugin_capabilities(state: &AppState, id: &
     }
 }
 
+/// `GET /admin/api/plugins/catalog` — embedded official discovery metadata.
+///
+/// Catalog metadata is not a package trust root. Installation continues to use
+/// the normal SHA/signature/permission-review pipeline.
+pub async fn plugin_catalog(_auth: AdminAuth) -> ApiResult {
+    let catalog = crate::plugins::catalog::embedded_catalog().map_err(ApiError::internal)?;
+    let trust = crate::plugins::catalog::embedded_trust_store().map_err(ApiError::internal)?;
+
+    let mut plugins = Vec::with_capacity(catalog.plugins.len());
+    for plugin in catalog.plugins {
+        let ready =
+            crate::plugins::catalog::install_ready(&plugin, &trust).map_err(ApiError::internal)?;
+        let mut value = serde_json::to_value(&plugin).map_err(ApiError::internal)?;
+        value["install_ready"] = json!(ready);
+        value["trust_status"] = json!(if ready {
+            "trusted"
+        } else if plugin.installable {
+            "unavailable"
+        } else {
+            "discovery_only"
+        });
+        plugins.push(value);
+    }
+
+    Ok(Json(json!({
+        "schema_version": catalog.schema_version,
+        "plugins": plugins,
+    })))
+}
+
+async fn download_catalog_package(
+    state: &AppState,
+    distribution: &crate::plugins::catalog::CatalogDistribution,
+) -> Result<Vec<u8>, ApiError> {
+    let mut url = url::Url::parse(&distribution.url)
+        .map_err(|e| ApiError::bad(format!("invalid catalog artifact URL: {e}")))?;
+
+    for redirect_count in 0..=5 {
+        crate::plugins::catalog::validate_download_url(distribution, &url).map_err(plugin_bad)?;
+
+        let mut response = state
+            .http
+            .get(url.clone())
+            .timeout(std::time::Duration::from_secs(60))
+            .send()
+            .await
+            .map_err(|e| ApiError::bad(format!("catalog artifact download failed: {e}")))?;
+
+        if response.status().is_redirection() {
+            if redirect_count == 5 {
+                return Err(ApiError::bad("catalog artifact exceeded redirect limit"));
+            }
+            let location = response
+                .headers()
+                .get(reqwest::header::LOCATION)
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| ApiError::bad("catalog artifact redirect has no valid Location"))?;
+            url = url
+                .join(location)
+                .map_err(|e| ApiError::bad(format!("invalid catalog artifact redirect: {e}")))?;
+            continue;
+        }
+
+        if !response.status().is_success() {
+            return Err(ApiError::bad(format!(
+                "catalog artifact returned HTTP {}",
+                response.status()
+            )));
+        }
+
+        if response
+            .content_length()
+            .is_some_and(|length| length > crate::plugins::package::MAX_PACKAGE_BYTES)
+        {
+            return Err(ApiError::bad("catalog artifact exceeds package size limit"));
+        }
+
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|e| ApiError::bad(format!("reading catalog artifact failed: {e}")))?
+        {
+            if bytes.len() as u64 + chunk.len() as u64 > crate::plugins::package::MAX_PACKAGE_BYTES
+            {
+                return Err(ApiError::bad("catalog artifact exceeds package size limit"));
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        return Ok(bytes);
+    }
+
+    Err(ApiError::bad("catalog artifact download failed"))
+}
+
+struct VerifiedCatalogPackage {
+    plugin: crate::plugins::catalog::CatalogPlugin,
+    bytes: Vec<u8>,
+    key: [u8; 32],
+    validated: crate::plugins::ValidatedManifest,
+}
+
+async fn verify_catalog_package(
+    state: &AppState,
+    manager: &crate::plugins::PluginManager,
+    id: &str,
+) -> Result<VerifiedCatalogPackage, ApiError> {
+    let plugin = crate::plugins::catalog::find_plugin(id).map_err(plugin_bad)?;
+    let distribution = plugin
+        .distribution
+        .as_ref()
+        .ok_or_else(|| ApiError::bad("catalog plugin has no installable distribution"))?;
+    let trust = crate::plugins::catalog::embedded_trust_store().map_err(ApiError::internal)?;
+    if !crate::plugins::catalog::install_ready(&plugin, &trust).map_err(plugin_bad)? {
+        return Err(ApiError::bad(
+            "catalog plugin is not install-ready: signed artifact metadata or publisher trust is unavailable",
+        ));
+    }
+    let key = crate::plugins::catalog::trusted_key(&trust, &plugin)
+        .map_err(plugin_bad)?
+        .ok_or_else(|| ApiError::bad("catalog publisher key is not trusted"))?;
+
+    let bytes = download_catalog_package(state, distribution).await?;
+    let pkg = crate::plugins::package::read_package(&bytes).map_err(plugin_bad)?;
+    if !distribution
+        .sha256
+        .eq_ignore_ascii_case(&pkg.package_sha256)
+    {
+        return Err(ApiError::bad(format!(
+            "catalog package hash mismatch: expected {}, computed {}",
+            distribution.sha256, pkg.package_sha256
+        )));
+    }
+    let validated =
+        crate::plugins::package::validate_manifest(&pkg, manager.policy()).map_err(plugin_bad)?;
+    if validated.manifest.id != plugin.id {
+        return Err(ApiError::bad(format!(
+            "catalog artifact id mismatch: expected '{}', package declares '{}'",
+            plugin.id, validated.manifest.id
+        )));
+    }
+    if validated.manifest.version != plugin.latest_version {
+        return Err(ApiError::bad(format!(
+            "catalog artifact version mismatch: expected '{}', package declares '{}'",
+            plugin.latest_version, validated.manifest.version
+        )));
+    }
+    let signature = crate::plugins::package::verify_signature(&pkg, &[key]).map_err(plugin_bad)?;
+    if signature != crate::plugins::package::SignatureStatus::Verified {
+        return Err(ApiError::bad(
+            "catalog package is not signed by its trusted publisher key",
+        ));
+    }
+
+    Ok(VerifiedCatalogPackage {
+        plugin,
+        bytes,
+        key,
+        validated,
+    })
+}
+
+/// `GET /admin/api/plugins/catalog/{id}/preview` — verify a catalog package
+/// and report its authority delta without mutating plugin state.
+pub async fn preview_catalog_plugin(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let verified = verify_catalog_package(&state, &manager, &id).await?;
+
+    let current = manager.get(&id).await.map_err(ApiError::internal)?;
+    let (current_version, current_permissions) = match current {
+        Some(row) => {
+            let manifest = row
+                .manifest()
+                .ok_or_else(|| ApiError::bad("installed plugin manifest is unreadable"))?;
+            (Some(row.version), manifest.permissions)
+        }
+        None => (None, crate::plugins::Permissions::default()),
+    };
+
+    let target_permissions = verified.validated.manifest.permissions.clone();
+    let permission_diff =
+        crate::plugins::manager::permission_diff(&current_permissions, &target_permissions);
+
+    Ok(Json(json!({
+        "id": verified.plugin.id,
+        "name": verified.plugin.name,
+        "current_version": current_version,
+        "target_version": verified.plugin.latest_version,
+        "sha256": verified
+            .plugin
+            .distribution
+            .as_ref()
+            .map(|distribution| distribution.sha256.clone())
+            .unwrap_or_default(),
+        "signature": "verified",
+        "permissions": target_permissions,
+        "permission_diff": permission_diff,
+        "provides": verified.validated.manifest.provides.provided(),
+        "source": format!(
+            "catalog:{}@{}",
+            verified.plugin.id, verified.plugin.latest_version
+        ),
+    })))
+}
+
+/// `POST /admin/api/plugins/catalog/{id}/install` — install a trusted catalog package.
+pub async fn install_catalog_plugin(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let verified = verify_catalog_package(&state, &manager, &id).await?;
+    let distribution = verified
+        .plugin
+        .distribution
+        .as_ref()
+        .ok_or_else(|| ApiError::bad("catalog plugin has no installable distribution"))?;
+    let source = format!(
+        "catalog:{}@{}",
+        verified.plugin.id, verified.plugin.latest_version
+    );
+    let outcome = manager
+        .install_from_source(
+            &verified.bytes,
+            Some(&distribution.sha256),
+            &[verified.key],
+            false,
+            &source,
+        )
+        .await
+        .map_err(plugin_bad)?;
+
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_catalog_installed",
+        "plugin",
+        &outcome.id,
+        &outcome.id,
+        &format!(
+            "Installed trusted catalog plugin {} v{} (SHA-256 {}). Installed disabled pending permission review.",
+            outcome.id, outcome.version, outcome.package_sha256
+        ),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "id": outcome.id,
+        "version": outcome.version,
+        "sha256": outcome.package_sha256,
+        "signature": outcome.signature.as_str(),
+        "provides": outcome.provides,
+        "enabled": false,
+        "source": source,
+        "note": "trusted catalog package installed disabled; review permissions before enabling",
+    })))
+}
+
 /// `GET /admin/api/plugins` — list installed plugins.
 pub async fn list_plugins(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
     let manager = plugin_manager(&state)?;
@@ -3546,10 +3951,61 @@ pub async fn get_plugin(
     let runtime = crate::plugins::store::runtime_state(&state.pool, &id)
         .await
         .map_err(ApiError::internal)?;
+    let packages = crate::plugins::store::list_packages(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
     let mut summary = crate::plugins::manager::manifest_summary(&row);
     summary["permissions_approved"] = json!(perms);
     summary["runtime"] = json!(runtime);
+    summary["packages"] = json!(packages);
     Ok(Json(summary))
+}
+
+/// `GET /admin/api/plugins/{id}/settings` — read host-owned plugin settings.
+pub async fn plugin_settings(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let settings = manager.ui_settings(&id).await.map_err(plugin_bad)?;
+    Ok(Json(settings))
+}
+
+#[derive(Deserialize)]
+pub struct PluginSettingsBody {
+    #[serde(default)]
+    pub values: serde_json::Map<String, Value>,
+}
+
+/// `PUT /admin/api/plugins/{id}/settings` — partially update validated settings.
+pub async fn update_plugin_settings(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+    Json(body): Json<PluginSettingsBody>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let settings = manager
+        .update_ui_settings(&id, &body.values)
+        .await
+        .map_err(plugin_bad)?;
+
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_settings_updated",
+        "plugin",
+        &id,
+        &id,
+        &format!(
+            "Updated {} plugin setting(s). Values are not written to audit logs.",
+            body.values.len()
+        ),
+    )
+    .await;
+
+    Ok(Json(settings))
 }
 
 /// `POST /admin/api/plugins/install` — install (or upgrade) a package.
@@ -3606,10 +4062,498 @@ pub async fn install_plugin(
     Ok(Json(json!({
         "id": outcome.id,
         "version": outcome.version,
+        "sha256": outcome.package_sha256,
         "signature": outcome.signature.as_str(),
         "provides": outcome.provides,
         "enabled": false,
         "note": "installed-disabled; enable is a separate operation",
+    })))
+}
+
+/// `POST /admin/api/plugins/{id}/integrations/{integration}/provider` —
+/// create (or return) the host-owned provider described by an Integration.
+pub async fn setup_plugin_integration_provider(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path((id, integration_id)): Path<(String, String)>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let row = manager
+        .get(&id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("plugin not found"))?;
+    if row.enabled == 0 {
+        return Err(ApiError::bad(
+            "plugin must be enabled before its integration can create a provider",
+        ));
+    }
+    let manifest = row
+        .manifest()
+        .ok_or_else(|| ApiError::bad("plugin manifest is unreadable"))?;
+    let integration = manifest
+        .integrations
+        .iter()
+        .find(|integration| integration.id == integration_id)
+        .ok_or_else(|| ApiError::not_found("plugin integration not found"))?;
+    let template = integration
+        .provider
+        .as_ref()
+        .ok_or_else(|| ApiError::bad("integration does not declare provider defaults"))?;
+
+    validate_outbound_url(&state, &template.base_url)?;
+
+    let wire_plugin = integration
+        .provider_adapter
+        .as_deref()
+        .map(|name| format!("plugin:{id}/{name}"))
+        .unwrap_or_default();
+    let credential_plugin = integration
+        .credential_strategy
+        .as_deref()
+        .map(|name| format!("plugin:{id}/{name}"))
+        .unwrap_or_default();
+    let model_source_plugin = integration
+        .model_source
+        .as_deref()
+        .map(|name| format!("plugin:{id}/{name}"))
+        .unwrap_or_default();
+
+    for (reference, capability) in [
+        (&wire_plugin, crate::plugins::Capability::ProviderAdapter),
+        (
+            &credential_plugin,
+            crate::plugins::Capability::CredentialStrategy,
+        ),
+    ] {
+        if !reference.is_empty()
+            && manager
+                .resolve_binding(reference, capability)
+                .await
+                .is_none()
+        {
+            return Err(ApiError::bad(format!(
+                "integration capability binding '{reference}' is not enabled and approved"
+            )));
+        }
+    }
+    if !model_source_plugin.is_empty()
+        && manager
+            .resolve_binding(
+                &model_source_plugin,
+                crate::plugins::Capability::AccountModelSource,
+            )
+            .await
+            .is_none()
+        && manager
+            .resolve_binding(
+                &model_source_plugin,
+                crate::plugins::Capability::ModelSource,
+            )
+            .await
+            .is_none()
+    {
+        return Err(ApiError::bad(format!(
+            "integration model source binding '{model_source_plugin}' is not enabled and approved"
+        )));
+    }
+
+    let wire = WireFormat::parse(&template.wire_format)
+        .ok_or_else(|| ApiError::bad("integration provider has invalid wire_format"))?;
+    if wire == WireFormat::Plugin && wire_plugin.is_empty() {
+        return Err(ApiError::bad(
+            "integration provider uses plugin wire format without a provider adapter",
+        ));
+    }
+    let auth = AuthScheme::parse(&template.auth_scheme)
+        .ok_or_else(|| ApiError::bad("integration provider has invalid auth_scheme"))?;
+
+    let existing = db::list_providers(&state.pool)
+        .await
+        .map_err(ApiError::internal)?
+        .into_iter()
+        .find(|provider| {
+            provider.base_url == template.base_url
+                && provider.wire_plugin == wire_plugin
+                && provider.credential_plugin == credential_plugin
+                && provider.model_source_plugin == model_source_plugin
+        });
+    if let Some(provider) = existing {
+        return Ok(Json(json!({
+            "id": provider.id,
+            "name": provider.name,
+            "created": false,
+        })));
+    }
+
+    let credential_hosts = template.credential_hosts.join(",");
+    let id_created = db::insert_provider(
+        &state.pool,
+        &db::NewProvider {
+            name: &integration.name,
+            base_url: &template.base_url,
+            wire_format: wire,
+            auth_scheme: auth,
+            custom_header_name: template.custom_header_name.as_deref(),
+            custom_param_name: template.custom_param_name.as_deref(),
+            extra_headers: serde_json::to_value(&template.extra_headers)
+                .map_err(ApiError::internal)?,
+            timeout_ms: template.timeout_ms as i64,
+            capability_mode: &template.capability_mode,
+            models_path: template.models_path.as_deref(),
+            rate_limit_rules: json!({}),
+            follow_redirects: template.follow_redirects,
+            credential_hosts: &credential_hosts,
+            allow_insecure_tls: false,
+            wire_plugin: &wire_plugin,
+            credential_plugin: &credential_plugin,
+            model_source_plugin: &model_source_plugin,
+        },
+    )
+    .await
+    .map_err(ApiError::internal)?;
+
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_integration_provider_created",
+        "provider",
+        &id_created,
+        &integration.name,
+        &format!(
+            "Created provider from plugin {} integration {}.",
+            id, integration.id
+        ),
+    )
+    .await;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+
+    Ok(Json(json!({
+        "id": id_created,
+        "name": integration.name,
+        "created": true,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct PluginAuthStartBody {
+    pub plugin_id: String,
+    pub flow_name: String,
+    pub provider_id: String,
+}
+
+/// Start a one-time browser authorization session for a plugin integration.
+pub async fn start_plugin_auth(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Json(body): Json<PluginAuthStartBody>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let row = manager
+        .get(&body.plugin_id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("plugin not found"))?;
+    let manifest = row
+        .manifest()
+        .ok_or_else(|| ApiError::bad("plugin manifest is unreadable"))?;
+
+    let integration = manifest
+        .integrations
+        .iter()
+        .find(|integration| integration.auth_flow.as_deref() == Some(body.flow_name.as_str()))
+        .ok_or_else(|| ApiError::bad("auth flow is not exposed by a plugin integration"))?;
+    let credential_strategy = integration
+        .credential_strategy
+        .as_deref()
+        .ok_or_else(|| ApiError::bad("integration has no credential strategy"))?;
+
+    let provider = db::get_provider(&state.pool, &body.provider_id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("provider not found"))?;
+    let expected_binding = format!("plugin:{}/{}", body.plugin_id, credential_strategy);
+    if provider.credential_plugin != expected_binding {
+        return Err(ApiError::bad(format!(
+            "provider '{}' is not bound to integration credential strategy '{}'",
+            provider.id, expected_binding
+        )));
+    }
+
+    let redirect_uri = format!(
+        "{}/admin/api/plugins/auth/callback",
+        state.config.public_base_url.trim_end_matches('/')
+    );
+    let pending = state.plugin_auth_sessions.create(
+        &body.plugin_id,
+        &body.flow_name,
+        &body.provider_id,
+        &expected_binding,
+        &redirect_uri,
+    );
+
+    let authorize_url = match manager
+        .auth_begin(
+            &body.plugin_id,
+            &body.flow_name,
+            &redirect_uri,
+            &pending.state,
+            Some(&pending.pkce_challenge),
+        )
+        .await
+    {
+        Ok(url) => url,
+        Err(error) => {
+            state.plugin_auth_sessions.revoke(&pending.state);
+            return Err(ApiError::bad(error.to_string()));
+        }
+    };
+
+    let parsed = url::Url::parse(&authorize_url)
+        .map_err(|_| ApiError::bad("plugin returned an invalid authorization URL"))?;
+    if parsed.scheme() != "https" {
+        state.plugin_auth_sessions.revoke(&pending.state);
+        return Err(ApiError::bad("plugin authorization URL must use https"));
+    }
+    let auth_host = parsed
+        .host_str()
+        .ok_or_else(|| ApiError::bad("plugin authorization URL has no host"))?;
+    if !manifest
+        .permissions
+        .network_hosts
+        .iter()
+        .any(|pattern| crate::plugins::manifest::host_matches(pattern, auth_host))
+    {
+        state.plugin_auth_sessions.revoke(&pending.state);
+        return Err(ApiError::bad(format!(
+            "authorization host '{auth_host}' is not declared in plugin network_hosts"
+        )));
+    }
+
+    Ok(Json(json!({
+        "authorize_url": authorize_url,
+        "state": pending.state,
+        "expires_in_secs": 600,
+    })))
+}
+
+#[derive(Deserialize)]
+pub struct PluginAuthCallbackQuery {
+    pub state: String,
+    pub code: Option<String>,
+    pub error: Option<String>,
+}
+
+/// Browser callback. The one-time high-entropy state is the callback
+/// credential and is consumed before code exchange, so replay fails closed.
+pub async fn plugin_auth_callback(
+    State(state): State<AppState>,
+    Query(query): Query<PluginAuthCallbackQuery>,
+) -> Result<Redirect, ApiError> {
+    if !db_healthy(&state).await {
+        return Err(ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "plugin account authorization unavailable: control plane degraded".into(),
+        ));
+    }
+
+    let session = state
+        .plugin_auth_sessions
+        .take(&query.state)
+        .ok_or_else(|| ApiError::bad("invalid or expired plugin auth state"))?;
+
+    if query.error.is_some() {
+        let _ = db::insert_audit(
+            &state.pool,
+            "admin",
+            "plugin_auth_cancelled",
+            "plugin",
+            &session.plugin_id,
+            &session.flow_name,
+            "Provider authorization was cancelled or rejected.",
+        )
+        .await;
+        return Ok(Redirect::to("/admin/plugins?plugin_auth=cancelled"));
+    }
+
+    let code = query
+        .code
+        .as_deref()
+        .filter(|code| !code.trim().is_empty())
+        .ok_or_else(|| ApiError::bad("authorization callback is missing code"))?;
+
+    let manager = plugin_manager(&state)?;
+    let result = match manager
+        .auth_exchange(
+            &session.plugin_id,
+            &session.flow_name,
+            code,
+            &session.redirect_uri,
+            Some(&session.pkce_verifier),
+        )
+        .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            tracing::warn!(
+                plugin = %session.plugin_id,
+                flow = %session.flow_name,
+                error = %error,
+                "plugin account authorization exchange failed"
+            );
+            let _ = db::insert_audit(
+                &state.pool,
+                "admin",
+                "plugin_auth_failed",
+                "plugin",
+                &session.plugin_id,
+                &session.flow_name,
+                "Provider authorization code exchange failed.",
+            )
+            .await;
+            return Ok(Redirect::to("/admin/plugins?plugin_auth=error"));
+        }
+    };
+
+    if result.secret_json.len() > 256 * 1024 {
+        return Err(ApiError::bad("plugin auth credential exceeds 256 KiB"));
+    }
+    let secret_value: Value = serde_json::from_str(&result.secret_json)
+        .map_err(|_| ApiError::bad("plugin auth credential is not valid JSON"))?;
+    if !secret_value.is_object() {
+        return Err(ApiError::bad(
+            "plugin auth credential must be a JSON object",
+        ));
+    }
+
+    let provider = db::get_provider(&state.pool, &session.provider_id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("provider not found"))?;
+    if provider.credential_plugin != session.credential_binding {
+        let _ = db::insert_audit(
+            &state.pool,
+            "admin",
+            "plugin_auth_binding_changed",
+            "provider",
+            &provider.id,
+            &provider.name,
+            "Provider credential binding changed during browser authorization; enrollment refused.",
+        )
+        .await;
+        return Ok(Redirect::to("/admin/plugins?plugin_auth=binding_changed"));
+    }
+
+    let encrypted = state
+        .crypto
+        .encrypt(&result.secret_json)
+        .map_err(ApiError::internal)?;
+    let label = result
+        .account_label
+        .as_deref()
+        .map(str::trim)
+        .filter(|label| !label.is_empty())
+        .unwrap_or(&provider.name);
+    let account_id = db::insert_account(
+        &state.pool,
+        &provider.id,
+        label,
+        &encrypted,
+        "oauth:****",
+        1,
+        1,
+        None,
+        "unknown",
+    )
+    .await
+    .map_err(ApiError::internal)?;
+
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_account_authorized",
+        "account",
+        &account_id,
+        label,
+        &format!(
+            "Authorized account through plugin {} flow {}.",
+            session.plugin_id, session.flow_name
+        ),
+    )
+    .await;
+    state
+        .registry
+        .reload(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+
+    let query = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("plugin_auth", "success")
+        .append_pair("plugin_auth_provider", &provider.id)
+        .finish();
+    Ok(Redirect::to(&format!("/admin/plugins?{query}")))
+}
+
+/// `GET /admin/api/plugins/{id}/packages/{sha256}/preview` — inspect a retained rollback target.
+pub async fn preview_plugin_rollback(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path((id, sha256)): Path<(String, String)>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let preview = manager
+        .rollback_preview(&id, sha256.trim())
+        .await
+        .map_err(plugin_bad)?;
+    let value = serde_json::to_value(preview).map_err(ApiError::internal)?;
+    Ok(Json(value))
+}
+
+#[derive(Deserialize)]
+pub struct PluginRollbackBody {
+    pub sha256: String,
+}
+
+/// `POST /admin/api/plugins/{id}/rollback` — reactivate a retained package.
+pub async fn rollback_plugin(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+    Json(body): Json<PluginRollbackBody>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let outcome = manager
+        .rollback(&id, body.sha256.trim())
+        .await
+        .map_err(plugin_bad)?;
+
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_rolled_back",
+        "plugin",
+        &outcome.id,
+        &outcome.id,
+        &format!(
+            "Reactivated retained plugin package v{} (SHA-256 {}). Plugin is disabled and permissions must be re-approved.",
+            outcome.version, outcome.package_sha256
+        ),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "ok": true,
+        "id": outcome.id,
+        "version": outcome.version,
+        "sha256": outcome.package_sha256,
+        "signature": outcome.signature,
+        "provides": outcome.provides,
+        "enabled": false,
+        "note": "rollback activated package disabled; review permissions before enabling",
     })))
 }
 
@@ -3790,7 +4734,7 @@ pub async fn plugin_metrics(
     Path(id): Path<String>,
 ) -> ApiResult {
     let manager = plugin_manager(&state)?;
-    let c = manager.counters();
+    let metrics = manager.metrics_for_plugin(&id);
     let runtime = crate::plugins::store::runtime_state(&state.pool, &id)
         .await
         .map_err(ApiError::internal)?;
@@ -3799,11 +4743,14 @@ pub async fn plugin_metrics(
         .map_err(ApiError::internal)?;
     Ok(Json(json!({
         "id": id,
-        "host_invocations_total": c.invocations,
-        "host_faults_total": c.faults,
-        "host_timeouts_total": c.timeouts,
-        "host_cancellations_total": c.cancellations,
-        "host_http_requests_total": c.http_requests,
+        "host_invocations_total": metrics.totals.invocations,
+        "host_successes_total": metrics.totals.successes,
+        "host_faults_total": metrics.totals.faults,
+        "host_timeouts_total": metrics.totals.timeouts,
+        "host_cancellations_total": metrics.totals.cancellations,
+        "host_http_requests_total": metrics.totals.http_requests,
+        "host_duration_micros_total": metrics.totals.duration_micros,
+        "by_capability": metrics.by_capability,
         "storage_bytes": bytes,
         "runtime": runtime,
     })))

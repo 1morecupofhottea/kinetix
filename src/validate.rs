@@ -37,7 +37,7 @@ pub fn validate_provider_schema(
     }
     if WireFormat::parse(wire_format).is_none() {
         problems.push(format!(
-            "unknown wire_format '{wire_format}' (expected openai, anthropic, or gemini)"
+            "unknown wire_format '{wire_format}' (expected openai, anthropic, gemini, or plugin)"
         ));
     }
     match auth_scheme {
@@ -206,6 +206,9 @@ mod tests {
         assert!(problems.iter().any(|p| p.contains("custom_header_name")));
         let problems =
             validate_provider_schema("n", "https://x/v1", "openai", "bearer", None, None);
+        assert!(problems.is_empty());
+        let problems =
+            validate_provider_schema("n", "https://x/v1", "plugin", "bearer", None, None);
         assert!(problems.is_empty());
     }
 

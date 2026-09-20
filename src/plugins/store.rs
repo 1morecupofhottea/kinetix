@@ -4,7 +4,7 @@
 //! helpers. Plugin KV is encrypted at rest using the host crypto with a
 //! separate key label derived from the master key (§10, §8.3).
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use sqlx::{FromRow, Row};
@@ -54,6 +54,18 @@ pub struct PermissionRow {
     pub approved_at: String,
 }
 
+/// Immutable package provenance retained separately from active plugin state.
+#[derive(Debug, Clone, FromRow, Serialize)]
+pub struct PackageRow {
+    pub plugin_id: String,
+    pub version: String,
+    pub package_sha256: String,
+    pub package_path: String,
+    pub signature: String,
+    pub source: String,
+    pub installed_at: String,
+}
+
 /// A stored circuit-breaker row.
 #[derive(Debug, Clone, FromRow, Serialize)]
 pub struct RuntimeStateRow {
@@ -79,6 +91,8 @@ pub async fn upsert_plugin(
     sha256: &str,
     component: &[u8],
     signature: &str,
+    package_path: &str,
+    source: &str,
 ) -> Result<()> {
     let manifest_json = serde_json::to_string(&validated.manifest)?;
     let api_major = validated.manifest.api_major().unwrap_or(0) as i64;
@@ -122,6 +136,24 @@ pub async fn upsert_plugin(
         .execute(&mut *tx)
         .await?;
 
+    // Retain immutable provenance independently from the active plugin row.
+    // Reinstalling identical bytes is idempotent; older package versions remain.
+    sqlx::query(
+        "INSERT INTO plugin_packages
+         (plugin_id, version, package_sha256, package_path, signature, source, installed_at)
+         VALUES (?,?,?,?,?,?,?)
+         ON CONFLICT(plugin_id, package_sha256) DO NOTHING",
+    )
+    .bind(&validated.manifest.id)
+    .bind(&validated.manifest.version)
+    .bind(sha256)
+    .bind(package_path)
+    .bind(signature)
+    .bind(source)
+    .bind(&now)
+    .execute(&mut *tx)
+    .await?;
+
     // Ensure a runtime-state row exists.
     sqlx::query(
         "INSERT OR IGNORE INTO plugin_runtime_state (plugin_id, circuit_state, consecutive_failures)
@@ -156,6 +188,27 @@ pub async fn get_plugin(pool: &Pool, id: &str) -> Result<Option<PluginRow>> {
             .fetch_optional(pool)
             .await?,
     )
+}
+
+pub async fn list_packages(pool: &Pool, id: &str) -> Result<Vec<PackageRow>> {
+    Ok(sqlx::query_as::<_, PackageRow>(
+        "SELECT * FROM plugin_packages
+         WHERE plugin_id = ?
+         ORDER BY installed_at DESC, version DESC",
+    )
+    .bind(id)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn get_package(pool: &Pool, id: &str, sha256: &str) -> Result<Option<PackageRow>> {
+    Ok(sqlx::query_as::<_, PackageRow>(
+        "SELECT * FROM plugin_packages WHERE plugin_id = ? AND package_sha256 = ?",
+    )
+    .bind(id)
+    .bind(sha256)
+    .fetch_optional(pool)
+    .await?)
 }
 
 pub async fn set_enabled(pool: &Pool, id: &str, enabled: bool) -> Result<()> {
@@ -229,6 +282,73 @@ pub async fn runtime_state(pool: &Pool, id: &str) -> Result<Option<RuntimeStateR
     .bind(id)
     .fetch_optional(pool)
     .await?)
+}
+
+/// Whether an invocation may attempt to enter the circuit. Closed circuits are
+/// ready immediately. An open circuit becomes probe-eligible only after its
+/// cooldown has elapsed. A half-open circuit already has a probe in flight.
+pub async fn circuit_ready(pool: &Pool, id: &str) -> Result<bool> {
+    let Some(state) = runtime_state(pool, id).await? else {
+        return Ok(true);
+    };
+    match state.circuit() {
+        CircuitState::Closed => Ok(true),
+        CircuitState::HalfOpen => Ok(false),
+        CircuitState::Open => {
+            let Some(until) = state.circuit_open_until.as_deref() else {
+                return Ok(false);
+            };
+            let until = chrono::DateTime::parse_from_rfc3339(until)
+                .context("invalid plugin circuit_open_until timestamp")?;
+            Ok(until <= chrono::Utc::now())
+        }
+    }
+}
+
+/// Atomically claim the one allowed half-open probe after an open circuit's
+/// cooldown. Returns true for a closed circuit or for the caller that won the
+/// open -> half_open transition. Concurrent callers observe half_open and fail.
+pub async fn claim_circuit_probe(pool: &Pool, id: &str) -> Result<bool> {
+    let now = chrono::Utc::now().to_rfc3339();
+    let claimed = sqlx::query(
+        "UPDATE plugin_runtime_state
+         SET circuit_state = 'half_open', circuit_open_until = NULL
+         WHERE plugin_id = ?
+           AND circuit_state = 'open'
+           AND circuit_open_until IS NOT NULL
+           AND julianday(circuit_open_until) <= julianday(?)",
+    )
+    .bind(id)
+    .bind(&now)
+    .execute(pool)
+    .await?
+    .rows_affected();
+
+    if claimed == 1 {
+        return Ok(true);
+    }
+
+    Ok(match runtime_state(pool, id).await? {
+        None => true,
+        Some(state) => matches!(state.circuit(), CircuitState::Closed),
+    })
+}
+
+/// Return a half-open probe to the open state without incrementing failures.
+/// Used when the probe is cancelled: cancellation is not a plugin fault, but it
+/// also is not evidence that the plugin recovered.
+pub async fn reopen_plugin_circuit(pool: &Pool, id: &str, open_secs: i64) -> Result<()> {
+    let until = (chrono::Utc::now() + chrono::Duration::seconds(open_secs)).to_rfc3339();
+    sqlx::query(
+        "UPDATE plugin_runtime_state
+         SET circuit_state = 'open', circuit_open_until = ?
+         WHERE plugin_id = ? AND circuit_state = 'half_open'",
+    )
+    .bind(until)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 /// Bump the plugin's consecutive-failure counter and open the circuit when the
@@ -326,6 +446,195 @@ pub async fn kv_put(
     Ok(())
 }
 
+/// Encrypt and store a plugin KV entry only if the plugin's plaintext-value
+/// storage quota remains satisfied.
+///
+/// The check runs under `BEGIN IMMEDIATE`, serializing competing writers before
+/// usage is measured. Replacing an existing key subtracts its old plaintext
+/// value length before adding the new one.
+pub async fn kv_put_limited(
+    pool: &Pool,
+    crypto: &Crypto,
+    plugin_id: &str,
+    key: &str,
+    value: &[u8],
+    quota: u64,
+) -> Result<()> {
+    let plaintext = base64::engine::general_purpose::STANDARD.encode(value);
+    let enc = crypto.encrypt_kv(&plaintext)?;
+
+    let mut conn = pool.acquire().await?;
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+
+    let result: Result<()> = async {
+        let rows = sqlx::query("SELECT key, value FROM plugin_kv WHERE plugin_id = ?")
+            .bind(plugin_id)
+            .fetch_all(&mut *conn)
+            .await?;
+
+        let mut used = 0_u64;
+        for row in rows {
+            let existing_key: String = row.get("key");
+            if existing_key == key {
+                continue;
+            }
+            let encrypted: Vec<u8> = row.get("value");
+            let encrypted =
+                String::from_utf8(encrypted).context("plugin KV ciphertext not utf-8")?;
+            let encoded = crypto.decrypt_kv(&encrypted)?;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(encoded.trim())
+                .context("plugin KV plaintext not base64")?;
+            used = used
+                .checked_add(decoded.len() as u64)
+                .context("plugin KV usage overflow")?;
+        }
+
+        let projected = used
+            .checked_add(value.len() as u64)
+            .context("plugin KV usage overflow")?;
+        if projected > quota {
+            bail!(
+                "storage quota exceeded: projected {projected} bytes exceeds {quota} bytes"
+            );
+        }
+
+        sqlx::query(
+            "INSERT INTO plugin_kv (plugin_id, key, value, updated_at) VALUES (?,?,?,?)
+             ON CONFLICT(plugin_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+        )
+        .bind(plugin_id)
+        .bind(key)
+        .bind(enc.as_bytes())
+        .bind(crate::db::now_iso())
+        .execute(&mut *conn)
+        .await?;
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
+            sqlx::query("COMMIT").execute(&mut *conn).await?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            Err(error)
+        }
+    }
+}
+
+/// Atomically replace every KV entry under `prefix` while enforcing the
+/// plugin's plaintext storage quota. Keys outside the prefix are preserved.
+///
+/// This is used for cached routing-fact snapshots so a successful refresh
+/// cannot leave keys from an older snapshot behind, and a failed/quota-exceeded
+/// refresh leaves the previous snapshot intact.
+pub async fn kv_replace_prefix_limited(
+    pool: &Pool,
+    crypto: &Crypto,
+    plugin_id: &str,
+    prefix: &str,
+    entries: &[(String, Vec<u8>)],
+    quota: u64,
+) -> Result<()> {
+    if prefix.is_empty() {
+        bail!("KV snapshot prefix must not be empty");
+    }
+    if entries.iter().any(|(key, _)| !key.starts_with(prefix)) {
+        bail!("KV snapshot entry is outside the requested prefix");
+    }
+    let mut unique_keys = std::collections::HashSet::new();
+    if entries
+        .iter()
+        .any(|(key, _)| !unique_keys.insert(key.as_str()))
+    {
+        bail!("KV snapshot contains duplicate keys");
+    }
+
+    let mut encoded_entries = Vec::with_capacity(entries.len());
+    for (key, value) in entries {
+        let plaintext = base64::engine::general_purpose::STANDARD.encode(value);
+        let encrypted = crypto.encrypt_kv(&plaintext)?;
+        encoded_entries.push((key.clone(), encrypted, value.len() as u64));
+    }
+
+    let mut conn = pool.acquire().await?;
+    sqlx::query("BEGIN IMMEDIATE").execute(&mut *conn).await?;
+
+    let result: Result<()> = async {
+        let rows = sqlx::query("SELECT key, value FROM plugin_kv WHERE plugin_id = ?")
+            .bind(plugin_id)
+            .fetch_all(&mut *conn)
+            .await?;
+
+        let mut used = 0_u64;
+        for row in rows {
+            let existing_key: String = row.get("key");
+            if existing_key.starts_with(prefix) {
+                continue;
+            }
+            let encrypted: Vec<u8> = row.get("value");
+            let encrypted =
+                String::from_utf8(encrypted).context("plugin KV ciphertext not utf-8")?;
+            let encoded = crypto.decrypt_kv(&encrypted)?;
+            let decoded = base64::engine::general_purpose::STANDARD
+                .decode(encoded.trim())
+                .context("plugin KV plaintext not base64")?;
+            used = used
+                .checked_add(decoded.len() as u64)
+                .context("plugin KV usage overflow")?;
+        }
+
+        for (_, _, len) in &encoded_entries {
+            used = used
+                .checked_add(*len)
+                .context("plugin KV usage overflow")?;
+        }
+        if used > quota {
+            bail!("storage quota exceeded: projected {used} bytes exceeds {quota} bytes");
+        }
+
+        sqlx::query(
+            "DELETE FROM plugin_kv
+             WHERE plugin_id = ? AND substr(key, 1, ?) = ?",
+        )
+        .bind(plugin_id)
+        .bind(prefix.len() as i64)
+        .bind(prefix)
+        .execute(&mut *conn)
+        .await?;
+
+        let now = crate::db::now_iso();
+        for (key, encrypted, _) in &encoded_entries {
+            sqlx::query(
+                "INSERT INTO plugin_kv (plugin_id, key, value, updated_at) VALUES (?,?,?,?)
+                 ON CONFLICT(plugin_id, key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at",
+            )
+            .bind(plugin_id)
+            .bind(key)
+            .bind(encrypted.as_bytes())
+            .bind(&now)
+            .execute(&mut *conn)
+            .await?;
+        }
+        Ok(())
+    }
+    .await;
+
+    match result {
+        Ok(()) => {
+            sqlx::query("COMMIT").execute(&mut *conn).await?;
+            Ok(())
+        }
+        Err(error) => {
+            let _ = sqlx::query("ROLLBACK").execute(&mut *conn).await;
+            Err(error)
+        }
+    }
+}
+
 pub async fn kv_get(
     pool: &Pool,
     crypto: &Crypto,
@@ -366,10 +675,13 @@ pub async fn kv_list_prefix(
     prefix: &str,
 ) -> Result<Vec<(String, Vec<u8>)>> {
     let rows = sqlx::query(
-        "SELECT key, value FROM plugin_kv WHERE plugin_id = ? AND key LIKE ? ORDER BY key",
+        "SELECT key, value FROM plugin_kv
+         WHERE plugin_id = ? AND substr(key, 1, ?) = ?
+         ORDER BY key",
     )
     .bind(plugin_id)
-    .bind(format!("{prefix}%"))
+    .bind(prefix.len() as i64)
+    .bind(prefix)
     .fetch_all(pool)
     .await?;
     let mut out = Vec::new();
@@ -393,7 +705,8 @@ pub async fn kv_list_prefix(
     Ok(out)
 }
 
-/// Total bytes stored for a plugin (for quota enforcement, §14).
+/// Encrypted bytes persisted for a plugin. This is diagnostic only; storage
+/// quota enforcement uses plaintext value lengths in `kv_put_limited`.
 pub async fn kv_bytes(pool: &Pool, plugin_id: &str) -> Result<u64> {
     let row = sqlx::query(
         "SELECT COALESCE(SUM(LENGTH(value)), 0) AS n FROM plugin_kv WHERE plugin_id = ?",
@@ -402,4 +715,231 @@ pub async fn kv_bytes(pool: &Pool, plugin_id: &str) -> Result<u64> {
     .fetch_one(pool)
     .await?;
     Ok(row.get::<i64, _>("n").max(0) as u64)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use super::*;
+
+    async fn test_store() -> (Pool, Arc<Crypto>, std::path::PathBuf) {
+        let dir =
+            std::env::temp_dir().join(format!("kinetix-plugin-kv-quota-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let url = format!("sqlite://{}?mode=rwc", dir.join("t.db").display());
+        let pool = crate::db::connect(&url).await.unwrap();
+        crate::db::migrate(&pool).await.unwrap();
+        let now = crate::db::now_iso();
+        sqlx::query(
+            "INSERT INTO plugins
+             (id, version, plugin_api_major, package_sha256, enabled, signature, manifest_json, component, installed_at, updated_at)
+             VALUES ('p', '1.0.0', 1, 'test-sha', 0, 'unsigned', '{}', X'', ?, ?)",
+        )
+        .bind(&now)
+        .bind(&now)
+        .execute(&pool)
+        .await
+        .unwrap();
+        (pool, Arc::new(Crypto::new(&[23_u8; 32])), dir)
+    }
+
+    #[tokio::test]
+    async fn circuit_cooldown_allows_exactly_one_half_open_probe() {
+        let (pool, _crypto, dir) = test_store().await;
+        let past = (chrono::Utc::now() - chrono::Duration::seconds(1)).to_rfc3339();
+        sqlx::query(
+            "INSERT INTO plugin_runtime_state
+             (plugin_id, circuit_state, consecutive_failures, circuit_open_until)
+             VALUES ('p', 'open', 5, ?)",
+        )
+        .bind(&past)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(circuit_ready(&pool, "p").await.unwrap());
+        assert!(claim_circuit_probe(&pool, "p").await.unwrap());
+        assert_eq!(
+            runtime_state(&pool, "p").await.unwrap().unwrap().circuit(),
+            CircuitState::HalfOpen
+        );
+        assert!(!circuit_ready(&pool, "p").await.unwrap());
+        assert!(!claim_circuit_probe(&pool, "p").await.unwrap());
+
+        reopen_plugin_circuit(&pool, "p", 60).await.unwrap();
+        let reopened = runtime_state(&pool, "p").await.unwrap().unwrap();
+        assert_eq!(reopened.circuit(), CircuitState::Open);
+        assert!(reopened.circuit_open_until.is_some());
+        assert!(!circuit_ready(&pool, "p").await.unwrap());
+
+        clear_plugin_failures(&pool, "p").await.unwrap();
+        assert!(circuit_ready(&pool, "p").await.unwrap());
+        assert!(claim_circuit_probe(&pool, "p").await.unwrap());
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn circuit_open_before_cooldown_remains_blocked() {
+        let (pool, _crypto, dir) = test_store().await;
+        let future = (chrono::Utc::now() + chrono::Duration::seconds(60)).to_rfc3339();
+        sqlx::query(
+            "INSERT INTO plugin_runtime_state
+             (plugin_id, circuit_state, consecutive_failures, circuit_open_until)
+             VALUES ('p', 'open', 5, ?)",
+        )
+        .bind(&future)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert!(!circuit_ready(&pool, "p").await.unwrap());
+        assert!(!claim_circuit_probe(&pool, "p").await.unwrap());
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn kv_quota_is_plaintext_and_replacement_aware() {
+        let (pool, crypto, dir) = test_store().await;
+
+        // Ciphertext is much larger than three bytes; a three-byte plaintext
+        // value must still fit a three-byte manifest storage quota.
+        kv_put_limited(&pool, &crypto, "p", "a", b"abc", 3)
+            .await
+            .unwrap();
+        assert_eq!(
+            kv_get(&pool, &crypto, "p", "a").await.unwrap(),
+            Some(b"abc".to_vec())
+        );
+
+        // Replacing the same key does not double-count its old value.
+        kv_put_limited(&pool, &crypto, "p", "a", b"123456", 6)
+            .await
+            .unwrap();
+
+        let err = kv_put_limited(&pool, &crypto, "p", "b", b"x", 6)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("storage quota exceeded"), "{err}");
+        assert!(kv_get(&pool, &crypto, "p", "b").await.unwrap().is_none());
+
+        // Shrinking a replacement releases quota for another key.
+        kv_put_limited(&pool, &crypto, "p", "a", b"12", 6)
+            .await
+            .unwrap();
+        kv_put_limited(&pool, &crypto, "p", "b", b"3456", 6)
+            .await
+            .unwrap();
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn cached_snapshot_replace_is_atomic_and_removes_old_keys() {
+        let (pool, crypto, dir) = test_store().await;
+
+        kv_put_limited(&pool, &crypto, "p", "ordinary", b"xx", 64)
+            .await
+            .unwrap();
+        // '_' is a SQL LIKE wildcard, so this key specifically proves prefix
+        // operations use literal matching rather than LIKE semantics.
+        kv_put_limited(&pool, &crypto, "p", "xcache:unrelated", b"keep", 64)
+            .await
+            .unwrap();
+        kv_replace_prefix_limited(
+            &pool,
+            &crypto,
+            "p",
+            "_cache:",
+            &[
+                ("_cache:a".into(), b"one".to_vec()),
+                ("_cache:b".into(), b"two".to_vec()),
+            ],
+            64,
+        )
+        .await
+        .unwrap();
+
+        kv_replace_prefix_limited(
+            &pool,
+            &crypto,
+            "p",
+            "_cache:",
+            &[("_cache:b".into(), b"new".to_vec())],
+            64,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = kv_list_prefix(&pool, &crypto, "p", "_cache:")
+            .await
+            .unwrap();
+        assert_eq!(snapshot, vec![("_cache:b".into(), b"new".to_vec())]);
+        assert_eq!(
+            kv_get(&pool, &crypto, "p", "ordinary").await.unwrap(),
+            Some(b"xx".to_vec())
+        );
+        assert_eq!(
+            kv_get(&pool, &crypto, "p", "xcache:unrelated")
+                .await
+                .unwrap(),
+            Some(b"keep".to_vec())
+        );
+
+        let err = kv_replace_prefix_limited(
+            &pool,
+            &crypto,
+            "p",
+            "_cache:",
+            &[("_cache:c".into(), vec![b'x'; 64])],
+            64,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.to_string().contains("storage quota exceeded"), "{err}");
+
+        // Failed replacement leaves the previous complete snapshot untouched.
+        let snapshot = kv_list_prefix(&pool, &crypto, "p", "_cache:")
+            .await
+            .unwrap();
+        assert_eq!(snapshot, vec![("_cache:b".into(), b"new".to_vec())]);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[tokio::test]
+    async fn concurrent_kv_writers_cannot_overcommit_quota() {
+        let (pool, crypto, dir) = test_store().await;
+        let pool_a = pool.clone();
+        let pool_b = pool.clone();
+        let crypto_a = crypto.clone();
+        let crypto_b = crypto.clone();
+
+        let a =
+            tokio::spawn(
+                async move { kv_put_limited(&pool_a, &crypto_a, "p", "a", b"1234", 6).await },
+            );
+        let b =
+            tokio::spawn(
+                async move { kv_put_limited(&pool_b, &crypto_b, "p", "b", b"5678", 6).await },
+            );
+
+        let (a, b) = tokio::join!(a, b);
+        let results = [a.unwrap(), b.unwrap()];
+        assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(results.iter().filter(|result| result.is_err()).count(), 1);
+
+        let stored = kv_list_prefix(&pool, &crypto, "p", "").await.unwrap();
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].1.len(), 4);
+
+        pool.close().await;
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

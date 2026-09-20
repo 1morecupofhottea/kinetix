@@ -56,6 +56,215 @@ export interface UsageDay {
   tokens: number;
 }
 
+export interface PluginCapability {
+  capability: string;
+  name: string;
+}
+
+export interface PluginCatalogEntry {
+  id: string;
+  name: string;
+  description: string;
+  publisher: string;
+  official: boolean;
+  homepage: string;
+  latest_version: string;
+  artifact_name: string;
+  capabilities: string[];
+  installable: boolean;
+  install_ready?: boolean;
+  trust_status?: 'trusted' | 'unavailable' | 'discovery_only' | string;
+  distribution?: {
+    url: string;
+    sha256: string;
+    publisher_key_id: string;
+    allowed_hosts: string[];
+  } | null;
+  note?: string;
+}
+
+export interface PluginCatalogResponse {
+  schema_version: number;
+  plugins: PluginCatalogEntry[];
+}
+
+export interface PluginIntegrationProvider {
+  base_url: string;
+  wire_format: string;
+  auth_scheme: string;
+  custom_header_name?: string | null;
+  custom_param_name?: string | null;
+  extra_headers: Record<string, string>;
+  timeout_ms: number;
+  capability_mode: string;
+  models_path?: string | null;
+  follow_redirects: boolean;
+  credential_hosts: string[];
+}
+
+export interface PluginIntegration {
+  id: string;
+  name: string;
+  description: string;
+  provider_adapter?: string | null;
+  credential_strategy?: string | null;
+  auth_flow?: string | null;
+  model_source?: string | null;
+  provider?: PluginIntegrationProvider | null;
+}
+
+export interface PluginUiAction {
+  id: string;
+  label: string;
+  kind: 'auth' | string;
+  integration: string;
+  description: string;
+}
+
+export interface PluginUiSetting {
+  key: string;
+  label: string;
+  kind: 'text' | 'secret' | 'boolean' | 'select' | string;
+  description: string;
+  required: boolean;
+  options: string[];
+  default?: string | null;
+}
+
+export interface PluginUi {
+  actions: PluginUiAction[];
+  settings: PluginUiSetting[];
+}
+
+export interface PluginSettingState extends PluginUiSetting {
+  configured: boolean;
+  value: string | boolean | null;
+}
+
+export interface PluginSettingsResponse {
+  id: string;
+  settings: PluginSettingState[];
+}
+
+export interface PluginPermissions {
+  network_hosts: string[];
+  credential_scopes: string[];
+  credential_read: boolean;
+}
+
+export interface PluginLimits {
+  memory: string;
+  wall_time_ms: number;
+  max_outbound_requests: number;
+  max_http_body: string;
+  storage: string;
+}
+
+export interface PluginSummary {
+  id: string;
+  name: string;
+  version: string;
+  plugin_api_major: number;
+  sha256: string;
+  signature: string;
+  status: string;
+  provides: PluginCapability[];
+  integrations: PluginIntegration[];
+  ui: PluginUi;
+  permissions: PluginPermissions;
+  limits: PluginLimits;
+  routing_facts_mode: 'pure' | 'cached' | string;
+  routing_facts_refresh_ms: number;
+}
+
+export interface PluginPermissionGrant {
+  plugin_id?: string;
+  permission: string;
+  value_json: string;
+  approved_at?: string;
+}
+
+export interface PluginPermissionResponse {
+  id: string;
+  requested: PluginPermissions;
+  approved: PluginPermissionGrant[];
+}
+
+export interface PluginPackage {
+  plugin_id: string;
+  version: string;
+  package_sha256: string;
+  package_path: string;
+  signature: string;
+  source: string;
+  installed_at: string;
+}
+
+export interface PluginPermissionListDiff {
+  added: string[];
+  removed: string[];
+}
+
+export interface PluginPermissionBoolDiff {
+  from: boolean;
+  to: boolean;
+  changed: boolean;
+}
+
+export interface PluginPermissionDiff {
+  network_hosts: PluginPermissionListDiff;
+  credential_scopes: PluginPermissionListDiff;
+  credential_read: PluginPermissionBoolDiff;
+}
+
+export interface PluginRollbackPreview {
+  id: string;
+  current_version: string;
+  target_version: string;
+  package_sha256: string;
+  signature: string;
+  source: string;
+  permissions: PluginPermissions;
+  permission_diff: PluginPermissionDiff;
+  provides: PluginCapability[];
+}
+
+export interface PluginCatalogPreview {
+  id: string;
+  name: string;
+  current_version: string | null;
+  target_version: string;
+  sha256: string;
+  signature: 'verified' | string;
+  source: string;
+  permissions: PluginPermissions;
+  permission_diff: PluginPermissionDiff;
+  provides: PluginCapability[];
+}
+
+export interface PluginDetail extends PluginSummary {
+  permissions_approved?: PluginPermissionGrant[];
+  runtime?: Record<string, unknown> | null;
+  packages?: PluginPackage[];
+}
+
+export interface PluginInstallInput {
+  package_base64: string;
+  sha256?: string;
+  trusted_keys?: string[];
+  allow_untrusted_signature?: boolean;
+}
+
+export interface PluginInstallResult {
+  id: string;
+  version: string;
+  sha256: string;
+  signature: string;
+  provides: PluginCapability[];
+  enabled: boolean;
+  note?: string;
+}
+
 export const Kinetix = {
   // --- session -------------------------------------------------------------
   me: () => api.get<{ authenticated: boolean; user: string }>('/admin/api/me'),
@@ -171,6 +380,82 @@ export const Kinetix = {
     const r = await api.get<{ live: any[] }>('/admin/api/requests/live');
     return r.live.map(mapLiveRequest);
   },
+
+  // --- plugins -------------------------------------------------------------
+  async plugins(): Promise<PluginSummary[]> {
+    const r = await api.get<{ plugins: PluginSummary[] }>('/admin/api/plugins');
+    return r.plugins;
+  },
+  pluginCatalog: () =>
+    api.get<PluginCatalogResponse>('/admin/api/plugins/catalog'),
+  previewCatalogPlugin: (id: string) =>
+    api.get<PluginCatalogPreview>(
+      `/admin/api/plugins/catalog/${encodeURIComponent(id)}/preview`,
+    ),
+  installCatalogPlugin: (id: string) =>
+    api.post<PluginInstallResult>(
+      `/admin/api/plugins/catalog/${encodeURIComponent(id)}/install`,
+    ),
+  plugin: (id: string) =>
+    api.get<PluginDetail>(`/admin/api/plugins/${encodeURIComponent(id)}`),
+  pluginPermissions: (id: string) =>
+    api.get<PluginPermissionResponse>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/permissions`,
+    ),
+  pluginSettings: (id: string) =>
+    api.get<PluginSettingsResponse>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/settings`,
+    ),
+  updatePluginSettings: (id: string, values: Record<string, unknown>) =>
+    api.put<PluginSettingsResponse>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/settings`,
+      { values },
+    ),
+  installPlugin: (body: PluginInstallInput) =>
+    api.post<PluginInstallResult>('/admin/api/plugins/install', body),
+  setupPluginIntegrationProvider: (pluginId: string, integrationId: string) =>
+    api.post<{ id: string; name: string; created: boolean }>(
+      `/admin/api/plugins/${encodeURIComponent(pluginId)}/integrations/${encodeURIComponent(integrationId)}/provider`,
+    ),
+  startPluginAuth: (plugin_id: string, flow_name: string, provider_id: string) =>
+    api.post<{ authorize_url: string; state: string; expires_in_secs: number }>(
+      '/admin/api/plugins/auth/start',
+      { plugin_id, flow_name, provider_id },
+    ),
+  approvePluginPermissions: (id: string) =>
+    api.post<{ ok: boolean; id: string; approved: PluginPermissionGrant[] }>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/permissions/approve`,
+    ),
+  revokePluginPermission: (id: string, permission: string) =>
+    api.post<{ ok: boolean; id: string; revoked: string; enabled?: boolean }>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/permissions/revoke`,
+      { permission },
+    ),
+  enablePlugin: (id: string) =>
+    api.post<{ ok: boolean; id: string; enabled: boolean }>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/enable`,
+    ),
+  disablePlugin: (id: string) =>
+    api.post<{ ok: boolean; id: string; enabled: boolean }>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/disable`,
+    ),
+  validatePlugin: (id: string) =>
+    api.post<{ ok: boolean; id: string; provides: PluginCapability[] }>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/validate`,
+    ),
+  previewPluginRollback: (id: string, sha256: string) =>
+    api.get<PluginRollbackPreview>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/packages/${encodeURIComponent(sha256)}/preview`,
+    ),
+  rollbackPlugin: (id: string, sha256: string) =>
+    api.post<PluginInstallResult>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/rollback`,
+      { sha256 },
+    ),
+  removePlugin: (id: string) =>
+    api.del<{ ok: boolean; id: string }>(
+      `/admin/api/plugins/${encodeURIComponent(id)}`,
+    ),
 
   // --- audit ---------------------------------------------------------------
   async audit(limit = 200): Promise<AuditLog[]> {

@@ -28,8 +28,17 @@ mod adapter;
 use kinetix::plugin::types::*;
 use kinetix_plugin_sdk::{export, exports, kinetix};
 
-/// Google OAuth token endpoint.
+/// Google OAuth endpoints used by browser authorization and refresh.
+const AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const USERINFO_URL: &str = "https://www.googleapis.com/oauth2/v1/userinfo";
+const ANTIGRAVITY_SCOPES: &[&str] = &[
+    "https://www.googleapis.com/auth/cloud-platform",
+    "https://www.googleapis.com/auth/userinfo.email",
+    "https://www.googleapis.com/auth/userinfo.profile",
+    "https://www.googleapis.com/auth/cclog",
+    "https://www.googleapis.com/auth/experimentsandconfigs",
+];
 
 /// Public Antigravity CLI OAuth client ID and secret (obfuscated as byte arrays
 /// so static scanners do not mistake public desktop-app credentials for server secrets).
@@ -319,6 +328,482 @@ fn urlencode(s: &str) -> String {
 fn truncate(s: &str, n: usize) -> String {
     s.chars().take(n).collect()
 }
+
+// --- Optional account authorization world. ---------------------------------
+
+use kinetix_plugin_sdk::auth as auth_world;
+
+type AuthPluginError = auth_world::kinetix::plugin::types::PluginError;
+type AuthHttpRequest = auth_world::kinetix::plugin::types::HttpRequest;
+type AuthResult = auth_world::kinetix::plugin::types::AuthResult;
+
+fn auth_error(code: &str, message: impl Into<String>, retryable: bool) -> AuthPluginError {
+    AuthPluginError {
+        code: code.into(),
+        message: message.into(),
+        retryable,
+        retry_after: None,
+        reset_at: None,
+    }
+}
+
+fn require_antigravity_flow(flow_name: &str) -> Result<(), AuthPluginError> {
+    if flow_name == "antigravity" {
+        Ok(())
+    } else {
+        Err(auth_error(
+            "invalid_configuration",
+            format!("unknown auth flow '{flow_name}'"),
+            false,
+        ))
+    }
+}
+
+impl auth_world::exports::auth_flow::Guest for Component {
+    fn begin(
+        flow_name: String,
+        redirect_uri: String,
+        state: String,
+        pkce_challenge: Option<String>,
+    ) -> Result<String, AuthPluginError> {
+        require_antigravity_flow(&flow_name)?;
+
+        // The bundled Antigravity OAuth client is a desktop/native client.
+        // Google permits it to use loopback redirects, not arbitrary hosted
+        // dashboard origins. A future declarative settings layer can support
+        // operator-provided web-client credentials for remote deployments.
+        let loopback = redirect_uri.starts_with("http://localhost:")
+            || redirect_uri.starts_with("http://127.0.0.1:")
+            || redirect_uri.starts_with("http://[::1]:");
+        if !loopback {
+            return Err(auth_error(
+                "invalid_configuration",
+                "the bundled Antigravity OAuth client requires a loopback KINETIX_PUBLIC_BASE_URL",
+                false,
+            ));
+        }
+
+        let mut url = format!(
+            "{AUTHORIZE_URL}?client_id={}&response_type=code&redirect_uri={}&scope={}&state={}&access_type=offline&prompt=consent",
+            urlencode(&default_client_id()),
+            urlencode(&redirect_uri),
+            urlencode(&ANTIGRAVITY_SCOPES.join(" ")),
+            urlencode(&state),
+        );
+        if let Some(challenge) = pkce_challenge.filter(|value| !value.is_empty()) {
+            url.push_str("&code_challenge=");
+            url.push_str(&urlencode(&challenge));
+            url.push_str("&code_challenge_method=S256");
+        }
+        if let Some(bytes) =
+            auth_world::kinetix::plugin::host_storage::get("_config:login_hint")
+        {
+            if let Ok(hint) = String::from_utf8(bytes) {
+                let hint = hint.trim();
+                if !hint.is_empty() {
+                    url.push_str("&login_hint=");
+                    url.push_str(&urlencode(hint));
+                }
+            }
+        }
+        Ok(url)
+    }
+
+    fn exchange(
+        flow_name: String,
+        code: String,
+        redirect_uri: String,
+        pkce_verifier: Option<String>,
+    ) -> Result<AuthResult, AuthPluginError> {
+        require_antigravity_flow(&flow_name)?;
+
+        let mut form = format!(
+            "grant_type=authorization_code&client_id={}&client_secret={}&code={}&redirect_uri={}",
+            urlencode(&default_client_id()),
+            urlencode(&default_client_secret()),
+            urlencode(&code),
+            urlencode(&redirect_uri),
+        );
+        if let Some(verifier) = pkce_verifier.filter(|value| !value.is_empty()) {
+            form.push_str("&code_verifier=");
+            form.push_str(&urlencode(&verifier));
+        }
+
+        let req = AuthHttpRequest {
+            method: "POST".into(),
+            url: TOKEN_URL.into(),
+            headers: vec![
+                (
+                    "content-type".into(),
+                    "application/x-www-form-urlencoded".into(),
+                ),
+                ("accept".into(), "application/json".into()),
+            ],
+            body: form.into_bytes(),
+            credential: None,
+        };
+        let resp = auth_world::kinetix::plugin::host_http::send(&req)
+            .map_err(|e| auth_error(&e.code, e.message, e.retryable))?;
+        if resp.body_truncated {
+            return Err(auth_error(
+                "upstream_unavailable",
+                "token response truncated",
+                true,
+            ));
+        }
+        let text = String::from_utf8(resp.body)
+            .map_err(|_| auth_error("protocol_error", "token response not utf-8", false))?;
+        if resp.status != 200 {
+            return Err(auth_error(
+                "credential_expired",
+                format!(
+                    "token endpoint returned HTTP {}: {}",
+                    resp.status,
+                    truncate(&text, 200)
+                ),
+                false,
+            ));
+        }
+
+        let tokens: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            auth_error("protocol_error", format!("invalid token JSON: {e}"), false)
+        })?;
+        let access_token = tokens
+            .get("access_token")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                auth_error(
+                    "protocol_error",
+                    "token response missing access_token",
+                    false,
+                )
+            })?
+            .to_string();
+        let refresh_token = tokens
+            .get("refresh_token")
+            .and_then(|value| value.as_str())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                auth_error(
+                    "credential_expired",
+                    "Google did not return a refresh_token; retry login and grant consent",
+                    false,
+                )
+            })?
+            .to_string();
+        let expires_in = tokens
+            .get("expires_in")
+            .and_then(|value| value.as_u64())
+            .unwrap_or(3600);
+        let expiry = format_rfc3339_ms(
+            kinetix_plugin_sdk::helpers::now_unix_millis() + expires_in * 1000,
+        );
+
+        let mut email: Option<String> = None;
+        let mut metadata: Option<String> = None;
+        let userinfo_req = AuthHttpRequest {
+            method: "GET".into(),
+            url: format!("{USERINFO_URL}?alt=json"),
+            headers: vec![
+                ("authorization".into(), format!("Bearer {access_token}")),
+                ("x-request-source".into(), "local".into()),
+            ],
+            body: vec![],
+            credential: None,
+        };
+        if let Ok(userinfo_resp) = auth_world::kinetix::plugin::host_http::send(&userinfo_req) {
+            if userinfo_resp.status == 200 && !userinfo_resp.body_truncated {
+                if let Ok(body) = String::from_utf8(userinfo_resp.body) {
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&body) {
+                        email = value
+                            .get("email")
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string);
+                        metadata = Some(value.to_string());
+                    }
+                }
+            }
+        }
+
+        let secret = Credential {
+            refresh_token: Some(refresh_token),
+            access_token: Some(access_token),
+            expiry: Some(expiry),
+            project_id: None,
+            email: email.clone(),
+        };
+        let secret_json = serde_json::to_string(&secret).map_err(|e| {
+            auth_error(
+                "plugin_internal",
+                format!("encoding credential: {e}"),
+                false,
+            )
+        })?;
+
+        Ok(AuthResult {
+            secret_json,
+            account_label: email.or_else(|| Some("Antigravity".into())),
+            metadata_json: metadata,
+        })
+    }
+}
+
+auth_world::export!(Component with_types_in kinetix_plugin_sdk::auth);
+
+// --- Account-aware model discovery world. ----------------------------------
+
+use kinetix_plugin_sdk::model_source as model_world;
+
+type ModelPluginError = model_world::kinetix::plugin::types::PluginError;
+type ModelHttpRequest = model_world::kinetix::plugin::types::HttpRequest;
+type ModelAccountRef = model_world::kinetix::plugin::types::AccountRef;
+type ModelCredentialRef = model_world::kinetix::plugin::types::CredentialRef;
+type ModelDiscoveredModel = model_world::kinetix::plugin::types::DiscoveredModel;
+
+const MODEL_CATALOG_URL: &str =
+    "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal:models";
+const ANTIGRAVITY_IDE_VERSION: &str = "2.11.0";
+
+fn model_error(code: &str, message: impl Into<String>, retryable: bool) -> ModelPluginError {
+    ModelPluginError {
+        code: code.into(),
+        message: message.into(),
+        retryable,
+        retry_after: None,
+        reset_at: None,
+    }
+}
+
+fn refresh_for_model_source(cred: &mut Credential) -> Result<(), ModelPluginError> {
+    let refresh_token = cred
+        .refresh_token
+        .as_deref()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| model_error("credential_expired", "missing refresh_token", false))?;
+
+    let form = format!(
+        "grant_type=refresh_token&refresh_token={}&client_id={}&client_secret={}",
+        urlencode(refresh_token),
+        urlencode(&default_client_id()),
+        urlencode(&default_client_secret()),
+    );
+    let req = ModelHttpRequest {
+        method: "POST".into(),
+        url: TOKEN_URL.into(),
+        headers: vec![
+            (
+                "content-type".into(),
+                "application/x-www-form-urlencoded".into(),
+            ),
+            ("accept".into(), "application/json".into()),
+        ],
+        body: form.into_bytes(),
+        credential: None,
+    };
+    let resp = model_world::kinetix::plugin::host_http::send(&req)
+        .map_err(|e| model_error(&e.code, e.message, e.retryable))?;
+    if resp.body_truncated {
+        return Err(model_error(
+            "upstream_unavailable",
+            "token response truncated",
+            true,
+        ));
+    }
+    let text = String::from_utf8(resp.body)
+        .map_err(|_| model_error("protocol_error", "token response not utf-8", false))?;
+    if resp.status != 200 {
+        return Err(model_error(
+            "credential_expired",
+            format!(
+                "token endpoint returned HTTP {}: {}",
+                resp.status,
+                truncate(&text, 200)
+            ),
+            false,
+        ));
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| model_error("protocol_error", format!("invalid token JSON: {e}"), false))?;
+    let access_token = value
+        .get("access_token")
+        .and_then(|item| item.as_str())
+        .filter(|item| !item.is_empty())
+        .ok_or_else(|| model_error("protocol_error", "token response missing access_token", false))?;
+    cred.access_token = Some(access_token.to_string());
+    if let Some(refresh_token) = value
+        .get("refresh_token")
+        .and_then(|item| item.as_str())
+        .filter(|item| !item.is_empty())
+    {
+        cred.refresh_token = Some(refresh_token.to_string());
+    }
+    let expires_in = value
+        .get("expires_in")
+        .and_then(|item| item.as_u64())
+        .unwrap_or(3600);
+    cred.expiry = Some(format_rfc3339_ms(
+        model_world::kinetix::plugin::host_clock::now_unix_millis() + expires_in * 1000,
+    ));
+    Ok(())
+}
+
+fn normalize_model(id: String, info: &serde_json::Value) -> Option<ModelDiscoveredModel> {
+    if info
+        .get("isInternal")
+        .and_then(|value| value.as_bool())
+        .unwrap_or(false)
+    {
+        return None;
+    }
+
+    let display_name = info
+        .get("displayName")
+        .or_else(|| info.get("name"))
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .or_else(|| Some(id.clone()));
+    let context_window = info
+        .get("contextWindow")
+        .or_else(|| info.get("inputTokenLimit"))
+        .and_then(|value| value.as_u64());
+    let max_output_tokens = info
+        .get("maxOutputTokens")
+        .or_else(|| info.get("outputTokenLimit"))
+        .and_then(|value| value.as_u64());
+    let capabilities_json = info
+        .get("capabilities")
+        .and_then(|value| serde_json::to_string(value).ok());
+    let raw_metadata = serde_json::to_string(info).ok();
+
+    Some(ModelDiscoveredModel {
+        id,
+        display_name,
+        context_window,
+        max_output_tokens,
+        capabilities_json,
+        raw_metadata,
+    })
+}
+
+fn parse_model_catalog(value: &serde_json::Value) -> Vec<ModelDiscoveredModel> {
+    let Some(models) = value.get("models") else {
+        return Vec::new();
+    };
+
+    if let Some(object) = models.as_object() {
+        return object
+            .iter()
+            .filter_map(|(id, info)| normalize_model(id.clone(), info))
+            .collect();
+    }
+
+    if let Some(array) = models.as_array() {
+        return array
+            .iter()
+            .filter_map(|info| {
+                let id = info
+                    .get("id")
+                    .or_else(|| info.get("model"))
+                    .or_else(|| info.get("name"))
+                    .and_then(|value| value.as_str())
+                    .filter(|value| !value.is_empty())?
+                    .to_string();
+                normalize_model(id, info)
+            })
+            .collect();
+    }
+
+    Vec::new()
+}
+
+impl model_world::exports::account_model_source::Guest for Component {
+    fn discover(
+        provider_id: String,
+        account: ModelAccountRef,
+        _base_url: String,
+        _models_path: String,
+    ) -> Result<Vec<ModelDiscoveredModel>, ModelPluginError> {
+        if account.provider_id != provider_id {
+            return Err(model_error(
+                "invalid_configuration",
+                "model discovery account does not belong to the requested provider",
+                false,
+            ));
+        }
+
+        let credential_ref = ModelCredentialRef::Account(account);
+        let raw = model_world::kinetix::plugin::host_credential::read(&credential_ref)
+            .map_err(|e| model_error(&e.code, e.message, e.retryable))?;
+        let mut credential: Credential = serde_json::from_str(&raw).map_err(|e| {
+            model_error(
+                "invalid_configuration",
+                format!("invalid Antigravity credential JSON: {e}"),
+                false,
+            )
+        })?;
+
+        let now = model_world::kinetix::plugin::host_clock::now_unix_millis();
+        if !access_token_valid(&credential, now) {
+            refresh_for_model_source(&mut credential)?;
+        }
+        let access_token = credential
+            .access_token
+            .as_deref()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| model_error("credential_expired", "no access token available", false))?;
+
+        let req = ModelHttpRequest {
+            method: "POST".into(),
+            url: MODEL_CATALOG_URL.into(),
+            headers: vec![
+                ("authorization".into(), format!("Bearer {access_token}")),
+                ("content-type".into(), "application/json".into()),
+                ("accept".into(), "application/json".into()),
+                ("user-agent".into(), crate::adapter::USER_AGENT.into()),
+                ("x-client-name".into(), "antigravity".into()),
+                ("x-client-version".into(), ANTIGRAVITY_IDE_VERSION.into()),
+            ],
+            body: b"{}".to_vec(),
+            credential: None,
+        };
+        let resp = model_world::kinetix::plugin::host_http::send(&req)
+            .map_err(|e| model_error(&e.code, e.message, e.retryable))?;
+        if resp.body_truncated {
+            return Err(model_error(
+                "upstream_unavailable",
+                "model catalog response truncated",
+                true,
+            ));
+        }
+        let text = String::from_utf8(resp.body)
+            .map_err(|_| model_error("protocol_error", "model catalog is not utf-8", false))?;
+        if resp.status != 200 {
+            return Err(model_error(
+                "upstream_unavailable",
+                format!(
+                    "model catalog returned HTTP {}: {}",
+                    resp.status,
+                    truncate(&text, 200)
+                ),
+                resp.status >= 500,
+            ));
+        }
+
+        let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
+            model_error(
+                "protocol_error",
+                format!("invalid model catalog JSON: {e}"),
+                false,
+            )
+        })?;
+        Ok(parse_model_catalog(&value))
+    }
+}
+
+model_world::export!(Component with_types_in kinetix_plugin_sdk::model_source);
 
 // --- The world requires every export interface to be implemented. -----------
 

@@ -148,7 +148,7 @@ network_hosts = [
   "api.foo.example",
   "auth.foo.example"
 ]
-credential_scopes = ["provider:foo"]
+credential_scopes = ["credential_strategy:foo-oauth"]
 
 [limits]
 memory = "64MiB"
@@ -193,6 +193,79 @@ Rules:
 - a Route target may mix plugin and native capabilities freely; the plugin never gains visibility
   into sibling targets.
 
+### 6.0.1 User-facing integration descriptors
+
+A plugin may optionally group low-level capabilities into declarative
+`[[integrations]]` records. Each integration has a stable id, display
+name/description, and may reference a provider adapter, credential strategy,
+and/or model source exported by that same plugin.
+
+The host validates every reference against `[provides]` at install time.
+Integration descriptors are presentation/configuration metadata only: they do
+not grant permissions, execute browser code, or alter routing. This lets the
+dashboard present a product-level integration such as **Google Antigravity**
+instead of requiring operators to manually compose `wire_plugin` and
+`credential_plugin` references.
+
+### 6.0.2 Integration provider templates
+
+An Integration may optionally describe the host-owned provider it needs:
+base URL, host wire class, auth scheme, timeout/capability defaults, model path,
+redirect policy, credential hosts, and static headers. When a
+`provider_adapter` is present, the template uses `wire_format = "plugin"`;
+the concrete adapter name remains the Integration's capability binding.
+
+Provider creation is a separate authenticated admin action. Core re-validates
+outbound URL policy, verifies the plugin is enabled with its declared permissions
+approved, resolves each derived capability binding, and creates the provider
+with `allow_insecure_tls = false`. Setup is idempotent for an existing matching
+base URL and binding set.
+
+Generated provider ids cannot be known in a signed manifest. For this case,
+`credential_scopes` supports `credential_strategy:<name>`. At credential-use
+time the host authorizes the scope only when the target provider's
+`credential_plugin` is exactly `plugin:<this-plugin>/<name>`. Literal
+`provider:<id>` and wildcard scopes remain available for other use cases.
+
+### 6.0.3 AuthFlow
+
+AuthFlow provisions an account through a provider-owned browser authorization
+flow. It is a separate `plugin-auth` world so existing plugin API v1
+components do not gain a mandatory export.
+
+Security ownership is intentionally split:
+
+- **Kinetix core** creates one-time high-entropy CSRF state and PKCE verifier
+  material, enforces expiry/replay protection, constructs the callback URI,
+  validates the plugin-returned authorization URL against HTTPS + reviewed
+  `network_hosts`, bounds and validates the returned credential JSON, encrypts
+  it, and inserts the account.
+- **The plugin** constructs provider-specific authorization URLs and performs
+  token exchange/post-exchange calls through its approved `host-http`
+  capability.
+
+The callback may enroll only into a provider whose `credential_plugin` still
+matches the integration's declared credential strategy. State is consumed
+before token exchange, so callback replay fails closed.
+
+The browser never receives access or refresh tokens from Kinetix. Provider
+client constraints remain plugin-specific: for example, the bundled
+Antigravity desktop OAuth client supports loopback callbacks only.
+
+### 6.0.4 Declarative dashboard actions
+
+Plugins may declare host-rendered `[[ui.actions]]` metadata. Actions never load
+plugin JavaScript into the dashboard origin. Instead, the dashboard renders a
+Kinetix-owned control and dispatches an operation that the host already
+authorizes.
+
+The initial `auth` action kind references an integration id. The referenced
+integration must provide both an `auth_flow` and a `credential_strategy`.
+This keeps UX composition in the manifest while CSRF/PKCE, permissions,
+credential persistence, and browser authority remain host-owned.
+
+Custom executable plugin UI remains out of scope for this version.
+
 ### 6.1 CredentialStrategy
 
 Purpose:
@@ -219,6 +292,20 @@ The handle is opaque. When possible, the plugin uses it through the host HTTP ca
 ever receiving plaintext secret bytes.
 
 ### 6.2 ModelSource
+
+Two discovery contracts coexist under plugin API v1:
+
+- `model_sources` use the original `plugin` world and receive provider/base/path
+  metadata only. This is appropriate for public or otherwise unauthenticated
+  model catalogs.
+- `account_model_sources` use the optional `plugin-model-source` world and
+  receive an explicit host-owned `AccountRef`. This is used when discovery
+  requires the provider account's scoped credential.
+
+The second world is additive: existing components do not gain a mandatory
+export. The host resolves the account-aware capability first when a provider's
+`model_source_plugin` binding names one, otherwise it uses the legacy export.
+Credential use is still mediated by the same approved provider/binding scopes.
 
 Returns discovery **observations**:
 
@@ -295,9 +382,22 @@ manifest and enforced by the host:
 
 - **pure:** the routing-facts world does not import `host-http`; facts are derived only from the
   request/config facts core already provides, and evaluation is a side-effect-free function; or
-- **cached:** the plugin computes facts on a background schedule and the request path only reads the
-  last published snapshot. Each fact carries an `observed_at`; a fact older than its declared
-  `max_age` evaluates as `unknown`.
+- **cached:** Kinetix invokes the plugin off the request path at the manifest's
+  `routing_facts_refresh_ms` cadence (default 30 seconds; accepted range 5 seconds to 1 hour).
+  This invocation may use approved buffered `host-http`. Facts returned from `facts(...)` and
+  values published through `host-storage.cache-set` are buffered for that invocation, validated,
+  host-stamped, and atomically replace the previous `_cache:` snapshot under the plugin's storage
+  quota. Direct guest writes/deletes to `_cache:` are rejected. The request path never invokes the
+  guest for cached mode; it only reads that committed snapshot.
+
+Every cached fact must declare `max_age_ms` in the range 1 ms to 24 hours. Guest-supplied
+`observed_at` is ignored; Kinetix stamps the successful refresh time. A failed, timed-out,
+invalid, or quota-exceeded refresh leaves the previous complete snapshot untouched. Once a fact
+exceeds its `max_age_ms`, it is omitted from request facts and therefore evaluates as `unknown`.
+
+Cached refreshes run concurrently across plugins, but normal global/per-plugin invocation limits,
+circuit breakers, network allow-lists, DNS pinning, body/request budgets, and wall-time limits remain
+in force. The host-owned observability capability label is `routing_facts.refresh`.
 
 In both models a fact that is missing, failed, or stale is recorded in the Route Trace as `unknown`
 **with the reason** (timeout, plugin fault, no observation), so explainability does not degrade
@@ -333,8 +433,19 @@ on_target_candidate        read-only
 on_usage_finalized         read-only + optional external side effect
 ```
 
-`on_usage_finalized` side effects run on the bounded async accounting queue (FR-6.4) and are
-fire-and-forget: they may never block, fail, or slow a client request.
+All hook side effects run on a bounded fire-and-forget queue and may never
+block, fail, or slow a client request.
+
+Hook dispatch avoids cross-plugin head-of-line blocking in two places:
+
+- up to **32 hook jobs** execute concurrently from the bounded queue;
+- within one hook event, eligible plugins are invoked concurrently rather than
+  serially.
+
+Per-plugin invocation isolation (§14.0.2) still caps each guest at four active
+invocations, so concurrent hook fan-out cannot let one plugin exceed its normal
+runtime budget. If the hook queue is saturated, new hook work is dropped rather
+than applying backpressure to the client path.
 
 Only add a mutable hook after its allowed mutation surface is explicitly modeled.
 
@@ -548,6 +659,30 @@ entry only authorizes connection targets; it must never broaden credential host 
 credential scoped to `api.foo.example` is not sent to `evil.service.example` merely because a
 wildcard matched the connection.
 
+### 9.1 Host-mediated HTTP destination security
+
+A `network_hosts` grant authorizes a hostname pattern, not arbitrary IP
+destinations. Before every buffered `host-http` request, Kinetix:
+
+1. requires HTTPS and rejects URL userinfo;
+2. checks the hostname against the approved manifest grant;
+3. rejects a guest-supplied `Host` header;
+4. resolves the URL host immediately before connecting;
+5. rejects the whole DNS answer set if any address is private, link-local,
+   loopback, ULA, multicast, CGNAT, benchmarking, unspecified, or otherwise
+   blocked by Kinetix policy;
+6. constructs a zero-redirect, no-system-proxy reqwest client whose DNS override
+   is pinned to exactly the validated addresses;
+7. applies a request timeout no longer than the effective plugin wall-time.
+
+`KINETIX_ALLOW_PRIVATE_UPSTREAMS=true` is the explicit development override for
+the private-address check. DNS pinning, HTTPS, hostname grants, no-proxy, and
+zero-redirect behavior remain in force.
+
+This closes the DNS rebinding gap for plugin host HTTP: the hostname cannot be
+validated against one DNS answer and then silently re-resolved to a different
+destination during connection establishment.
+
 ## 10. Plugin storage
 
 A plugin gets a private logical namespace:
@@ -718,6 +853,85 @@ Routing facts are invoked inline on the request path but must stay within their 
 §6.4 the `pure` model does no network work, and the `cached` model reads a precomputed snapshot.
 Health probes (10 s) and model discovery (30 s) run off the request path.
 
+### 14.0.1 Plugin KV storage quota
+
+The manifest `limits.storage` bound is enforced against the sum of decrypted
+plugin-KV **value bytes**, not ciphertext size. Quota-aware writes acquire a
+SQLite immediate write lock before measuring current usage, so concurrent guest
+invocations cannot both pass a stale read and overcommit the budget.
+
+Replacing a key excludes the old plaintext value length before adding the new
+value. Guest `host-storage.put`, routing-fact cache writes, and host-owned
+`_config:` settings all consume the same storage budget. Deletes release
+capacity.
+
+This keeps the configured quota stable regardless of encryption/base64
+overhead and closes cache/config bypasses.
+
+### 14.0.2 Invocation concurrency isolation
+
+Guest execution uses two host-owned semaphore layers:
+
+- **4 concurrent invocations per plugin**;
+- **16 concurrent plugin invocations globally**.
+
+The per-plugin permit is acquired first. A plugin that has saturated its own
+four slots therefore waits without reserving a global slot that another plugin
+could use. This prevents one noisy or slow guest from monopolizing every
+Wasmtime execution slot while preserving a hard process-wide concurrency cap.
+
+The limits are host policy, not plugin-grantable authority. Removing a plugin
+also drops its cached per-plugin semaphore entry.
+
+### 14.0.3 Compiled component cache
+
+Wasmtime compilation is package-code work, not invocation authority. Kinetix
+therefore caches one immutable compiled `Component` per installed plugin,
+tagged by the active package SHA-256.
+
+The cache deliberately stops at the compiled component boundary:
+
+- every invocation still creates a fresh `Store` and guest instance;
+- approved permissions, HTTP budgets, storage quotas, epoch deadlines, and
+  cancellation state are reconstructed from current host state;
+- install/upgrade and rollback compile before publication and replace the cache
+  entry with the new package SHA;
+- a process restart warms the cache lazily on first use;
+- plugin removal drops its cache entry.
+
+This removes repeated Wasmtime compilation from request/control-plane
+invocations without retaining stale runtime authority. Global plugin metrics
+expose `component_cache_hits` and `component_cache_misses`.
+
+## 14.1 Catalog distribution and publisher trust
+
+The official catalog is a discovery index, not a signing authority. Package
+trust is anchored separately in a compiled publisher-key store.
+
+A catalog install is accepted only after this chain succeeds:
+
+```text
+catalog id
+ -> embedded catalog entry
+ -> HTTPS URL + redirect-host allow-list
+ -> bounded download
+ -> exact catalog SHA-256
+ -> package manifest id/version match
+ -> Ed25519 signature verified by separately trusted publisher key
+ -> normal install pipeline
+ -> installed disabled
+ -> explicit permission review
+```
+
+The dashboard cannot submit arbitrary URLs or publisher keys for catalog
+installation. Redirects are followed manually so every destination remains
+HTTPS and inside the entry's explicit host allow-list. Existing local upload
+and server-path installation remain separate operator workflows.
+
+Signing private keys never ship with Kinetix. Release tooling consumes them
+only from an operator-owned local key file or CI secret and publishes
+`signature.ed25519` inside the deterministic `.kxp`.
+
 ## 15. Plugin circuit breaker
 
 Per plugin:
@@ -726,10 +940,17 @@ Per plugin:
 closed
  -> repeated plugin faults
  -> open
- -> cooldown
- -> half-open probe
- -> closed
+ -> cooldown expires
+ -> atomically claim exactly one half-open probe
+ -> success / structured non-runtime error => closed
+ -> runtime fault => open for a new cooldown
+ -> client cancellation => open for a new cooldown without counting a fault
 ```
+
+While a half-open probe is in flight, other invocations for that plugin are
+rejected. The open-to-half-open transition is persisted atomically so concurrent
+requests cannot all become probes. `circuit_open_until` is an eligibility time,
+not a permanent disable marker.
 
 Count:
 
@@ -819,20 +1040,39 @@ target, force fallback, or move the commit point.
 
 ## 18. Audit and observability
 
-Metrics:
+The host keeps in-memory counters keyed by `(plugin_id, capability)`.
+`GET /admin/api/plugins/{id}/metrics` returns per-plugin totals and a
+`by_capability` breakdown with:
+
+```text
+invocations
+successes
+faults
+timeouts
+cancellations
+host-http request attempts
+cumulative duration in microseconds
+```
+
+Capability labels are host-owned bounded values such as `auth_flow`,
+`provider_adapter`, `credential_strategy`, `model_source`,
+`health_probe`, `routing_facts`, and the three typed hooks. A plugin cannot
+invent metric label cardinality.
+
+Host-mediated HTTP is counted at the actual network-send boundary and attributed
+to the current plugin/capability. Package validation and enable-time linking use
+the `validation` context but do not increment guest invocation counters.
+
+A future Prometheus rendering may expose the same bounded registry as:
 
 ```text
 kinetix_plugin_invocations_total{plugin,capability,outcome}
 kinetix_plugin_duration_seconds{plugin,capability}
-kinetix_plugin_traps_total{plugin}
-kinetix_plugin_timeouts_total{plugin}
+kinetix_plugin_timeouts_total{plugin,capability}
+kinetix_plugin_http_requests_total{plugin,capability}
 kinetix_plugin_circuit_state{plugin}
-kinetix_plugin_http_requests_total{plugin,host,outcome}
 kinetix_plugin_storage_bytes{plugin}
 ```
-
-`host` is bounded because it can only ever be one of the plugin's declared `network_hosts`; the host
-enforces that bound so the label cannot explode in cardinality.
 
 Admin-visible invocation record:
 
@@ -1257,7 +1497,10 @@ aspiration. It is a living list: update it as later phases land.
 - **Runtime-snapshot integration (§13).** Plugin enable/disable is reflected in
   the plugin store and the in-memory capability maps; folding the plugin registry
   into the same immutable `Snapshot` swap is not yet done.
-- **Dashboard.** No React page for plugins yet; only the admin JSON API.
+- **Dashboard.** The React dashboard now exposes installed plugin management:
+  local `.kxp` upload, permission review/approval, validation, enable/disable,
+  and removal. A remote catalog/discovery experience and declarative
+  plugin-provided integration UI remain follow-up work.
 - **SDK polish (§22).** `plugins/sdk` exists and works, but it is not published
   and does not yet auto-generate stub impls for the interfaces a plugin does not
   provide (a plugin still hand-writes them, as `antigravity-oauth` does).

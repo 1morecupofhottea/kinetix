@@ -61,6 +61,8 @@ pub struct AppState {
     pub ip_limiter: crate::ratelimit::IpLimiter,
     /// In-memory admin sessions (dropped on restart; TTL-bounded).
     pub sessions: Arc<crate::auth::Sessions>,
+    /// One-time browser sessions for plugin-provided account authorization.
+    pub plugin_auth_sessions: Arc<crate::auth::PluginAuthSessions>,
     /// Post-v1 plugin host (docs/KINETIX-PLUGIN-ARCHITECTURE.md).
     pub plugins: Option<Arc<crate::plugins::PluginManager>>,
     /// Bounded fire-and-forget queue for plugin hook side effects (§6.6). Hooks
@@ -80,6 +82,26 @@ pub struct StickyEntry {
 type HookJob =
     Box<dyn FnOnce() -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> + Send>;
 
+const HOOK_QUEUE_CAPACITY: usize = 1024;
+const MAX_CONCURRENT_HOOK_JOBS: usize = 32;
+
+fn spawn_hook_worker(mut hook_rx: tokio::sync::mpsc::Receiver<HookJob>) {
+    let slots = Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT_HOOK_JOBS));
+    tokio::spawn(async move {
+        while let Some(job) = hook_rx.recv().await {
+            let permit = slots
+                .clone()
+                .acquire_owned()
+                .await
+                .expect("hook dispatcher semaphore is never closed");
+            tokio::spawn(async move {
+                let _permit = permit;
+                job().await;
+            });
+        }
+    });
+}
+
 impl AppState {
     pub fn new(
         config: Arc<Config>,
@@ -93,12 +115,9 @@ impl AppState {
     ) -> Self {
         let credentials = Arc::new(StaticKeyStrategy::new(crypto.clone()));
         let sessions = Arc::new(crate::auth::Sessions::new(config.session_ttl_minutes));
-        let (hook_tx, mut hook_rx) = tokio::sync::mpsc::channel::<HookJob>(1024);
-        tokio::spawn(async move {
-            while let Some(job) = hook_rx.recv().await {
-                job().await;
-            }
-        });
+        let plugin_auth_sessions = Arc::new(crate::auth::PluginAuthSessions::new());
+        let (hook_tx, hook_rx) = tokio::sync::mpsc::channel::<HookJob>(HOOK_QUEUE_CAPACITY);
+        spawn_hook_worker(hook_rx);
         AppState {
             config,
             pool,
@@ -126,6 +145,7 @@ impl AppState {
             last_backup_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             ip_limiter: crate::ratelimit::IpLimiter::new(config_ip_limit),
             sessions,
+            plugin_auth_sessions,
             plugins: None,
             hook_tx,
         }
@@ -259,5 +279,46 @@ impl AppState {
 
     pub fn bump_counter(&self, _k: &str) {
         let _ = Ordering::Relaxed;
+    }
+}
+
+#[cfg(test)]
+mod hook_dispatch_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn blocked_hook_job_does_not_block_next_job() {
+        let (tx, rx) = tokio::sync::mpsc::channel::<HookJob>(HOOK_QUEUE_CAPACITY);
+        spawn_hook_worker(rx);
+
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let (first_started_tx, first_started_rx) = tokio::sync::oneshot::channel();
+        let first_gate = gate.clone();
+        let first: HookJob = Box::new(move || {
+            Box::pin(async move {
+                let _ = first_started_tx.send(());
+                first_gate.notified().await;
+            })
+        });
+        tx.send(first).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_millis(100), first_started_rx)
+            .await
+            .expect("first hook should start")
+            .unwrap();
+
+        let (second_started_tx, second_started_rx) = tokio::sync::oneshot::channel();
+        let second: HookJob = Box::new(move || {
+            Box::pin(async move {
+                let _ = second_started_tx.send(());
+            })
+        });
+        tx.send(second).await.unwrap();
+
+        tokio::time::timeout(std::time::Duration::from_millis(100), second_started_rx)
+            .await
+            .expect("second hook should start while first hook is blocked")
+            .unwrap();
+
+        gate.notify_waiters();
     }
 }

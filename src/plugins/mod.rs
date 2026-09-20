@@ -7,6 +7,7 @@
 //! move the commit point.
 
 pub mod adapter;
+pub mod catalog;
 pub mod credential;
 pub mod manager;
 pub mod manifest;
@@ -19,6 +20,6 @@ pub use manager::PluginManager;
 
 pub use manifest::{HostPolicy, ValidatedManifest};
 pub use types::{
-    Capability, CircuitState, Limits, Manifest, Permissions, PluginRef, PluginStatus, Provided,
-    MANIFEST_VERSION, PLUGIN_API_MAJOR,
+    Capability, CircuitState, Integration, Limits, Manifest, Permissions, PluginRef, PluginStatus,
+    Provided, MANIFEST_VERSION, PLUGIN_API_MAJOR,
 };
