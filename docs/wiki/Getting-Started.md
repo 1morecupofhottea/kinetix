@@ -2,55 +2,223 @@
 
 ## Requirements
 
-- Linux (x86_64 or aarch64) — the installer and release binaries target Linux.
-  Other platforms work from source.
-- A shell with `curl`. Building from source additionally needs Rust and git.
+For the normal release installation:
+
+* Linux `x86_64` or `aarch64`
+* a shell
+* `curl`
+
+The installer downloads a prebuilt binary for supported Linux architectures, so Rust and Node.js are **not** required for a normal release installation.
+
+Building from source additionally requires:
+
+* Rust / Cargo
+* Git
+* Node.js
+* npm
+
+Other platforms may work from source but are not currently targeted by the release installer.
 
 ## Install
 
-The recommended install needs **no `.env` and no config files**: everything is
-set with subcommands and stored under your XDG directories.
+The recommended installation needs no `.env` file and no hand-written configuration file.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/install.sh | bash
 ```
 
-The installer:
+By default, the installer:
 
-1. Downloads a prebuilt release binary when you pass a release tag
-   (`KINETIX_VERSION=vX.Y.Z`), otherwise clones and builds from source.
-2. Installs `kinetix` to `~/.local/bin` (override with `KINETIX_PREFIX`).
-3. Ensures the bin directory is on your `PATH`.
-4. Runs `kinetix init`, which creates the XDG directories and prints a generated
-   **admin password once**.
+1. Resolves the latest GitHub release.
+2. Downloads the matching prebuilt binary for `x86_64` or `aarch64`.
+3. Verifies the release SHA-256 checksum when the checksum manifest is available.
+4. Falls back to a source build if a usable prebuilt release cannot be obtained.
+5. Installs `kinetix` under `~/.local/bin`.
+6. Adds the binary directory to your shell `PATH` when necessary.
+7. Runs `kinetix init`.
+8. Creates the configuration, data, and state directories.
+9. Generates and prints the dashboard admin password **once**.
 
-> Uninstall is the mirror image:
-> `curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/uninstall.sh | bash`
-> or `kinetix uninstall`. See [Configuration](Configuration).
+Kinetix stores its default state under:
 
-## First run
+```text
+~/.config/kinetix
+~/.local/share/kinetix
+~/.local/state/kinetix
+```
+
+### Pin a release
+
+Set `KINETIX_VERSION` to a release tag:
 
 ```bash
-# 1. Add an upstream and its credential (creates the first account too)
-kinetix provider add --name "My Provider" --base-url https://api.example.com/v1 \
-  --wire-format openai --auth-scheme bearer --api-key sk-... --account-label primary
+curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/install.sh \
+  | KINETIX_VERSION=v0.1.0 bash
+```
 
-# 2. Add a model it serves
-kinetix model add --provider "My Provider" --upstream-id gpt-4o-mini --display-name "GPT-4o mini"
+### Install from `main`
 
-# 3. Issue a virtual key for your client (printed once)
-kinetix key create --name "pi" --owner me
+To explicitly build the current development branch:
 
-# 4. Run the proxy
+```bash
+curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/install.sh \
+  | KINETIX_VERSION=main bash
+```
+
+A source build requires Rust/Cargo, Git, Node.js, and npm.
+
+### Custom install prefix
+
+The default install prefix is:
+
+```text
+~/.local
+```
+
+Override it with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/install.sh \
+  | KINETIX_PREFIX=/custom/prefix bash
+```
+
+## First configuration
+
+Kinetix intentionally ships without provider presets. Add the upstreams, models, credentials, and prices appropriate for your deployment.
+
+The following example configures Gemini.
+
+### 1. Add a provider and account
+
+```bash
+kinetix provider add \
+  --name Gemini \
+  --base-url https://generativelanguage.googleapis.com/v1beta \
+  --wire-format gemini \
+  --auth-scheme custom_header \
+  --custom-header-name x-goog-api-key \
+  --api-key "$GEMINI_API_KEY" \
+  --account-label primary
+```
+
+Passing both `--api-key` and `--account-label` creates the provider's first credential account at the same time.
+
+### 2. Register a model
+
+```bash
+kinetix model add \
+  --provider Gemini \
+  --upstream-id gemini-2.5-flash \
+  --display-name "Gemini 2.5 Flash"
+```
+
+Optional model metadata includes context limits, capabilities, and pricing.
+
+See [Providers](Providers) for the full provider and model configuration model.
+
+### 3. Create a virtual key
+
+```bash
+kinetix key create --name local-client --owner me
+```
+
+The resulting secret begins with:
+
+```text
+sk-kinetix-...
+```
+
+The plaintext secret is shown once. Kinetix stores only its hash.
+
+### 4. Start the proxy
+
+```bash
 kinetix serve
 ```
 
-Then open the dashboard at <http://127.0.0.1:8080/admin> and log in with the
-admin password.
+The default local address is:
 
-## Point a client at it
+```text
+http://127.0.0.1:8080
+```
 
-Any OpenAI-compatible client works. Example (Pi):
+The embedded dashboard is available at:
+
+```text
+http://127.0.0.1:8080/admin
+```
+
+Log in with the admin password printed during installation or `kinetix init`.
+
+## Verify the installation
+
+### Health check
+
+```bash
+curl -s http://127.0.0.1:8080/healthz
+```
+
+A healthy instance returns a response similar to:
+
+```json
+{
+  "status": "ok",
+  "uptime_secs": 3,
+  "database": "ok",
+  "data_plane": "serving",
+  "control_plane": "ok"
+}
+```
+
+`status: ok` indicates that the data plane can serve requests.
+
+A degraded control plane does not necessarily make the inference data plane unavailable: Kinetix can continue serving from its in-memory registry snapshot in supported failure scenarios. See [Observability](Observability) for health semantics.
+
+### Send an inference request
+
+Using the virtual key created earlier:
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-kinetix-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hello from Kinetix."
+      }
+    ]
+  }'
+```
+
+A successful response confirms the complete path:
+
+```text
+client
+  → virtual-key authentication
+  → model resolution
+  → provider account
+  → upstream model
+  → translated response
+```
+
+## Point a client at Kinetix
+
+Kinetix supports OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages clients.
+
+### OpenAI-compatible clients
+
+Use:
+
+```text
+http://127.0.0.1:8080/v1
+```
+
+with a Kinetix virtual key.
+
+Example Pi configuration:
 
 ```json
 {
@@ -64,24 +232,124 @@ Any OpenAI-compatible client works. Example (Pi):
 }
 ```
 
-Anthropic-format clients point at `http://127.0.0.1:8080` (the `/v1/messages`
-endpoint). See [Providers](Providers) and
-[`docs/pi-compatibility.md`](https://github.com/LazyGreed/kinetix/blob/main/docs/pi-compatibility.md).
+### Anthropic-format clients
 
-## Quick health check
+Point Anthropic-format clients at:
 
-```bash
-curl -s http://127.0.0.1:8080/healthz
-# {"status":"ok","uptime_secs":3,"database":"ok","data_plane":"serving","control_plane":"ok"}
+```text
+http://127.0.0.1:8080
 ```
 
-`status: ok` means the data plane is serviceable. `control_plane: degraded`
-means the database is unavailable but inference still works from the in-memory
-snapshot — the endpoint intentionally stays HTTP 200 so the instance is not
-dropped from a load balancer. See [Observability](Observability).
+Kinetix serves:
+
+```text
+POST /v1/messages
+```
+
+### OpenAI Responses clients
+
+Modern coding agents that use the Responses API can use:
+
+```text
+POST /v1/responses
+```
+
+See [Compatibility](https://github.com/LazyGreed/kinetix/blob/main/docs/compatibility.md) for protocol behavior and documented deviations.
+
+See [Pi Compatibility](https://github.com/LazyGreed/kinetix/blob/main/docs/pi-compatibility.md) for Pi-specific setup and acceptance notes.
+
+## Useful commands
+
+Inspect the installation:
+
+```bash
+kinetix status
+```
+
+Run diagnostics:
+
+```bash
+kinetix doctor
+```
+
+Show the command surface:
+
+```bash
+kinetix --help
+```
+
+Examples:
+
+```bash
+kinetix provider --help
+kinetix model --help
+kinetix account --help
+kinetix route --help
+kinetix alias --help
+kinetix key --help
+```
+
+The Kinetix binary is both the inference server and the administrative CLI. Administrative commands operate directly on the SQLite control plane and generally work while the server is stopped.
+
+See [CLI Reference](CLI-Reference) for the complete command surface.
+
+## Docker
+
+For Docker deployment:
+
+```bash
+cp .env.docker.example .env
+docker compose up -d --build
+docker compose logs kinetix | grep -i password
+```
+
+All persistent state is stored under the container's `/data` volume.
+
+See [Docker](Docker) for the full container workflow.
+
+## Production deployment
+
+The default service binds locally. For production, keep Kinetix behind an appropriate authenticated reverse proxy or tunnel rather than exposing the administrative surface directly.
+
+The repository includes:
+
+* a hardened systemd unit
+* graceful shutdown/drain behavior
+* automatic restart
+* Cloudflare Tunnel guidance
+* Cloudflare Access guidance
+* backup/restore procedures
+* upgrade procedures
+
+See [Deployment](Deployment) and [`deploy/README.md`](https://github.com/LazyGreed/kinetix/blob/main/deploy/README.md).
+
+## Uninstall
+
+Using the installed binary:
+
+```bash
+kinetix uninstall
+```
+
+Additional options:
+
+```bash
+kinetix uninstall [--yes] [--remove-binary] [--keep-data] [--dry-run]
+```
+
+Or use the standalone uninstall script:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/uninstall.sh | bash
+```
 
 ## Next steps
 
-- [CLI Reference](CLI-Reference) — the full command surface.
-- [Routing and Fallback](Routing-and-Fallback) — build multi-target Routes.
-- [Deployment](Deployment) — run it as a service behind Cloudflare Tunnel.
+* [CLI Reference](CLI-Reference) — complete command surface
+* [Providers](Providers) — providers, models, capabilities, parameters, and pricing
+* [Routing and Fallback](Routing-and-Fallback) — account pools, Routes, selection, and fallback
+* [Authentication](Authentication) — admin and client authentication
+* [Dashboard](Dashboard) — embedded control plane
+* [Observability](Observability) — health, metrics, request tracing, and diagnostics
+* [Deployment](Deployment) — production operation
+* [Troubleshooting](Troubleshooting) — common operational problems

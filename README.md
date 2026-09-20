@@ -1,85 +1,170 @@
 # Kinetix
 
-**Kinetix** is a single self-hosted Rust service that speaks the OpenAI Chat Completions
-and Anthropic Messages wire formats (streaming first) in front of admin-configured
-upstream LLM APIs (Gemini first), and layers on virtual keys, account pools with
-executable Routes and automatic fallback, cost tracking, and an embedded admin
-dashboard. It is built for developers and small technical teams running AI coding
-agents such as [Pi](https://pi.dev).
+**Kinetix is a self-hosted LLM gateway for coding agents and small technical teams.** It exposes OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages APIs while routing requests across Gemini, OpenAI-compatible, and Anthropic upstreams.
+
+Use virtual keys, account pools, executable Routes, automatic fallback, usage and cost controls, and an embedded admin dashboard — all from a single Rust binary.
 
 [![CI](https://github.com/LazyGreed/kinetix/actions/workflows/ci.yml/badge.svg)](https://github.com/LazyGreed/kinetix/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/LazyGreed/kinetix)](https://github.com/LazyGreed/kinetix/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Wiki](https://img.shields.io/badge/docs-wiki-blueviolet)](https://github.com/LazyGreed/kinetix/wiki)
 
-## Documentation
+## Why Kinetix?
 
-- [Wiki](https://github.com/LazyGreed/kinetix/wiki) — task-oriented documentation:
-  getting started, CLI, configuration, architecture, routing, admin API, dashboard,
-  authentication, providers, observability, deployment, Docker, security, testing,
-  troubleshooting, and FAQ. The wiki sources live in
-  [docs/wiki/](docs/wiki).
-- [docs/DESIGN.md](docs/DESIGN.md) — the full product and technical design.
-- [docs/compatibility.md](docs/compatibility.md) — client compatibility notes and
-  documented deviations.
-- [docs/pi-compatibility.md](docs/pi-compatibility.md) — Pi setup and acceptance
-  notes.
-- [docs/benchmarks.md](docs/benchmarks.md) — benchmark methodology and results.
+LLM clients usually expect one provider and one API shape. Real deployments often need several providers, multiple credentials, fallback, spend controls, and enough observability to understand why a request went where it did.
 
-## What Kinetix does
+Kinetix puts those concerns behind one endpoint.
 
-- **Inbound wire formats**: OpenAI `POST /v1/chat/completions`, OpenAI Responses
-  `POST /v1/responses`, and Anthropic `POST /v1/messages`, all streaming and
-  non-streaming, plus `GET /v1/models` (content-negotiated between OpenAI and
-  Anthropic shapes) and `GET /healthz`.
-- **Outbound adapters**: Gemini (`generateContent` / `streamGenerateContent`),
-  OpenAI-compatible (`/chat/completions`), and Anthropic (`/messages`). All three are
-  selected by the provider's configured `wire_format`, not by vendor name.
-- **Virtual keys** (`sk-kinetix-...`): shown once, stored only as a SHA-256 hash,
-  with per-key allowed models/aliases/routes, RPM/TPM limits, daily/monthly USD
-  budgets, expiry, allowed IPs, and optional body logging.
-- **Account pools & health**: per-account cooldown on 429 (honoring `Retry-After`),
-  exhaustion on quota, disable on auth errors, soft spend quotas, and automatic
-  failover to another account before any bytes reach the client.
-- **Routes**: named `(account, model)` target lists with priority / round-robin /
-  weighted / least-used selection, configurable fallback triggers, a cross-provider
-  continuity policy (strip vendor thinking signatures), and sticky routing.
-- **Cost tracking**: versioned per-model prices, cached/thinking-aware billing, and
-  usage rows written to SQLite through a non-blocking queue.
-- **Admin API** under `/admin/api/*` (session-cookie auth, optional Cloudflare
-  Access JWT) and the embedded React dashboard at `/admin`.
-- **Security**: credentials encrypted at rest (AES-256-GCM), SSRF guardrails on
-  admin-supplied endpoints, and no request/response bodies stored by default.
+| Capability                    | What Kinetix provides                                                                                |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------- |
+| **Protocol compatibility**    | OpenAI Chat Completions, OpenAI Responses, and Anthropic Messages inbound APIs                       |
+| **Provider portability**      | Gemini, OpenAI-compatible, and Anthropic outbound adapters selected by wire format                   |
+| **Virtual keys**              | Per-client model access, RPM/TPM limits, budgets, expiry, IP restrictions, and optional body logging |
+| **Account pools**             | Multiple credentials per provider with health state, cooldowns, quotas, and automatic failover       |
+| **Executable Routes**         | Priority, round-robin, weighted, and least-used target selection with configurable fallback          |
+| **Streaming-safe failover**   | Retry another eligible target before response bytes are committed to the client                      |
+| **Cost accounting**           | Versioned prices, token usage, cached/thinking-aware accounting, exports, and spend views            |
+| **Routing diagnostics**       | Route traces, request inspection, and flight-recorder diagnostics                                    |
+| **Self-hosted control plane** | SQLite, embedded dashboard, admin API, CLI, backups, and exports                                     |
+| **Single binary**             | The proxy and administration CLI ship together                                                       |
+
+Kinetix intentionally ships **no provider presets, bundled price lists, or guessed model capabilities**. Providers, models, prices, and policies remain operator-defined.
+
+## How it works
+
+```mermaid
+flowchart LR
+    C["Pi / Codex / SDKs / agents"]
+    K["Kinetix"]
+    V["Virtual keys"]
+    R["Routes & account pools"]
+    U["Usage & cost accounting"]
+
+    G["Gemini"]
+    O["OpenAI-compatible"]
+    A["Anthropic"]
+
+    C --> K
+    K --> V
+    V --> R
+    R --> G
+    R --> O
+    R --> A
+    K --> U
+```
+
+Clients see a stable OpenAI- or Anthropic-compatible endpoint. Kinetix resolves the requested model or Route, selects an eligible account and upstream target, applies fallback policy when necessary, and records the resulting usage and routing decision.
 
 ## Quick start
 
-Kinetix is a single binary that is both the proxy and its own admin CLI. The
-recommended install (Linux) needs no `.env` and no configuration files —
-everything is set with subcommands and stored under your XDG directories
-(`~/.config/kinetix`, `~/.local/share/kinetix`, `~/.local/state/kinetix`).
+### 1. Install
+
+The recommended Linux installer resolves the latest release and downloads the matching prebuilt binary for `x86_64` or `aarch64`. If a prebuilt binary cannot be used, it falls back to building from source.
 
 ```bash
-# 1. Install (downloads a release binary if one is available, else builds from
-#    source, and drops the binary in ~/.local/bin)
 curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/install.sh | bash
+```
 
-# 2. Run the proxy
+The installer places `kinetix` in `~/.local/bin`, initializes the XDG directories, and prints the generated dashboard admin password **once**.
+
+Kinetix needs no `.env` or configuration file for the normal CLI workflow. State is stored under:
+
+```text
+~/.config/kinetix
+~/.local/share/kinetix
+~/.local/state/kinetix
+```
+
+### 2. Add an upstream
+
+Example using Gemini:
+
+```bash
+kinetix provider add \
+  --name Gemini \
+  --base-url https://generativelanguage.googleapis.com/v1beta \
+  --wire-format gemini \
+  --auth-scheme custom_header \
+  --custom-header-name x-goog-api-key \
+  --api-key "$GEMINI_API_KEY" \
+  --account-label primary
+```
+
+### 3. Register a model
+
+```bash
+kinetix model add \
+  --provider Gemini \
+  --upstream-id gemini-2.5-flash \
+  --display-name "Gemini 2.5 Flash"
+```
+
+### 4. Create a virtual key
+
+```bash
+kinetix key create --name local-client --owner me
+```
+
+The secret is printed once and starts with:
+
+```text
+sk-kinetix-...
+```
+
+### 5. Start Kinetix
+
+```bash
 kinetix serve
 ```
 
-`kinetix init` prints the generated dashboard admin password **once**; change it
-later with `kinetix password set`. `kinetix --help` lists every subcommand
-(`provider`, `model`, `account`, `route`, `alias`, `key`, `export`, `backup`,
-`doctor`, `status`, `password`, `uninstall`). Add your own upstreams, models,
-aliases, Routes, and virtual keys with those subcommands — Kinetix ships no
-provider presets. The admin CLI writes the SQLite control plane directly, so it
-works whether or not the server is running.
+The proxy listens on:
 
-Manage everything from the dashboard at <http://127.0.0.1:8080/admin> (log in
-with the admin password).
+```text
+http://127.0.0.1:8080
+```
 
-## Pointing a client at Kinetix
+The dashboard is available at:
 
-Configure your client (for example Pi) with Kinetix's base URL and a virtual key:
+```text
+http://127.0.0.1:8080/admin
+```
+
+### 6. Make a request
+
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer sk-kinetix-..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "gemini-2.5-flash",
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hello from Kinetix."
+      }
+    ]
+  }'
+```
+
+At this point Kinetix is installed, configured, authenticated, and serving inference traffic.
+
+## Client APIs
+
+Kinetix exposes:
+
+```text
+POST /v1/chat/completions
+POST /v1/responses
+POST /v1/messages
+GET  /v1/models
+GET  /healthz
+```
+
+Streaming and non-streaming requests are supported by the inference APIs.
+
+### Pi
+
+Example Pi provider configuration:
 
 ```json
 {
@@ -93,86 +178,260 @@ Configure your client (for example Pi) with Kinetix's base URL and a virtual key
 }
 ```
 
-See [docs/pi-compatibility.md](docs/pi-compatibility.md) and
-[docs/compatibility.md](docs/compatibility.md) for details.
+See [docs/pi-compatibility.md](docs/pi-compatibility.md) for Pi-specific compatibility and session-affinity notes.
 
-## Deployment
+For protocol behavior and documented deviations, see [docs/compatibility.md](docs/compatibility.md).
 
-See [deploy/README.md](deploy/README.md) for the full runbook (systemd unit with
-auto-restart and graceful drain, Cloudflare Tunnel + Access setup, backup/restore,
-upgrades). [deploy/kinetix.service](deploy/kinetix.service) is a ready systemd unit.
+## Routing and fallback
 
-### Docker
+A Route is an ordered set of `(account, model)` targets.
 
-A multi-stage `Dockerfile` and `docker-compose.yml` run Kinetix in a container with
-a persistent `/data` volume and an optional `cloudflared` service:
+Routes can select targets using:
 
-```bash
-cp .env.docker.example .env      # optional: set KINETIX_MASTER_KEY / KINETIX_ADMIN_TOKEN
-docker compose up -d --build
-docker compose logs kinetix | grep -i password   # first-run admin password
-```
+* priority
+* round-robin
+* weighted
+* least-used
 
-### Uninstall
+Kinetix tracks provider-account state and can react to conditions such as rate limits, quota exhaustion, authentication failures, and configured fallback triggers.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/uninstall.sh | bash
-# or, equivalently, with the installed binary:
-kinetix uninstall [--yes] [--remove-binary] [--keep-data] [--dry-run]
-```
+Where fallback is permitted, another eligible target can be selected before the response is committed to the client.
+
+Routes can also use explicit session identity for sticky/cache-aware routing. Kinetix does not guess conversation identity when no supported session identifier is provided.
+
+See the [Routing and Fallback](https://github.com/LazyGreed/kinetix/wiki/Routing-and-Fallback) documentation for the full model.
+
+## Virtual keys
+
+Client credentials use the `sk-kinetix-...` format.
+
+Virtual-key secrets are shown once and stored as SHA-256 hashes. Policies can include:
+
+* allowed models, aliases, and Routes
+* RPM limits
+* TPM limits
+* daily USD budgets
+* monthly USD budgets
+* expiry
+* allowed IPs
+* optional request/response body logging
+
+This lets different clients, developers, projects, or agents share the same Kinetix deployment without sharing upstream provider credentials.
+
+## Providers and accounts
+
+Providers define an upstream endpoint and wire format. Kinetix currently implements outbound adapters for:
+
+* **Gemini** — `generateContent` / `streamGenerateContent`
+* **OpenAI-compatible** — `/chat/completions`
+* **Anthropic** — `/messages`
+
+Adapters are selected by configured `wire_format`, not by vendor identity.
+
+Each provider can have multiple credential accounts. Kinetix tracks account health and supports cooldown on `429`, `Retry-After`, quota exhaustion, authentication failures, soft spend quotas, and routing across eligible accounts.
+
+## Cost and usage tracking
+
+Kinetix records usage in SQLite through a non-blocking queue.
+
+The accounting model supports:
+
+* versioned per-model prices
+* input/output token accounting
+* cached-token accounting
+* thinking/reasoning-aware billing where available
+* daily and monthly budgets
+* per-day JSONL and CSV exports
+* dashboard spend windows
+
+Pricing remains operator-defined; Kinetix does not ship a vendor price catalog.
 
 ## Dashboard
 
-The embedded React dashboard at `/admin` covers the whole control plane: virtual
-keys, Routes, upstream providers and their accounts, model aliases, usage/spend
-(with a Today/24h/7d/30d window and per-day JSONL/CSV exports you can download or
-delete), the Request Inspector (live in-flight view plus inline Route Trace and
-flight-recorder diagnostics), the append-only audit log, and a **Settings &
-Security** page to change the admin password. Destructive actions ask for
-confirmation first, and there is a Light/Dark/System theme toggle.
+The embedded React dashboard is served at `/admin`.
 
-## Admin authentication
+It covers:
 
-- `kinetix init` (or the first `kinetix serve`) generates an admin password and
-  prints it **once**; it is stored as a hash
-  (`~/.config/kinetix/admin_password.hash` and the `admin_password_hash` DB
-  setting). Change it with `kinetix password set` or from the dashboard.
-- The dashboard logs in with that password and receives an httpOnly session cookie
-  carrying an in-memory session token. Sessions live only in process memory with a
-  TTL (`KINETIX_SESSION_TTL_MINUTES`, default 720), so **a server restart
-  invalidates every session** and a browser must log in again.
-- Changing the password invalidates all sessions immediately.
-- CLI/tooling may instead send `x-kinetix-admin-token` carrying a live session
-  token or the current raw admin password. A raw credential is never accepted from
-  the cookie — credentials stay write-only.
+* virtual keys
+* providers and models
+* provider accounts
+* Routes
+* model aliases
+* usage and spend
+* JSONL/CSV exports
+* live and completed request inspection
+* Route Trace
+* flight-recorder diagnostics
+* audit log
+* admin password management
+* Light / Dark / System themes
 
-## Command-line interface
+Destructive actions require confirmation.
 
-The binary is also the administration tool. `kinetix` with no subcommand prints
-help; `kinetix serve` runs the proxy. Every other subcommand opens the SQLite
-control plane directly (deriving the master key from the config directory), so it
-works with the server stopped and needs no admin password.
+> A dashboard screenshot is worth adding here once a stable image is committed to the repository, for example `docs/assets/dashboard.png`.
 
-| Command | Purpose |
-| --- | --- |
-| `kinetix init` | Create XDG dirs; generate + print the admin password once |
-| `kinetix serve` | Run the proxy (`--allow-private-upstreams`, `--allow-insecure-tls` for local dev) |
-| `kinetix status` / `doctor` | Show resolved paths/counts; run health diagnostics |
-| `kinetix password set/show` | Change or inspect the dashboard password |
-| `kinetix key create/list/enable/disable/revoke` | Manage virtual keys (`revoke` hard-deletes the key and its usage) |
-| `kinetix provider add/list/remove` | Manage upstreams (optionally creating the first account) |
-| `kinetix model add/list/remove` | Manage models |
-| `kinetix account add/list/reset/remove` | Manage credential pools |
-| `kinetix route add/list/remove` | Manage routes |
-| `kinetix alias add/list/remove` | Manage aliases |
-| `kinetix export run/list/prune` | Export usage to JSONL + CSV under the data dir |
-| `kinetix backup run/list` | Run/list database backups |
-| `kinetix uninstall` | Remove config/data/state (and optionally the binary) |
+## Administration
 
-Configuration precedence is **CLI flag > environment variable > config file >
-default**. `--home <dir>` runs an isolated instance rooted at that directory
-(config/data/state beneath it) and ignores any `.env`. In production, keep the
-proxy on localhost behind cloudflared (see [deploy/README.md](deploy/README.md)).
+The same `kinetix` binary provides the management CLI.
+
+Examples:
+
+```bash
+kinetix status
+kinetix doctor
+
+kinetix provider --help
+kinetix model --help
+kinetix account --help
+kinetix route --help
+kinetix alias --help
+kinetix key --help
+```
+
+Administrative commands operate directly on the SQLite control plane, so most configuration changes work even when the proxy server is stopped and do not require the dashboard or admin password.
+
+The complete command surface is documented in the [CLI Reference](https://github.com/LazyGreed/kinetix/wiki/CLI-Reference).
+
+Configuration precedence is:
+
+```text
+CLI flag > environment variable > config file > default
+```
+
+`--home <dir>` creates an isolated Kinetix instance rooted at that directory.
+
+## Security
+
+Kinetix handles upstream credentials and client authentication keys, so its default deployment model is deliberately conservative.
+
+Highlights include:
+
+* AES-256-GCM encryption for upstream credentials at rest
+* hashed virtual-key storage
+* SSRF protections for administrator-configured upstream endpoints
+* request/response bodies not persisted by default
+* separate administrator authentication
+* in-memory dashboard sessions
+* optional Cloudflare Access integration
+* localhost-only deployment defaults
+* dependency advisory and license checks in CI
+
+Dashboard sessions are intentionally process-local, so restarting the server invalidates existing sessions.
+
+See [SECURITY.md](SECURITY.md) and the [Security](https://github.com/LazyGreed/kinetix/wiki/Security) documentation for the security model and vulnerability-reporting process.
+
+## Deployment
+
+### Native / systemd
+
+See [deploy/README.md](deploy/README.md) for the production runbook covering:
+
+* systemd
+* automatic restart
+* graceful drain
+* Cloudflare Tunnel
+* Cloudflare Access
+* backup and restore
+* upgrades
+* health checks
+
+A ready-to-use unit is provided at [deploy/kinetix.service](deploy/kinetix.service).
+
+### Docker
+
+A multi-stage `Dockerfile` and `docker-compose.yml` are included.
+
+```bash
+cp .env.docker.example .env
+docker compose up -d --build
+docker compose logs kinetix | grep -i password
+```
+
+All persistent state lives under `/data`.
+
+The Compose configuration binds Kinetix to localhost by default and includes an optional `cloudflared` profile.
+
+## Install versions
+
+Install the latest release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/install.sh | bash
+```
+
+Pin a release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/install.sh \
+  | KINETIX_VERSION=v0.1.0 bash
+```
+
+Build the current `main` branch instead:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/install.sh \
+  | KINETIX_VERSION=main bash
+```
+
+Source builds additionally require Rust/Cargo, Git, Node.js, and npm because the embedded dashboard is built together with the Rust binary.
+
+## Uninstall
+
+```bash
+kinetix uninstall
+```
+
+Or:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/LazyGreed/kinetix/main/uninstall.sh | bash
+```
+
+Additional options:
+
+```bash
+kinetix uninstall [--yes] [--remove-binary] [--keep-data] [--dry-run]
+```
+
+## Documentation
+
+The [Kinetix Wiki](https://github.com/LazyGreed/kinetix/wiki) contains task-oriented documentation covering:
+
+* Getting Started
+* CLI Reference
+* Configuration
+* Architecture
+* Providers
+* Routing and Fallback
+* Authentication
+* Admin API
+* Dashboard
+* Observability
+* Deployment
+* Docker
+* Security
+* Testing
+* Troubleshooting
+* FAQ
+
+Wiki sources live in [docs/wiki/](docs/wiki).
+
+Additional technical documentation:
+
+* [docs/DESIGN.md](docs/DESIGN.md) — product and technical design
+* [docs/compatibility.md](docs/compatibility.md) — protocol compatibility and documented deviations
+* [docs/pi-compatibility.md](docs/pi-compatibility.md) — Pi setup and acceptance notes
+* [docs/benchmarks.md](docs/benchmarks.md) — benchmark methodology and results
+* [CONTRIBUTING.md](CONTRIBUTING.md) — development and contribution guide
+* [SECURITY.md](SECURITY.md) — security policy and vulnerability reporting
+
+## Contributing
+
+Contributions are welcome.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, conventions, and contribution guidance.
+
+For security vulnerabilities, use the private reporting process in [SECURITY.md](SECURITY.md) rather than opening a public issue.
 
 ## License
 
