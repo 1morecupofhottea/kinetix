@@ -44,8 +44,31 @@ installed=0
 if printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+'; then
   ASSET="kinetix-${VERSION}-${RUST_TARGET}.tar.gz"
   URL="https://github.com/LazyGreed/kinetix/releases/download/${VERSION}/${ASSET}"
+  SUMS_URL="https://github.com/LazyGreed/kinetix/releases/download/${VERSION}/SHA256SUMS"
   log "Downloading prebuilt binary ($ASSET)"
   if curl -fsSL "$URL" -o /tmp/kinetix-dl.tar.gz 2>/dev/null; then
+    # Verify SHA256 checksum if SHA256SUMS asset exists on release
+    if curl -fsSL "$SUMS_URL" -o /tmp/kinetix-sha256sums 2>/dev/null; then
+      EXPECTED="$(grep -E "[[:space:]]${ASSET}$" /tmp/kinetix-sha256sums 2>/dev/null | awk '{print $1}' || :)"
+      if [ -n "$EXPECTED" ]; then
+        if command -v sha256sum >/dev/null 2>&1; then
+          ACTUAL="$(sha256sum /tmp/kinetix-dl.tar.gz | awk '{print $1}')"
+        elif command -v shasum >/dev/null 2>&1; then
+          ACTUAL="$(shasum -a 256 /tmp/kinetix-dl.tar.gz | awk '{print $1}')"
+        else
+          ACTUAL=""
+        fi
+        if [ -n "$ACTUAL" ]; then
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            rm -f /tmp/kinetix-dl.tar.gz /tmp/kinetix-sha256sums
+            err "Checksum mismatch for $ASSET! Expected $EXPECTED, got $ACTUAL"
+          fi
+          log "Verified SHA256 checksum: $ACTUAL"
+        fi
+      fi
+      rm -f /tmp/kinetix-sha256sums
+    fi
+
     mkdir -p "$BIN_DIR"
     tar -xzf /tmp/kinetix-dl.tar.gz -C "$BIN_DIR" kinetix 2>/dev/null \
       || tar -xzf /tmp/kinetix-dl.tar.gz -C /tmp && install -m 0755 /tmp/kinetix "$BIN_DIR/kinetix"

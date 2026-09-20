@@ -17,6 +17,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   release:
@@ -51,4 +53,24 @@ jobs:
           bin: kinetix
           target: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
           archive: kinetix-$tag-$target
+          checksum: sha256
           token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Compute unified SHA256SUMS file and upload to the release
+      - name: Generate SHA256SUMS and attach to release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p dist
+          cd dist
+          gh release download "$TAG" --pattern "kinetix-*.tar.gz" --repo "${{ github.repository }}"
+          sha256sum kinetix-*.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" SHA256SUMS --repo "${{ github.repository }}" --clobber
+
+      # Attest build provenance for the released binaries and checksum file
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'dist/kinetix-*.tar.gz'
