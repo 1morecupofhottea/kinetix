@@ -425,6 +425,7 @@ export const Kinetix = {
   approvePluginPermissions: (id: string) =>
     api.post<{ ok: boolean; id: string; approved: PluginPermissionGrant[] }>(
       `/admin/api/plugins/${encodeURIComponent(id)}/permissions/approve`,
+      {},
     ),
   revokePluginPermission: (id: string, permission: string) =>
     api.post<{ ok: boolean; id: string; revoked: string; enabled?: boolean }>(
@@ -451,6 +452,10 @@ export const Kinetix = {
     api.post<PluginInstallResult>(
       `/admin/api/plugins/${encodeURIComponent(id)}/rollback`,
       { sha256 },
+    ),
+  reinstallPluginPackage: (id: string, sha256: string) =>
+    api.post<PluginInstallResult>(
+      `/admin/api/plugins/${encodeURIComponent(id)}/packages/${encodeURIComponent(sha256)}/reinstall`,
     ),
   removePlugin: (id: string) =>
     api.del<{ ok: boolean; id: string }>(

@@ -182,8 +182,6 @@ pub struct HostCtx {
     pub http_timeout: Duration,
     /// Outbound request counter for the current invocation.
     pub outbound_count: u32,
-    /// The HTTP client used for host-mediated outbound requests.
-    pub http: reqwest::Client,
     /// Storage + credential side effects are deferred to async host functions;
     /// this holds the backing handles.
     pub backing: Arc<dyn HostBacking>,
@@ -228,6 +226,10 @@ pub trait HostBacking: Send + Sync {
         provider_id: &str,
         account_id: &str,
     ) -> Result<String>;
+    /// The provider's own base_url host plus any declared `credential_hosts`
+    /// (NFR-3.11). A credential may only be injected toward these hosts; the
+    /// list is empty only when the provider cannot be resolved.
+    async fn credential_egress_hosts(&self, provider_id: &str) -> Result<Vec<String>>;
 }
 
 /// A configured Wasmtime host runtime shared by every plugin instance.
@@ -470,7 +472,7 @@ fn validate_plugin_destination_addrs(
     if !allow_private_network {
         if let Some(blocked) = addrs
             .iter()
-            .find(|addr| crate::admin::is_blocked_ip(addr.ip()))
+            .find(|addr| crate::net::is_blocked_ip(addr.ip()))
         {
             return Err(PluginEgressError::Denied(format!(
                 "host '{host}' resolves to a blocked private/reserved address ({})",
@@ -496,12 +498,12 @@ fn pinned_plugin_client(
         .timeout(timeout)
         .user_agent(concat!("kinetix-plugin-host/", env!("CARGO_PKG_VERSION")));
 
-    // IP literals already name the exact destination. DNS names are pinned to
-    // only the addresses that passed the policy check above; TLS SNI and
-    // certificate validation still use the original URL hostname.
-    if host.parse::<std::net::IpAddr>().is_err() {
-        builder = builder.resolve_to_addrs(host, addrs);
-    }
+    // Pin the validated addresses into the client in all cases. For DNS names
+    // this closes the rebinding/TOCTOU gap; for IP literals it still prevents
+    // reqwest from resolving the name independently (the URL host is the
+    // literal, so the pin simply reasserts it). TLS SNI and certificate
+    // validation continue to use the original URL hostname.
+    builder = builder.resolve_to_addrs(host, addrs);
 
     builder.build().map_err(|e| {
         PluginEgressError::Unavailable(format!("building pinned HTTP client failed: {e}"))
@@ -572,6 +574,19 @@ impl bindings::kinetix::plugin::host_http::Host for HostCtx {
                 "plugins may not override the Host header",
             )));
         }
+        // Reject authority/framing headers the host must own, so a guest cannot
+        // smuggle a request body past the size cap or desync the connection.
+        for (name, _) in &req.headers {
+            if ["content-length", "transfer-encoding", "connection"]
+                .iter()
+                .any(|denied| name.eq_ignore_ascii_case(denied))
+            {
+                return Ok(Err(err(
+                    "permission_denied",
+                    "plugins may not set authority/framing headers",
+                )));
+            }
+        }
 
         // DNS itself is part of the bounded outbound attempt. Consume the
         // request budget before resolution so repeated failures cannot create
@@ -601,7 +616,18 @@ impl bindings::kinetix::plugin::host_http::Host for HostCtx {
         }
         if let Some(credential) = &req.credential {
             match self.inject_credential(credential).await {
-                Ok(Some((name, value))) => builder = builder.header(name, value),
+                Ok(Some((name, value, hosts))) => {
+                    // NFR-3.11: refuse to send a provider credential to a host
+                    // outside the provider's declared egress set, even when the
+                    // host is inside the plugin's own network_hosts.
+                    if !hosts.iter().any(|h| h.eq_ignore_ascii_case(&host)) {
+                        return Ok(Err(err(
+                            "permission_denied",
+                            format!("provider credential may not be sent to host '{host}'"),
+                        )));
+                    }
+                    builder = builder.header(name, value)
+                }
                 Ok(None) => {}
                 Err(error) => return Ok(Err(err("permission_denied", error))),
             }
@@ -610,7 +636,6 @@ impl bindings::kinetix::plugin::host_http::Host for HostCtx {
             builder = builder.body(req.body.clone());
         }
 
-        self.outbound_count += 1;
         self.backing
             .record_http_request(&self.plugin_id, &self.capability);
         let resp = match builder.send().await {
@@ -631,7 +656,19 @@ impl bindings::kinetix::plugin::host_http::Host for HostCtx {
             .iter()
             .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
             .collect();
-        let (body, body_truncated) = read_bounded(resp, self.max_http_body).await;
+        let (body, body_truncated) =
+            read_bounded(resp, self.max_http_body)
+                .await
+                .map_err(|error| wit::types::PluginError {
+                    code: "upstream_unavailable".into(),
+                    message: format!(
+                        "reading outbound response failed: {}",
+                        classify_reqwest(&error)
+                    ),
+                    retryable: true,
+                    retry_after: None,
+                    reset_at: None,
+                })?;
         Ok(Ok(wit::types::HttpResponse {
             status,
             headers,
@@ -642,18 +679,22 @@ impl bindings::kinetix::plugin::host_http::Host for HostCtx {
 }
 
 /// Read a response body up to `limit` bytes; the second value is true when the
-/// body was cut off.
-async fn read_bounded(mut resp: reqwest::Response, limit: u64) -> (Vec<u8>, bool) {
+/// body was cut off. A mid-body transport error is surfaced to the caller so a
+/// truncated response is never mistaken for a complete one.
+async fn read_bounded(
+    mut resp: reqwest::Response,
+    limit: u64,
+) -> Result<(Vec<u8>, bool), reqwest::Error> {
     let mut out: Vec<u8> = Vec::new();
-    while let Ok(Some(chunk)) = resp.chunk().await {
+    while let Some(chunk) = resp.chunk().await? {
         if out.len() as u64 + chunk.len() as u64 > limit {
             let take = limit.saturating_sub(out.len() as u64) as usize;
             out.extend_from_slice(&chunk[..take.min(chunk.len())]);
-            return (out, true);
+            return Ok((out, true));
         }
         out.extend_from_slice(&chunk);
     }
-    (out, false)
+    Ok((out, false))
 }
 
 impl HostCtx {
@@ -662,7 +703,7 @@ impl HostCtx {
     async fn inject_credential(
         &self,
         cred: &wit::types::CredentialRef,
-    ) -> Result<Option<(String, String)>, String> {
+    ) -> Result<Option<(String, String, Vec<String>)>, String> {
         let (provider_id, account_id) = match cred {
             wit::types::CredentialRef::Account(a) => (a.provider_id.clone(), a.account_id.clone()),
             wit::types::CredentialRef::Named(_) => {
@@ -681,9 +722,19 @@ impl HostCtx {
             .resolve_secret(&self.plugin_id, &provider_id, &account_id)
             .await
             .map_err(|e| format!("credential resolution failed: {e}"))?;
+
+        // NFR-3.11: the credential is bound to the provider's declared hosts, not
+        // to the plugin's network_hosts. Return the allowed host set so callers
+        // can refuse to send the secret anywhere else.
+        let hosts = self
+            .backing
+            .credential_egress_hosts(&provider_id)
+            .await
+            .map_err(|e| format!("credential host resolution failed: {e}"))?;
         Ok(Some((
             "authorization".to_string(),
             format!("Bearer {secret}"),
+            hosts,
         )))
     }
 
@@ -818,7 +869,22 @@ impl bindings::kinetix::plugin::host_credential::Host for HostCtx {
             )));
         }
         match self.inject_credential(&credential).await {
-            Ok(Some((name, value))) => {
+            Ok(Some((name, value, hosts))) => {
+                // NFR-3.11: the signed request may only target the provider's
+                // declared egress hosts, so a signed credential cannot be
+                // aimed at an arbitrary host in the plugin's network_hosts.
+                let target = url::Url::parse(&req.url)
+                    .ok()
+                    .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()));
+                let allowed = target
+                    .map(|h| hosts.iter().any(|allowed| allowed.eq_ignore_ascii_case(&h)))
+                    .unwrap_or(false);
+                if !allowed {
+                    return Ok(Err(err(
+                        "permission_denied",
+                        "provider credential may not be signed for this host",
+                    )));
+                }
                 req.headers.push((name, value));
                 Ok(Ok(req))
             }
@@ -875,7 +941,7 @@ impl bindings::kinetix::plugin::host_credential::Host for HostCtx {
         match self.inject_credential(&credential).await {
             // `inject_credential` returns a pre-formatted `Bearer` header; strip
             // the scheme so the guest receives just the secret it asked for.
-            Ok(Some((_, value))) => {
+            Ok(Some((_, value, _hosts))) => {
                 let secret = value.strip_prefix("Bearer ").unwrap_or(&value).to_string();
                 Ok(Ok(secret))
             }
@@ -934,7 +1000,6 @@ mod tests {
             allow_private_network: false,
             http_timeout: Duration::from_secs(1),
             outbound_count: 0,
-            http: reqwest::Client::new(),
             backing: std::sync::Arc::new(NoBacking),
             limits: wasmtime::StoreLimitsBuilder::new().build(),
         };
@@ -963,7 +1028,6 @@ mod tests {
             allow_private_network: false,
             http_timeout: Duration::from_secs(1),
             outbound_count: 0,
-            http: reqwest::Client::new(),
             backing: std::sync::Arc::new(NoBacking),
             limits: wasmtime::StoreLimitsBuilder::new().build(),
         }
@@ -1117,6 +1181,9 @@ mod tests {
         fn log(&self, _: &str, _: &str, _: &str) {}
         async fn resolve_secret(&self, _: &str, _: &str, _: &str) -> anyhow::Result<String> {
             Ok(String::new())
+        }
+        async fn credential_egress_hosts(&self, _: &str) -> anyhow::Result<Vec<String>> {
+            Ok(Vec::new())
         }
     }
 

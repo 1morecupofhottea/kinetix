@@ -33,6 +33,10 @@ pub struct PluginAuthSession {
     pub credential_binding: String,
     pub redirect_uri: String,
     pub pkce_verifier: String,
+    /// Opaque admin session token that initiated the flow. The browser callback
+    /// must present the same session, so a leaked `state` alone cannot complete
+    /// account enrollment.
+    initiator: String,
     expires_at: Instant,
 }
 
@@ -60,6 +64,7 @@ impl PluginAuthSessions {
         provider_id: &str,
         credential_binding: &str,
         redirect_uri: &str,
+        initiator: &str,
     ) -> PluginAuthStart {
         use base64::Engine;
         use rand::RngCore;
@@ -87,6 +92,7 @@ impl PluginAuthSessions {
                 credential_binding: credential_binding.to_string(),
                 redirect_uri: redirect_uri.to_string(),
                 pkce_verifier,
+                initiator: initiator.to_string(),
                 expires_at: now + PLUGIN_AUTH_TTL,
             },
         );
@@ -97,12 +103,23 @@ impl PluginAuthSessions {
         }
     }
 
-    /// Consume a state token exactly once.
-    pub fn take(&self, state: &str) -> Option<PluginAuthSession> {
+    /// Consume a state token exactly once. The presented `initiator` must match
+    /// the admin session that started the flow; a mismatch consumes the state
+    /// (so it cannot be retried) and returns `None`.
+    pub fn take(&self, state: &str, initiator: &str) -> Option<PluginAuthSession> {
         let now = Instant::now();
         let mut map = self.inner.lock();
         map.retain(|_, session| session.expires_at > now);
-        map.remove(state).filter(|session| session.expires_at > now)
+        let session = map.remove(state)?;
+        if session.expires_at <= now {
+            return None;
+        }
+        // Constant-time compare so a timing oracle cannot recover the session
+        // token by probing the callback.
+        if !crate::crypto::constant_time_eq(&session.initiator, initiator) {
+            return None;
+        }
+        Some(session)
     }
 
     pub fn revoke(&self, state: &str) {
@@ -279,6 +296,10 @@ impl FromRequestParts<AppState> for AuthKey {
 /// An authenticated admin session.
 pub struct AdminAuth {
     pub actor: String,
+    /// The raw credential presented by the caller (session cookie value, or the
+    /// `x-kinetix-admin-token` header). Used to bind one-time browser flows to
+    /// the admin session that started them.
+    pub token: String,
 }
 
 impl FromRequestParts<AppState> for AdminAuth {
@@ -324,6 +345,7 @@ impl FromRequestParts<AppState> for AdminAuth {
             if state.sessions.valid(&t) {
                 return Ok(AdminAuth {
                     actor: "admin".to_string(),
+                    token: t,
                 });
             }
         }
@@ -331,6 +353,7 @@ impl FromRequestParts<AppState> for AdminAuth {
             if state.sessions.valid(&t) || verify_admin_password(state, &t).await {
                 return Ok(AdminAuth {
                     actor: "admin".to_string(),
+                    token: t,
                 });
             }
         }
@@ -392,6 +415,7 @@ mod plugin_auth_tests {
             "prov_1",
             "plugin:dev.example.plugin/login-credential",
             "https://example.test/admin/api/plugins/auth/callback",
+            "session-token-1",
         );
         let second = sessions.create(
             "dev.example.plugin",
@@ -399,17 +423,23 @@ mod plugin_auth_tests {
             "prov_1",
             "plugin:dev.example.plugin/login-credential",
             "https://example.test/admin/api/plugins/auth/callback",
+            "session-token-1",
         );
 
         assert_ne!(first.state, second.state);
         assert_ne!(first.pkce_challenge, second.pkce_challenge);
-        let session = sessions.take(&first.state).expect("state should be live");
+        // A different admin session cannot consume the state, and the failed
+        // attempt burns it.
+        assert!(sessions.take(&first.state, "other-session").is_none());
+        assert!(sessions.take(&first.state, "session-token-1").is_none());
+        let session = sessions
+            .take(&second.state, "session-token-1")
+            .expect("matching session should consume state");
         assert_eq!(session.plugin_id, "dev.example.plugin");
         assert_eq!(session.flow_name, "login");
         assert_eq!(session.provider_id, "prov_1");
         assert!(!session.pkce_verifier.is_empty());
-        assert!(sessions.take(&first.state).is_none());
-        assert!(sessions.take(&second.state).is_some());
+        assert!(sessions.take(&second.state, "session-token-1").is_none());
     }
 
     #[test]
@@ -421,8 +451,9 @@ mod plugin_auth_tests {
             "prov_1",
             "plugin:dev.example.plugin/login-credential",
             "https://example.test/callback",
+            "session-token-1",
         );
         sessions.revoke(&pending.state);
-        assert!(sessions.take(&pending.state).is_none());
+        assert!(sessions.take(&pending.state, "session-token-1").is_none());
     }
 }

@@ -432,7 +432,10 @@ pub fn parse_size(s: &str) -> Option<u64> {
     } else {
         (s, 1)
     };
-    num.trim().parse::<u64>().ok().map(|n| n * mult)
+    num.trim()
+        .parse::<u64>()
+        .ok()
+        .and_then(|n| n.checked_mul(mult))
 }
 
 #[cfg(test)]

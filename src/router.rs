@@ -155,6 +155,10 @@ pub fn build(state: AppState) -> Router {
             get(admin::preview_plugin_rollback),
         )
         .route(
+            "/plugins/{id}/packages/{sha256}/reinstall",
+            post(admin::reinstall_plugin_package),
+        )
+        .route(
             "/plugins/{id}/settings",
             get(admin::plugin_settings).put(admin::update_plugin_settings),
         )

@@ -110,8 +110,7 @@ impl exports::credential_strategy::Guest for Component {
                 kinetix_plugin_sdk::helpers::retryable_error("upstream_unavailable", e, Some(5))
             })?;
             // Persist the rotated material so a restart does not lose it.
-            let serialized = serde_json::to_string(&cred).unwrap_or_default();
-            let _ = kinetix_plugin_sdk::helpers::kv_put_string(&state_key(&account), &serialized);
+            persist_rotated(&account, &cred);
         }
 
         let access = cred.access_token.clone().ok_or_else(|| {
@@ -163,9 +162,7 @@ impl exports::credential_strategy::Guest for Component {
         refresh(&mut cred).map_err(|e| {
             kinetix_plugin_sdk::helpers::retryable_error("upstream_unavailable", e, Some(5))
         })?;
-        let serialized = serde_json::to_string(&cred).unwrap_or_default();
-        kinetix_plugin_sdk::helpers::kv_put_string(&state_key(&account), &serialized)
-            .map_err(|e| kinetix_plugin_sdk::helpers::error("plugin_internal", e))?;
+        persist_rotated(&account, &cred);
         Ok(())
     }
 }
@@ -221,9 +218,8 @@ fn refresh(cred: &mut Credential) -> Result<(), String> {
     let text = String::from_utf8(resp.body).map_err(|_| "token response not utf-8".to_string())?;
     if resp.status != 200 {
         return Err(format!(
-            "token endpoint returned HTTP {}: {}",
-            resp.status,
-            truncate(&text, 200)
+            "token endpoint returned HTTP {}",
+            resp.status
         ));
     }
     let v: serde_json::Value =
@@ -325,8 +321,17 @@ fn urlencode(s: &str) -> String {
     out
 }
 
-fn truncate(s: &str, n: usize) -> String {
-    s.chars().take(n).collect()
+/// Persist a freshly rotated credential to host KV. The host encrypts KV at
+/// rest. Concurrent rotations for the same account can interleave (the
+/// single-use refresh token makes a lost update permanent), so callers log the
+/// outcome rather than silently discarding a failure.
+fn persist_rotated(account: &AccountRef, cred: &Credential) {
+    let serialized = serde_json::to_string(cred).unwrap_or_default();
+    if let Err(e) = kinetix_plugin_sdk::helpers::kv_put_string(&state_key(account), &serialized) {
+        kinetix_plugin_sdk::helpers::log_warn(&format!(
+            "failed to persist rotated Antigravity credential: {e}"
+        ));
+    }
 }
 
 // --- Optional account authorization world. ---------------------------------
@@ -456,11 +461,7 @@ impl auth_world::exports::auth_flow::Guest for Component {
         if resp.status != 200 {
             return Err(auth_error(
                 "credential_expired",
-                format!(
-                    "token endpoint returned HTTP {}: {}",
-                    resp.status,
-                    truncate(&text, 200)
-                ),
+                format!("token endpoint returned HTTP {}", resp.status),
                 false,
             ));
         }
@@ -615,11 +616,7 @@ fn refresh_for_model_source(cred: &mut Credential) -> Result<(), ModelPluginErro
     if resp.status != 200 {
         return Err(model_error(
             "credential_expired",
-            format!(
-                "token endpoint returned HTTP {}: {}",
-                resp.status,
-                truncate(&text, 200)
-            ),
+            format!("token endpoint returned HTTP {}", resp.status),
             false,
         ));
     }
@@ -783,11 +780,7 @@ impl model_world::exports::account_model_source::Guest for Component {
         if resp.status != 200 {
             return Err(model_error(
                 "upstream_unavailable",
-                format!(
-                    "model catalog returned HTTP {}: {}",
-                    resp.status,
-                    truncate(&text, 200)
-                ),
+                format!("model catalog returned HTTP {}", resp.status),
                 resp.status >= 500,
             ));
         }

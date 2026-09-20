@@ -141,6 +141,19 @@ impl HostBacking for Backing {
         }
         self.crypto.decrypt(&account.secret_enc)
     }
+    async fn credential_egress_hosts(&self, provider_id: &str) -> Result<Vec<String>> {
+        let provider = crate::db::get_provider(&self.pool, provider_id)
+            .await?
+            .ok_or_else(|| anyhow!("provider '{provider_id}' not found"))?;
+        let mut hosts = Vec::new();
+        if let Some(base) = provider.base_host() {
+            hosts.push(base);
+        }
+        hosts.extend(provider.credential_hosts());
+        hosts.sort_unstable();
+        hosts.dedup();
+        Ok(hosts)
+    }
 }
 
 /// The plugin manager. Cheap to clone (Arc inside).
@@ -159,7 +172,6 @@ struct Inner {
     pool: Pool,
     crypto: Arc<Crypto>,
     backing: Arc<Backing>,
-    http: reqwest::Client,
     policy: HostPolicy,
     package_root: PathBuf,
     /// One compiled component per installed plugin, tagged by package SHA.
@@ -182,7 +194,6 @@ impl PluginManager {
     pub fn new(
         pool: Pool,
         crypto: Arc<Crypto>,
-        http: reqwest::Client,
         policy: HostPolicy,
         package_root: PathBuf,
     ) -> Result<Self> {
@@ -205,7 +216,6 @@ impl PluginManager {
                 pool,
                 crypto,
                 backing,
-                http,
                 policy,
                 package_root,
                 component_cache: Default::default(),
@@ -331,6 +341,25 @@ impl PluginManager {
         .await
     }
 
+    /// Install a package whose bytes were previously accepted (a retained
+    /// `plugin_packages` row) — the recovery path after `remove`. The retained
+    /// bytes are re-read from disk and re-hashed against the provenance row, so
+    /// historical acceptance is not sufficient on its own. The signature was
+    /// verified when the package was first accepted and the bytes are identical
+    /// (hash-checked), so re-verification against trusted keys is unnecessary.
+    pub async fn install_retained(&self, id: &str, sha256: &str) -> Result<InstallOutcome> {
+        let (retained, _pkg, _validated) = self.load_retained_package(id, sha256).await?;
+        let bytes = self.read_retained_bytes(&retained).await?;
+        self.install_from_source(
+            &bytes,
+            Some(sha256),
+            &[],
+            true,
+            &format!("retained:{}", retained.package_sha256),
+        )
+        .await
+    }
+
     /// Install package bytes while retaining an operator-safe provenance label.
     pub async fn install_from_source(
         &self,
@@ -383,11 +412,7 @@ impl PluginManager {
         )
         .await?;
 
-        self.remember_component(
-            &validated.manifest.id,
-            &pkg.package_sha256,
-            compiled,
-        );
+        self.remember_component(&validated.manifest.id, &pkg.package_sha256, compiled);
 
         Ok(InstallOutcome {
             id: validated.manifest.id.clone(),
@@ -464,19 +489,7 @@ impl PluginManager {
             .await?
             .ok_or_else(|| anyhow!("retained package '{sha256}' not found for plugin '{id}'"))?;
 
-        let relative = Path::new(&retained.package_path);
-        if relative.is_absolute()
-            || relative
-                .components()
-                .any(|component| !matches!(component, std::path::Component::Normal(_)))
-        {
-            bail!("retained package path is invalid");
-        }
-
-        let path = self.inner.package_root.join(relative);
-        let bytes = tokio::fs::read(&path)
-            .await
-            .map_err(|e| anyhow!("reading retained package {}: {e}", path.display()))?;
+        let bytes = self.read_retained_bytes(&retained).await?;
         let computed = package::sha256_hex(&bytes);
         if !computed.eq_ignore_ascii_case(&retained.package_sha256)
             || !computed.eq_ignore_ascii_case(sha256)
@@ -505,6 +518,23 @@ impl PluginManager {
         }
 
         Ok((retained, pkg, validated))
+    }
+
+    /// Read the on-disk bytes of a retained package row, rejecting any path
+    /// that is not a plain relative file below the package root.
+    async fn read_retained_bytes(&self, retained: &store::PackageRow) -> Result<Vec<u8>> {
+        let relative = Path::new(&retained.package_path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+        {
+            bail!("retained package path is invalid");
+        }
+        let path = self.inner.package_root.join(relative);
+        tokio::fs::read(&path)
+            .await
+            .map_err(|e| anyhow!("reading retained package {}: {e}", path.display()))
     }
 
     /// Preview a retained package and the authority delta relative to the
@@ -789,6 +819,73 @@ impl PluginManager {
         Ok(grants)
     }
 
+    /// Approve an explicit subset of the plugin's declared permissions. Each
+    /// requested key must be declared by the manifest; the grant is written
+    /// with exactly the requested scope (e.g. a subset of `network_hosts`), so
+    /// the operator is not forced to rubber-stamp the full declaration.
+    /// `ensure_permissions_approved` still requires the effective grant set to
+    /// match the manifest exactly before enablement.
+    pub async fn approve_permissions_scoped(
+        &self,
+        id: &str,
+        network_hosts: Option<Vec<String>>,
+        credential_scopes: Option<Vec<String>>,
+        credential_read: Option<bool>,
+    ) -> Result<Vec<PermissionGrant>> {
+        let row = self
+            .get(id)
+            .await?
+            .ok_or_else(|| anyhow!("plugin '{id}' is not installed"))?;
+        let manifest = row
+            .manifest()
+            .ok_or_else(|| anyhow!("plugin '{id}' has an unreadable manifest"))?;
+        let declared = &manifest.permissions;
+
+        let mut grants = Vec::new();
+        if let Some(hosts) = network_hosts {
+            if hosts.is_empty() {
+                bail!("network_hosts approval must not be empty when provided");
+            }
+            for host in &hosts {
+                if !declared.network_hosts.iter().any(|d| d == host) {
+                    bail!("network host '{host}' is not declared by the plugin manifest");
+                }
+            }
+            grants.push(PermissionGrant {
+                permission: "network_hosts".into(),
+                value_json: serde_json::to_string(&hosts).unwrap_or_else(|_| "[]".into()),
+            });
+        }
+        if let Some(scopes) = credential_scopes {
+            if scopes.is_empty() {
+                bail!("credential_scopes approval must not be empty when provided");
+            }
+            for scope in &scopes {
+                if !declared.credential_scopes.iter().any(|d| d == scope) {
+                    bail!("credential scope '{scope}' is not declared by the plugin manifest");
+                }
+            }
+            grants.push(PermissionGrant {
+                permission: "credential_scopes".into(),
+                value_json: serde_json::to_string(&scopes).unwrap_or_else(|_| "[]".into()),
+            });
+        }
+        if let Some(read) = credential_read {
+            if read && !declared.credential_read {
+                bail!("plugin manifest does not request credential_read");
+            }
+            if read {
+                grants.push(PermissionGrant {
+                    permission: "credential_read".into(),
+                    value_json: "true".into(),
+                });
+            }
+        }
+
+        store::replace_permissions(&self.inner.pool, id, &grants).await?;
+        Ok(grants)
+    }
+
     /// Revoke one permission and immediately disable the plugin.
     pub async fn revoke_permission(&self, id: &str, permission: &str) -> Result<()> {
         if self.get(id).await?.is_none() {
@@ -1019,7 +1116,6 @@ impl PluginManager {
             allow_private_network: self.inner.policy.allow_private_network,
             http_timeout: Duration::from_millis(limits.wall_time_ms.max(1)),
             outbound_count: 0,
-            http: self.inner.http.clone(),
             backing: self.inner.backing.clone(),
             limits: wasmtime::StoreLimitsBuilder::new().build(),
         };
@@ -1086,7 +1182,7 @@ impl PluginManager {
         let limits = manifest::effective_limits(&manifest, self.inner.policy)?;
         let component = self.inner.runtime.compile(&row.component)?;
         let linker = self.inner.runtime.linker()?;
-        let mut store = self.new_store(&row, &limits, &grants, false, true);
+        let mut store = self.new_store(&row, &limits, &grants, false, true, "model_source");
         let plugin = self
             .inner
             .runtime
@@ -1546,15 +1642,15 @@ impl PluginManager {
         base_url: &str,
         models_path: &str,
     ) -> Result<Vec<wit::types::DiscoveredModel>, PluginFault> {
-        self.bump_invocation();
-        let _permit = self.inner.semaphore.acquire().await;
+        let started = self.bump_invocation(id, "account_model_source");
+        let _permit = self.acquire_invocation_permits(id).await;
         let mut p = self
             .prepare_model_source(id)
             .await
             .map_err(|e| PluginFault::Internal(e.to_string()))?;
         let plugin = p.plugin;
         let rt = self.inner.runtime.clone();
-        let _guard = rt.arm_deadline(&mut p.store, Duration::from_secs(30));
+        let _guard = rt.arm_deadline(&mut p.store, p.wall_time);
         let account =
             crate::plugins::runtime::model_source_bindings::kinetix::plugin::types::AccountRef {
                 provider_id: provider_id.to_string(),
@@ -1579,7 +1675,8 @@ impl PluginManager {
                     })
                     .collect()
             });
-        self.settle(id, result).await
+        self.settle(id, "account_model_source", started, result)
+            .await
     }
 
     /// HealthProbe::probe (§6.5).
@@ -1826,7 +1923,7 @@ impl PluginManager {
             .instantiate(&linker, &mut store, component.as_ref())
             .await?;
         if !manifest.provides.account_model_sources.is_empty() {
-            let mut model_store = self.new_store(&row, &limits, &[], false, false);
+            let mut model_store = self.new_store(&row, &limits, &[], false, false, "validation");
             let _ = self
                 .inner
                 .runtime

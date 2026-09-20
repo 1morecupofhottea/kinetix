@@ -2883,6 +2883,17 @@ fn account_label_or_default(provider_name: &str, label: Option<&str>) -> String 
     }
 }
 
+/// Sanitize a plugin-supplied account label before it is persisted and shown in
+/// the dashboard: drop control characters, collapse whitespace, and cap length.
+fn sanitize_account_label(label: &str) -> String {
+    let cleaned: String = label
+        .chars()
+        .map(|c| if c.is_whitespace() { ' ' } else { c })
+        .filter(|c| !c.is_control())
+        .collect();
+    cleaned.trim().chars().take(120).collect()
+}
+
 /// Guardrail for admin-supplied endpoints (NFR-3.9): HTTPS by default, and
 /// loopback/link-local/private/metadata ranges blocked unless explicitly allowed.
 fn validate_outbound_url(state: &AppState, url: &str) -> Result<(), ApiError> {
@@ -2902,7 +2913,7 @@ fn validate_outbound_url(state: &AppState, url: &str) -> Result<(), ApiError> {
     if state.config.allow_private_upstreams {
         return Ok(());
     }
-    if is_blocked_host(host) {
+    if crate::net::is_blocked_host(host) {
         return Err(ApiError::bad(format!(
             "host '{host}' resolves to a blocked private/metadata range; set KINETIX_ALLOW_PRIVATE_UPSTREAMS=true to allow"
         )));
@@ -2910,53 +2921,10 @@ fn validate_outbound_url(state: &AppState, url: &str) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn is_blocked_host(host: &str) -> bool {
-    let lower = host.to_ascii_lowercase();
-    if lower == "localhost" || lower.ends_with(".localhost") || lower.ends_with(".internal") {
-        return true;
-    }
-    if lower == "metadata.google.internal" {
-        return true;
-    }
-    if let Ok(ip) = lower.parse::<std::net::IpAddr>() {
-        return is_blocked_ip(ip);
-    }
-    false
-}
-
 /// Whether an IP literal falls in a blocked private/link-local/metadata range
-/// (NFR-3.9). Shared with the connect-time DNS re-check in the pipeline.
-pub fn is_blocked_ip(ip: std::net::IpAddr) -> bool {
-    match ip {
-        std::net::IpAddr::V4(v4) => {
-            let octets = v4.octets();
-            let shared_address_space = octets[0] == 100 && (64..=127).contains(&octets[1]);
-            let benchmarking = octets[0] == 198 && matches!(octets[1], 18 | 19);
-            v4.is_loopback()
-                || v4.is_private()
-                || v4.is_link_local()
-                || v4.is_unspecified()
-                || v4.is_broadcast()
-                || v4.is_multicast()
-                || octets[0] == 0
-                || shared_address_space
-                || benchmarking
-        }
-        std::net::IpAddr::V6(v6) => {
-            if let Some(mapped) = v6.to_ipv4_mapped() {
-                return is_blocked_ip(std::net::IpAddr::V4(mapped));
-            }
-            let first = v6.segments()[0];
-            let unique_local = first & 0xfe00 == 0xfc00;
-            let link_local = first & 0xffc0 == 0xfe80;
-            v6.is_loopback()
-                || v6.is_unspecified()
-                || v6.is_multicast()
-                || unique_local
-                || link_local
-        }
-    }
-}
+/// (NFR-3.9). Shared with the connect-time DNS re-check in the pipeline and the
+/// plugin host-mediated HTTP guard.
+pub use crate::net::is_blocked_ip;
 
 // ===========================================================================
 // Configuration export / import (FR-10.12)
@@ -4249,7 +4217,7 @@ pub struct PluginAuthStartBody {
 /// Start a one-time browser authorization session for a plugin integration.
 pub async fn start_plugin_auth(
     State(state): State<AppState>,
-    _auth: AdminAuth,
+    auth: AdminAuth,
     Json(body): Json<PluginAuthStartBody>,
 ) -> ApiResult {
     let manager = plugin_manager(&state)?;
@@ -4294,6 +4262,7 @@ pub async fn start_plugin_auth(
         &body.provider_id,
         &expected_binding,
         &redirect_uri,
+        &auth.token,
     );
 
     let authorize_url = match manager
@@ -4334,6 +4303,41 @@ pub async fn start_plugin_auth(
         )));
     }
 
+    // The plugin must not be able to redirect the authorization code anywhere
+    // other than the host's own callback, must not silently downgrade PKCE, and
+    // must carry the host-generated state through the IdP (so the callback can
+    // verify it was the plugin's own round-trip). Bind the returned authorize
+    // URL to the host-generated values.
+    let mut redirect_matches = false;
+    let mut pkce_present = false;
+    let mut state_matches = false;
+    for (key, value) in parsed.query_pairs() {
+        match key.as_ref() {
+            "redirect_uri" => redirect_matches = value == redirect_uri,
+            "code_challenge" => pkce_present = !value.is_empty(),
+            "state" => state_matches = value == pending.state,
+            _ => {}
+        }
+    }
+    if !redirect_matches {
+        state.plugin_auth_sessions.revoke(&pending.state);
+        return Err(ApiError::bad(
+            "plugin authorization URL does not use the host-generated redirect_uri",
+        ));
+    }
+    if !pkce_present {
+        state.plugin_auth_sessions.revoke(&pending.state);
+        return Err(ApiError::bad(
+            "plugin authorization URL is missing the PKCE code_challenge",
+        ));
+    }
+    if !state_matches {
+        state.plugin_auth_sessions.revoke(&pending.state);
+        return Err(ApiError::bad(
+            "plugin authorization URL does not carry the host-generated state",
+        ));
+    }
+
     Ok(Json(json!({
         "authorize_url": authorize_url,
         "state": pending.state,
@@ -4352,6 +4356,7 @@ pub struct PluginAuthCallbackQuery {
 /// credential and is consumed before code exchange, so replay fails closed.
 pub async fn plugin_auth_callback(
     State(state): State<AppState>,
+    jar: CookieJar,
     Query(query): Query<PluginAuthCallbackQuery>,
 ) -> Result<Redirect, ApiError> {
     if !db_healthy(&state).await {
@@ -4361,9 +4366,15 @@ pub async fn plugin_auth_callback(
         ));
     }
 
+    // Bind the callback to the admin session that started the flow. The
+    // top-level GET navigation carries the SameSite=Lax session cookie.
+    let initiator = jar
+        .get(SESSION_COOKIE)
+        .map(|cookie| cookie.value().to_string())
+        .unwrap_or_default();
     let session = state
         .plugin_auth_sessions
-        .take(&query.state)
+        .take(&query.state, &initiator)
         .ok_or_else(|| ApiError::bad("invalid or expired plugin auth state"))?;
 
     if query.error.is_some() {
@@ -4452,16 +4463,19 @@ pub async fn plugin_auth_callback(
         .crypto
         .encrypt(&result.secret_json)
         .map_err(ApiError::internal)?;
+    // The label is plugin-controlled (typically provider userinfo). Strip
+    // control characters and cap the length so it cannot inject terminal/log
+    // noise or bloat the audit trail before it is stored and displayed.
     let label = result
         .account_label
         .as_deref()
-        .map(str::trim)
+        .map(sanitize_account_label)
         .filter(|label| !label.is_empty())
-        .unwrap_or(&provider.name);
+        .unwrap_or_else(|| provider.name.clone());
     let account_id = db::insert_account(
         &state.pool,
         &provider.id,
-        label,
+        &label,
         &encrypted,
         "oauth:****",
         1,
@@ -4478,7 +4492,7 @@ pub async fn plugin_auth_callback(
         "plugin_account_authorized",
         "account",
         &account_id,
-        label,
+        &label,
         &format!(
             "Authorized account through plugin {} flow {}.",
             session.plugin_id, session.flow_name
@@ -4513,9 +4527,60 @@ pub async fn preview_plugin_rollback(
     Ok(Json(value))
 }
 
+/// `POST /admin/api/plugins/{id}/packages/{sha256}/reinstall` — reinstall a
+/// retained package after the plugin was removed. The bytes are re-hashed and
+/// re-validated; the plugin is installed disabled and permissions must be
+/// re-approved before it can be enabled.
+pub async fn reinstall_plugin_package(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path((id, sha256)): Path<(String, String)>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let outcome = manager
+        .install_retained(&id, sha256.trim())
+        .await
+        .map_err(plugin_bad)?;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_reinstalled",
+        "plugin",
+        &outcome.id,
+        &outcome.id,
+        &format!(
+            "Reinstalled retained plugin package v{} (SHA-256 {}). Plugin is disabled and permissions must be re-approved.",
+            outcome.version, outcome.package_sha256
+        ),
+    )
+    .await;
+    Ok(Json(json!({
+        "ok": true,
+        "id": outcome.id,
+        "version": outcome.version,
+        "sha256": outcome.package_sha256,
+        "signature": outcome.signature.as_str(),
+        "provides": outcome.provides,
+        "enabled": false,
+    })))
+}
+
 #[derive(Deserialize)]
 pub struct PluginRollbackBody {
     pub sha256: String,
+}
+
+/// Optional subset approval for `POST /plugins/{id}/permissions/approve`. With
+/// no fields the full declared set is approved (back-compat); with fields the
+/// granted scope is exactly what is requested (a subset of the manifest).
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct PluginPermissionApprovalBody {
+    #[serde(default)]
+    pub network_hosts: Option<Vec<String>>,
+    #[serde(default)]
+    pub credential_scopes: Option<Vec<String>>,
+    #[serde(default)]
+    pub credential_read: Option<bool>,
 }
 
 /// `POST /admin/api/plugins/{id}/rollback` — reactivate a retained package.
@@ -4530,6 +4595,9 @@ pub async fn rollback_plugin(
         .rollback(&id, body.sha256.trim())
         .await
         .map_err(plugin_bad)?;
+    // The rollback activated a different package disabled: drop the previous
+    // package's registered capabilities so nothing stale keeps serving.
+    state.unregister_plugin_capabilities(&id);
 
     let _ = db::insert_audit(
         &state.pool,
@@ -4587,6 +4655,7 @@ pub async fn disable_plugin(
 ) -> ApiResult {
     let manager = plugin_manager(&state)?;
     manager.disable(&id).await.map_err(ApiError::internal)?;
+    state.unregister_plugin_capabilities(&id);
     let _ = db::insert_audit(
         &state.pool,
         "admin",
@@ -4608,6 +4677,7 @@ pub async fn remove_plugin(
 ) -> ApiResult {
     let manager = plugin_manager(&state)?;
     manager.remove(&id).await.map_err(ApiError::internal)?;
+    state.unregister_plugin_capabilities(&id);
     let _ = db::insert_audit(
         &state.pool,
         "admin",
@@ -4659,9 +4729,26 @@ pub async fn approve_plugin_permissions(
     State(state): State<AppState>,
     _auth: AdminAuth,
     Path(id): Path<String>,
+    body: Option<Json<PluginPermissionApprovalBody>>,
 ) -> ApiResult {
     let manager = plugin_manager(&state)?;
-    let grants = manager.approve_permissions(&id).await.map_err(plugin_bad)?;
+    let scoped = body.map(|Json(b)| b).unwrap_or_default();
+    let grants = if scoped.network_hosts.is_none()
+        && scoped.credential_scopes.is_none()
+        && scoped.credential_read.is_none()
+    {
+        manager.approve_permissions(&id).await.map_err(plugin_bad)?
+    } else {
+        manager
+            .approve_permissions_scoped(
+                &id,
+                scoped.network_hosts,
+                scoped.credential_scopes,
+                scoped.credential_read,
+            )
+            .await
+            .map_err(plugin_bad)?
+    };
     let _ = db::insert_audit(
         &state.pool,
         "admin",
@@ -4693,6 +4780,7 @@ pub async fn revoke_plugin_permissions(
         .revoke_permission(&id, permission)
         .await
         .map_err(plugin_bad)?;
+    state.unregister_plugin_capabilities(&id);
     let _ = db::insert_audit(
         &state.pool,
         "admin",

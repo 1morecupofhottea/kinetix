@@ -572,6 +572,9 @@ fn validate_network_host(host: &str) -> Result<()> {
     if base.is_empty() || base.contains('/') || base.contains(' ') {
         bail!("network host '{host}' is not a valid hostname");
     }
+    if base.parse::<std::net::IpAddr>().is_ok() {
+        bail!("network host '{host}': IP literals are not allowed; declare a hostname");
+    }
     Ok(())
 }
 

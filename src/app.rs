@@ -207,6 +207,15 @@ impl AppState {
         self.adapters.register_plugin(reference, adapter);
     }
 
+    /// Drop every capability a plugin registered (credential strategy and
+    /// adapters). Called when a plugin is disabled, removed, rolled back, or
+    /// has a permission revoked, so a disabled plugin cannot keep resolving
+    /// credentials or serving adapters.
+    pub fn unregister_plugin_capabilities(&self, plugin_id: &str) {
+        self.plugin_credentials.remove(plugin_id);
+        self.adapters.unregister_plugin(plugin_id);
+    }
+
     /// Resolve the credential for an account, honouring a provider's plugin
     /// credential binding (§6.0). A bound-but-unavailable plugin fails closed.
     pub async fn credential_for(

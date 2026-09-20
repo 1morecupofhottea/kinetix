@@ -43,11 +43,9 @@ async fn manager() -> (PluginManager, Pool) {
     let pool = db::connect(&url).await.unwrap();
     db::migrate(&pool).await.unwrap();
     let crypto = Arc::new(Crypto::new(&[9u8; 32]));
-    let http = reqwest::Client::new();
     let manager = PluginManager::new(
         pool.clone(),
         crypto,
-        http,
         HostPolicy::default(),
         dir.join("plugin-packages"),
     )
@@ -301,6 +299,77 @@ async fn rollback_rejects_tampered_retained_package() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("hash mismatch"), "{err}");
+}
+
+#[tokio::test]
+async fn reinstall_from_retained_package_recovers_after_removal() {
+    let (m, pool) = manager().await;
+    let kxp = build_kxp(GOOD_MANIFEST, EMPTY_COMPONENT);
+    let outcome = m.install(&kxp, None, &[], false).await.unwrap();
+    let sha = outcome.package_sha256.clone();
+
+    // Remove the plugin: the active row (and cascaded permissions) go away, but
+    // the content-addressed package provenance is retained.
+    m.remove("dev.example.foo").await.unwrap();
+    assert!(m.get("dev.example.foo").await.unwrap().is_none());
+    assert_eq!(
+        kinetix::plugins::store::list_packages(&pool, "dev.example.foo")
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+
+    // Reinstall from the retained bytes: re-hashed, re-validated, installed
+    // disabled with no granted authority.
+    let reinstalled = m.install_retained("dev.example.foo", &sha).await.unwrap();
+    assert_eq!(reinstalled.package_sha256, sha);
+    assert_eq!(reinstalled.version, "1.2.0");
+    let row = m.get("dev.example.foo").await.unwrap().unwrap();
+    assert_eq!(row.enabled, 0);
+    assert!(
+        kinetix::plugins::store::permissions(&pool, "dev.example.foo")
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn scoped_permission_approval_grants_only_the_requested_subset() {
+    let (m, pool) = manager().await;
+    let kxp = build_kxp(GOOD_MANIFEST, EMPTY_COMPONENT);
+    m.install(&kxp, None, &[], false).await.unwrap();
+
+    // Approve a strict subset of the declared network hosts.
+    let grants = m
+        .approve_permissions_scoped(
+            "dev.example.foo",
+            Some(vec!["api.foo.example".to_string()]),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+    assert_eq!(grants.len(), 1);
+    let perms = kinetix::plugins::store::permissions(&pool, "dev.example.foo")
+        .await
+        .unwrap();
+    assert_eq!(perms.len(), 1);
+    assert_eq!(perms[0].permission, "network_hosts");
+    assert_eq!(perms[0].value_json, "[\"api.foo.example\"]");
+
+    // A host not declared by the manifest cannot be approved.
+    let err = m
+        .approve_permissions_scoped(
+            "dev.example.foo",
+            Some(vec!["evil.example".to_string()]),
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("not declared"), "{err}");
 }
 
 #[tokio::test]

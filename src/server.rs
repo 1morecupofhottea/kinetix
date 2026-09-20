@@ -119,7 +119,6 @@ pub async fn run(config: Arc<Config>) -> Result<()> {
     let state = match PluginManager::new(
         pool.clone(),
         state.crypto.clone(),
-        state.http.clone(),
         HostPolicy {
             allow_private_network: config.allow_private_upstreams,
             ..HostPolicy::default()

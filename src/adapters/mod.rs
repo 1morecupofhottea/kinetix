@@ -143,6 +143,16 @@ impl AdapterRegistry {
     pub fn register_plugin(&self, reference: impl Into<String>, adapter: Arc<dyn Adapter>) {
         self.plugin.insert(reference.into(), adapter);
     }
+
+    /// Remove every adapter registered for a plugin id: the namespaced
+    /// `plugin:<id>/<cap>` keys and the bare id. Called when a plugin is
+    /// disabled or removed so a stale adapter cannot keep serving traffic (and
+    /// cannot hold a live handle to the plugin manager).
+    pub fn unregister_plugin(&self, id: &str) {
+        let namespaced = format!("plugin:{id}/");
+        self.plugin
+            .retain(|key, _| key != id && !key.starts_with(&namespaced));
+    }
 }
 
 impl Default for AdapterRegistry {
