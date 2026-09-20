@@ -71,10 +71,25 @@ scripts/ci.sh
   scripts/compat-matrix.sh 127.0.0.1:8186
   ```
 
-## Submitting Pull Requests
+## Submitting Changes & Push Policy
 
-1. Create a feature branch off `main` (`git checkout -b feat/your-feature-name`).
+1. Create a feature branch off `main` or commit locally.
 2. Keep commits atomic and write descriptive commit messages (e.g. `feat(frontends): add foo`, `fix(adapters): handle bar`).
 3. If introducing changes to wire formats, add corresponding test cases in `tests/decode_fixtures.rs`, `tests/wire_fixtures.rs`, or the compatibility matrix.
-4. Run `scripts/ci.sh` to ensure all checks pass.
-5. Push your branch and open a Pull Request against `main`.
+4. Run `scripts/ci.sh` locally to ensure all checks pass before pushing.
+5. **Conserve GitHub Actions resources**: Do not push every intermediate commit. Batch commits locally and push when a cohesive milestone is ready.
+
+## Local Release & Publishing
+
+Releases are built locally on the maintainer system to conserve GitHub Actions runner minutes:
+
+```bash
+# Build multi-arch Linux packages (x86_64 and aarch64) locally
+scripts/release-local.sh v0.1.x
+
+# Build and publish directly to GitHub Releases via gh CLI
+scripts/release-local.sh v0.1.x --publish
+```
+
+The script builds both `x86_64-unknown-linux-gnu` (native) and `aarch64-unknown-linux-gnu` (via `cross`), packages `.tar.gz` archives and individual `.sha256` files, computes the canonical `SHA256SUMS`, and pushes the release assets to GitHub.
+

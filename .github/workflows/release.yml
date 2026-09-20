@@ -1,14 +1,12 @@
 name: release
 
-# Publishes prebuilt Linux binaries (x86_64 + aarch64) to a GitHub Release when
-# a version tag is pushed, e.g. `git tag v0.1.0 && git push origin v0.1.0`.
+# Local-first release policy:
+# Releases and binary builds are produced and published locally by the maintainer
+# using `scripts/release-local.sh <tag> --publish` to avoid wasting GitHub Actions runner hours.
 #
-# Releases are intentionally tag-driven: nothing is published unless a version
-# tag is explicitly created (the maintainer decides which versions ship).
+# This workflow is kept strictly for manual on-demand workflow_dispatch if remote builds
+# are ever explicitly requested by the maintainer.
 on:
-  push:
-    tags:
-      - 'v*.*.*'
   workflow_dispatch:
     inputs:
       tag:
@@ -74,8 +72,6 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      # Builds the target (using `cross` for non-native targets) and
-      # uploads `kinetix-<tag>-<target>.tar.gz` to the release.
       - name: Build and upload binaries
         uses: taiki-e/upload-rust-binary-action@v1
         with:
@@ -98,21 +94,18 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      # Download all matrix release archives and compute unified SHA256SUMS
       - name: Generate SHA256SUMS and attach to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
-          mkdir -p dist
-          cd dist
-          gh release download "$TAG" --pattern "kinetix-*.tar.gz" --repo "${{ github.repository }}"
+          mkdir -p /tmp/release-assets
+          cd /tmp/release-assets
+          gh release download "$TAG" -p "kinetix-*.tar.gz" --repo "${{ github.repository }}"
           sha256sum kinetix-*.tar.gz > SHA256SUMS
-          cat SHA256SUMS
-          gh release upload "$TAG" SHA256SUMS --repo "${{ github.repository }}" --clobber
+          gh release upload "$TAG" SHA256SUMS --clobber --repo "${{ github.repository }}"
 
-      # Attest build provenance for released binary archives
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: 'dist/kinetix-*.tar.gz'
+          subject-path: '/tmp/release-assets/kinetix-*.tar.gz'
