@@ -124,6 +124,27 @@ pub fn build(state: AppState) -> Router {
         )
         .route("/exports/{name}", delete(admin::delete_export))
         .route("/metrics", get(admin::metrics))
+        // plugins (post-v1; docs/KINETIX-PLUGIN-ARCHITECTURE.md §20)
+        .route("/plugins", get(admin::list_plugins))
+        .route("/plugins/install", post(admin::install_plugin))
+        .route(
+            "/plugins/{id}",
+            get(admin::get_plugin).delete(admin::remove_plugin),
+        )
+        .route("/plugins/{id}/enable", post(admin::enable_plugin))
+        .route("/plugins/{id}/disable", post(admin::disable_plugin))
+        .route("/plugins/{id}/validate", post(admin::validate_plugin))
+        .route("/plugins/{id}/permissions", get(admin::plugin_permissions))
+        .route(
+            "/plugins/{id}/permissions/approve",
+            post(admin::approve_plugin_permissions),
+        )
+        .route(
+            "/plugins/{id}/permissions/revoke",
+            post(admin::revoke_plugin_permissions),
+        )
+        .route("/plugins/{id}/audit", get(admin::plugin_audit))
+        .route("/plugins/{id}/metrics", get(admin::plugin_metrics))
         // Admin mutations fail closed while the control-plane store is degraded
         // (NFR-2.7). Reads stay available.
         .layer(axum::middleware::from_fn_with_state(

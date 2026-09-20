@@ -37,6 +37,23 @@ pub struct TraceStep {
     pub elapsed_ms: u64,
 }
 
+/// One plugin-contributed routing fact, rendered in the Route Trace (§19).
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginFactTrace {
+    pub fact: String,
+    pub value: serde_json::Value,
+    pub source: serde_json::Value,
+}
+
+/// A failed routing-fact provider, rendered in the Route Trace as `unknown`
+/// **with the reason** so explainability does not degrade where routing is
+/// hardest (§6.4, §19).
+#[derive(Debug, Clone, Serialize)]
+pub struct PluginFactFailureTrace {
+    pub plugin: String,
+    pub result: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RouteTrace {
     pub request_id: String,
@@ -57,6 +74,12 @@ pub struct RouteTrace {
     pub steps: Vec<TraceStep>,
     /// Client-visible warnings (e.g. strip_with_warning portability actions).
     pub warnings: Vec<String>,
+    /// Plugin-contributed facts used for this request (§19).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub plugin_facts: Vec<PluginFactTrace>,
+    /// Plugin fact-provider failures, recorded as `unknown` with a reason.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub plugin_fact_failures: Vec<PluginFactFailureTrace>,
     #[serde(skip)]
     started: Instant,
 }
@@ -74,6 +97,8 @@ impl RouteTrace {
             outcome: "failed".into(),
             steps: Vec::new(),
             warnings: Vec::new(),
+            plugin_facts: Vec::new(),
+            plugin_fact_failures: Vec::new(),
             started: Instant::now(),
         }
     }
@@ -129,10 +154,46 @@ impl RouteTrace {
         self.step("result", None, format!("outcome={outcome}"));
     }
 
+    pub fn plugin_fact(
+        &mut self,
+        name: &str,
+        value: &serde_json::Value,
+        source: &serde_json::Value,
+    ) {
+        self.plugin_facts.push(PluginFactTrace {
+            fact: name.to_string(),
+            value: value.clone(),
+            source: source.clone(),
+        });
+        self.steps.push(TraceStep {
+            stage: "plugin_fact".into(),
+            target: Some(name.to_string()),
+            eligible: None,
+            predicate: None,
+            detail: format!("= {value}"),
+            elapsed_ms: self.started.elapsed().as_millis() as u64,
+        });
+    }
+
+    /// Record a routing-fact provider failure as `unknown` with a reason.
+    pub fn plugin_fact_failure(&mut self, plugin_id: &str, reason: &str) {
+        self.plugin_fact_failures.push(PluginFactFailureTrace {
+            plugin: plugin_id.to_string(),
+            result: "unknown".into(),
+        });
+        self.steps.push(TraceStep {
+            stage: "plugin_fact_failure".into(),
+            target: Some(plugin_id.to_string()),
+            eligible: None,
+            predicate: Some("unknown".into()),
+            detail: format!("fact provider failed: {reason}"),
+            elapsed_ms: self.started.elapsed().as_millis() as u64,
+        });
+    }
+
     pub fn steps_json(&self) -> String {
         serde_json::to_string(&self.steps).unwrap_or_else(|_| "[]".into())
     }
-
     pub fn warnings_json(&self) -> String {
         serde_json::to_string(&self.warnings).unwrap_or_else(|_| "[]".into())
     }

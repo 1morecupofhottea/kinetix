@@ -309,6 +309,13 @@ pub struct ProviderRow {
     pub credential_hosts: String,
     pub allow_insecure_tls: i64,
     pub created_at: String,
+    /// §6.0 plugin binding: `plugin:<id>/<capability>` or empty for native.
+    #[serde(default)]
+    pub wire_plugin: String,
+    #[serde(default)]
+    pub credential_plugin: String,
+    #[serde(default)]
+    pub model_source_plugin: String,
 }
 
 impl ProviderRow {
@@ -347,6 +354,20 @@ impl ProviderRow {
             .ok()
             .and_then(|u| u.host_str().map(|h| h.to_string()))
     }
+    /// The plugin capability this provider's outbound wire format is bound to
+    /// (§6.0), if any.
+    pub fn wire_plugin_ref(&self) -> Option<crate::plugins::PluginRef> {
+        crate::plugins::PluginRef::parse(&self.wire_plugin)
+    }
+    /// The plugin capability supplying this provider's credentials (§6.0).
+    pub fn credential_plugin_ref(&self) -> Option<crate::plugins::PluginRef> {
+        crate::plugins::PluginRef::parse(&self.credential_plugin)
+    }
+    /// The plugin capability supplying this provider's model discovery (§6.0).
+    pub fn model_source_plugin_ref(&self) -> Option<crate::plugins::PluginRef> {
+        crate::plugins::PluginRef::parse(&self.model_source_plugin)
+    }
+
     /// Whether a destination host is authorized to receive this provider's
     /// credential (NFR-3.11).
     pub fn host_authorized(&self, host: &str) -> bool {
@@ -394,6 +415,10 @@ pub struct NewProvider<'a> {
     pub follow_redirects: bool,
     pub credential_hosts: &'a str,
     pub allow_insecure_tls: bool,
+    /// §6.0 plugin bindings (`plugin:<id>/<cap>` or empty).
+    pub wire_plugin: &'a str,
+    pub credential_plugin: &'a str,
+    pub model_source_plugin: &'a str,
 }
 
 pub async fn insert_provider(pool: &Pool, p: &NewProvider<'_>) -> Result<String> {
@@ -402,8 +427,9 @@ pub async fn insert_provider(pool: &Pool, p: &NewProvider<'_>) -> Result<String>
         "INSERT INTO providers
          (id, name, base_url, wire_format, auth_scheme, custom_header_name, custom_param_name,
           extra_headers, timeout_ms, capability_mode, models_path, rate_limit_rules, enabled,
-          follow_redirects, credential_hosts, allow_insecure_tls, created_at)
-         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?)",
+          follow_redirects, credential_hosts, allow_insecure_tls, created_at,
+          wire_plugin, credential_plugin, model_source_plugin)
+         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,1,?,?,?,?,?,?,?)",
     )
     .bind(&id)
     .bind(p.name)
@@ -421,6 +447,9 @@ pub async fn insert_provider(pool: &Pool, p: &NewProvider<'_>) -> Result<String>
     .bind(p.credential_hosts)
     .bind(p.allow_insecure_tls as i64)
     .bind(now_iso())
+    .bind(p.wire_plugin)
+    .bind(p.credential_plugin)
+    .bind(p.model_source_plugin)
     .execute(pool)
     .await?;
     Ok(id)
@@ -451,11 +480,15 @@ pub async fn update_provider(
     follow_redirects: bool,
     credential_hosts: &str,
     allow_insecure_tls: bool,
+    wire_plugin: &str,
+    credential_plugin: &str,
+    model_source_plugin: &str,
 ) -> Result<()> {
     sqlx::query(
         "UPDATE providers SET name=?, base_url=?, wire_format=?, auth_scheme=?, custom_header_name=?,
          custom_param_name=?, extra_headers=?, timeout_ms=?, capability_mode=?, models_path=?,
-         follow_redirects=?, credential_hosts=?, allow_insecure_tls=? WHERE id=?",
+         follow_redirects=?, credential_hosts=?, allow_insecure_tls=?,
+         wire_plugin=?, credential_plugin=?, model_source_plugin=? WHERE id=?",
     )
     .bind(name)
     .bind(base_url)
@@ -470,6 +503,9 @@ pub async fn update_provider(
     .bind(follow_redirects as i64)
     .bind(credential_hosts)
     .bind(allow_insecure_tls as i64)
+    .bind(wire_plugin)
+    .bind(credential_plugin)
+    .bind(model_source_plugin)
     .bind(id)
     .execute(pool)
     .await?;
@@ -711,6 +747,10 @@ pub struct ModelRow {
     pub extra_request: String,
     pub discovery: String,
     pub created_at: String,
+    /// §6.3 provenance tag for opaque provider-state produced by a plugin
+    /// adapter (empty when produced natively).
+    #[serde(default)]
+    pub opaque_state_plugin: String,
 }
 
 impl ModelRow {

@@ -68,6 +68,8 @@ pub enum Command {
     Route(RouteArgs),
     /// Manage model aliases.
     Alias(AliasArgs),
+    /// Manage plugins (post-v1; docs/KINETIX-PLUGIN-ARCHITECTURE.md).
+    Plugin(PluginArgs),
     /// Export usage/logs to disk (JSONL + CSV).
     Export(ExportArgs),
     /// Run or list database backups.
@@ -305,6 +307,48 @@ pub enum AliasAction {
 }
 
 #[derive(Args, Debug, Clone)]
+pub struct PluginArgs {
+    #[command(subcommand)]
+    pub action: PluginAction,
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum PluginAction {
+    /// Install a `.kxp` package (installed-disabled).
+    Install {
+        /// Path to a `.kxp` file.
+        path: String,
+        /// Expected SHA-256 (optional; recorded regardless).
+        #[arg(long)]
+        sha256: Option<String>,
+        /// Trusted Ed25519 publisher public key (base64 or hex); repeatable.
+        #[arg(long = "trusted-key")]
+        trusted_keys: Vec<String>,
+        /// Allow a present-but-untrusted signature.
+        #[arg(long)]
+        allow_untrusted_signature: bool,
+    },
+    /// List installed plugins.
+    List,
+    /// Show one plugin's manifest, permissions, and runtime state.
+    Show { id: String },
+    /// Enable an installed plugin.
+    Enable { id: String },
+    /// Disable a plugin (new requests stop referencing it).
+    Disable { id: String },
+    /// Validate a plugin by instantiating it (self-check).
+    Validate { id: String },
+    /// Remove a plugin and its stored state.
+    Remove { id: String },
+    /// List approved permission grants.
+    Permissions { id: String },
+    /// Approve the plugin's currently declared permission set (all-or-nothing).
+    Approve { id: String },
+    /// Revoke one permission grant (KV state is retained).
+    Revoke { id: String, permission: String },
+}
+
+#[derive(Args, Debug, Clone)]
 pub struct ExportArgs {
     #[command(subcommand)]
     pub action: ExportAction,
@@ -405,6 +449,7 @@ pub async fn run(cli: Cli) -> Result<()> {
         Command::Account(a) => cmd_account(&cli, a).await,
         Command::Route(a) => cmd_route(&cli, a).await,
         Command::Alias(a) => cmd_alias(&cli, a).await,
+        Command::Plugin(a) => cmd_plugin(&cli, a).await,
         Command::Export(a) => cmd_export(&cli, a).await,
         Command::Backup(a) => cmd_backup(&cli, a).await,
         Command::Uninstall(a) => cmd_uninstall(&cli, a).await,
@@ -971,6 +1016,157 @@ async fn cmd_alias(cli: &Cli, args: AliasArgs) -> Result<()> {
             Ok(())
         }
     }
+}
+
+async fn cmd_plugin(cli: &Cli, args: PluginArgs) -> Result<()> {
+    let (_, pool, crypto) = open(cli).await?;
+    let crypto = std::sync::Arc::new(crypto);
+    let http = reqwest::Client::builder()
+        .user_agent(concat!("kinetix/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .context("building HTTP client")?;
+    let manager = crate::plugins::PluginManager::new(
+        pool.clone(),
+        crypto,
+        http,
+        crate::plugins::HostPolicy::default(),
+    )
+    .context("building plugin host")?;
+
+    match args.action {
+        PluginAction::Install {
+            path,
+            sha256,
+            trusted_keys,
+            allow_untrusted_signature,
+        } => {
+            let bytes = std::fs::read(&path).with_context(|| format!("reading {path}"))?;
+            let trusted: Vec<[u8; 32]> =
+                trusted_keys.iter().filter_map(|k| decode_key(k)).collect();
+            let outcome = manager
+                .install(
+                    &bytes,
+                    sha256.as_deref(),
+                    &trusted,
+                    allow_untrusted_signature,
+                )
+                .await?;
+            println!(
+                "installed {} v{} (signature: {}); {} capabilities; installed-disabled",
+                outcome.id,
+                outcome.version,
+                outcome.signature.as_str(),
+                outcome.provides.len()
+            );
+            for p in &outcome.provides {
+                println!("  provides {:?} = {}", p.capability, p.name);
+            }
+            Ok(())
+        }
+        PluginAction::List => {
+            for p in manager.list().await? {
+                let m = p.manifest();
+                println!(
+                    "{}\t{}\t{}\t{}",
+                    p.id,
+                    p.version,
+                    p.status().as_str(),
+                    m.map(|m| m.name).unwrap_or_default()
+                );
+            }
+            Ok(())
+        }
+        PluginAction::Show { id } => {
+            let row = manager
+                .get(&id)
+                .await?
+                .with_context(|| format!("plugin '{id}' is not installed"))?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&crate::plugins::manager::manifest_summary(&row))?
+            );
+            Ok(())
+        }
+        PluginAction::Enable { id } => {
+            manager.enable(&id).await?;
+            println!("enabled '{id}'");
+            Ok(())
+        }
+        PluginAction::Disable { id } => {
+            manager.disable(&id).await?;
+            println!("disabled '{id}'");
+            Ok(())
+        }
+        PluginAction::Validate { id } => {
+            let provides = manager.validate(&id).await?;
+            println!("'{id}' validates; provides {} capabilities", provides.len());
+            Ok(())
+        }
+        PluginAction::Remove { id } => {
+            manager.remove(&id).await?;
+            println!("removed '{id}'");
+            Ok(())
+        }
+        PluginAction::Permissions { id } => {
+            for g in crate::plugins::store::permissions(&pool, &id).await? {
+                println!("{}\t{}", g.permission, g.value_json);
+            }
+            Ok(())
+        }
+        PluginAction::Approve { id } => {
+            let row = manager
+                .get(&id)
+                .await?
+                .with_context(|| format!("plugin '{id}' is not installed"))?;
+            let manifest = row
+                .manifest()
+                .context("plugin has an unreadable manifest")?;
+            let grants = crate::plugins::manager::permission_grants(&manifest);
+            sqlx::query("DELETE FROM plugin_permissions WHERE plugin_id = ?")
+                .bind(&id)
+                .execute(&pool)
+                .await?;
+            for g in &grants {
+                sqlx::query(
+                    "INSERT INTO plugin_permissions (plugin_id, permission, value_json, approved_at)
+                     VALUES (?,?,?,?)",
+                )
+                .bind(&id)
+                .bind(&g.permission)
+                .bind(&g.value_json)
+                .bind(db::now_iso())
+                .execute(&pool)
+                .await?;
+            }
+            println!("approved {} grant(s) for '{id}'", grants.len());
+            Ok(())
+        }
+        PluginAction::Revoke { id, permission } => {
+            sqlx::query("DELETE FROM plugin_permissions WHERE plugin_id = ? AND permission = ?")
+                .bind(&id)
+                .bind(&permission)
+                .execute(&pool)
+                .await?;
+            println!("revoked '{permission}' from '{id}' (KV state retained)");
+            Ok(())
+        }
+    }
+}
+
+/// Decode a base64 or hex Ed25519 public key.
+fn decode_key(k: &str) -> Option<[u8; 32]> {
+    use base64::Engine;
+    if let Ok(b) = base64::engine::general_purpose::STANDARD.decode(k.trim()) {
+        if let Ok(arr) = <[u8; 32]>::try_from(b.as_slice()) {
+            return Some(arr);
+        }
+    }
+    if let Ok(b) = hex::decode(k.trim()) {
+        if let Ok(arr) = <[u8; 32]>::try_from(b.as_slice()) {
+            return Some(arr);
+        }
+    }
+    None
 }
 
 async fn cmd_export(cli: &Cli, args: ExportArgs) -> Result<()> {

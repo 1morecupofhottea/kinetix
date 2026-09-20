@@ -1,0 +1,331 @@
+//! Plugin type definitions shared across the host, manifest, store, and manager.
+//!
+//! Mirrors docs/KINETIX-PLUGIN-ARCHITECTURE.md: a plugin declares the
+//! capabilities it *provides* and the permissions it *requests*; the host
+//! enforces everything else.
+
+use serde::{Deserialize, Serialize};
+
+/// The host plugin API major version this build implements.
+pub const PLUGIN_API_MAJOR: u32 = 1;
+
+/// The supported manifest schema version.
+pub const MANIFEST_VERSION: u32 = 1;
+
+/// The names of the capabilities a plugin can provide (§6).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Capability {
+    CredentialStrategy,
+    ModelSource,
+    ProviderAdapter,
+    RoutingFacts,
+    HealthProbe,
+    Hooks,
+}
+
+impl Capability {
+    /// The `[provides]` key for this capability.
+    pub fn manifest_key(&self) -> &'static str {
+        match self {
+            Capability::CredentialStrategy => "credential_strategies",
+            Capability::ModelSource => "model_sources",
+            Capability::ProviderAdapter => "provider_adapters",
+            Capability::RoutingFacts => "routing_facts",
+            Capability::HealthProbe => "health_probes",
+            Capability::Hooks => "hooks",
+        }
+    }
+
+    /// Whether this capability requires the streaming adapter world (§7.1).
+    pub fn is_adapter(&self) -> bool {
+        matches!(self, Capability::ProviderAdapter)
+    }
+
+    /// Whether a routing-facts capability is subject to the determinism rules
+    /// in §6.4 (pure or cached).
+    pub fn is_routing_fact(&self) -> bool {
+        matches!(self, Capability::RoutingFacts)
+    }
+}
+
+/// A concrete provided capability: `(capability, name)`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct Provided {
+    pub capability: Capability,
+    pub name: String,
+}
+
+/// The namespaced reference form `plugin:<id>/<capability-name>` (§6.0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginRef {
+    pub plugin_id: String,
+    pub capability: String,
+}
+
+impl PluginRef {
+    pub fn parse(s: &str) -> Option<PluginRef> {
+        let rest = s.strip_prefix("plugin:")?;
+        let (id, capability) = rest.split_once('/')?;
+        if id.is_empty() || capability.is_empty() {
+            return None;
+        }
+        Some(PluginRef {
+            plugin_id: id.to_string(),
+            capability: capability.to_string(),
+        })
+    }
+
+    pub fn to_string_ref(&self) -> String {
+        format!("plugin:{}/{}", self.plugin_id, self.capability)
+    }
+
+    /// The adapter-registry key: the plugin id itself, since one plugin hosts a
+    /// single `provider-adapter` capability. Accepts either the full
+    /// `plugin:<id>/<cap>` reference or a bare plugin id.
+    pub fn adapter_key(s: &str) -> String {
+        match Self::parse(s) {
+            Some(r) => r.plugin_id,
+            None => s.to_string(),
+        }
+    }
+}
+
+/// Declared permissions (§5, §8, §9).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Permissions {
+    #[serde(default)]
+    pub network_hosts: Vec<String>,
+    #[serde(default)]
+    pub credential_scopes: Vec<String>,
+    /// Plaintext credential access (§8.2). Higher risk; off unless requested.
+    #[serde(default)]
+    pub credential_read: bool,
+}
+
+/// Manifest `[limits]` (§5, §14). These are *requests*; host policy wins.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Limits {
+    #[serde(default = "default_memory")]
+    pub memory: String,
+    #[serde(default = "default_wall_time")]
+    pub wall_time_ms: u64,
+    #[serde(default = "default_outbound")]
+    pub max_outbound_requests: u32,
+    #[serde(default = "default_body")]
+    pub max_http_body: String,
+    #[serde(default = "default_storage")]
+    pub storage: String,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Limits {
+            memory: default_memory(),
+            wall_time_ms: default_wall_time(),
+            max_outbound_requests: default_outbound(),
+            max_http_body: default_body(),
+            storage: default_storage(),
+        }
+    }
+}
+
+fn default_memory() -> String {
+    "64MiB".into()
+}
+fn default_wall_time() -> u64 {
+    5000
+}
+fn default_outbound() -> u32 {
+    4
+}
+fn default_body() -> String {
+    "4MiB".into()
+}
+fn default_storage() -> String {
+    "2MiB".into()
+}
+
+/// A parsed `plugin.toml` (§5).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Manifest {
+    pub manifest_version: u32,
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub plugin_api: String,
+    #[serde(default)]
+    pub provides: Provides,
+    #[serde(default)]
+    pub permissions: Permissions,
+    #[serde(default)]
+    pub limits: Limits,
+    /// Routing-fact determinism mode (§6.4): `"pure"` (default) or `"cached"`.
+    /// A `pure` plugin may not import outbound HTTP.
+    #[serde(default = "default_routing_mode")]
+    pub routing_facts_mode: String,
+}
+
+fn default_routing_mode() -> String {
+    "pure".into()
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Provides {
+    #[serde(default)]
+    pub credential_strategies: Vec<String>,
+    #[serde(default)]
+    pub model_sources: Vec<String>,
+    #[serde(default)]
+    pub provider_adapters: Vec<String>,
+    #[serde(default)]
+    pub routing_facts: Vec<String>,
+    #[serde(default)]
+    pub health_probes: Vec<String>,
+    #[serde(default)]
+    pub hooks: Vec<String>,
+}
+
+impl Provides {
+    pub fn provided(&self) -> Vec<Provided> {
+        let mut out = Vec::new();
+        let mut add = |cap: Capability, names: &[String]| {
+            for n in names {
+                out.push(Provided {
+                    capability: cap,
+                    name: n.clone(),
+                });
+            }
+        };
+        add(Capability::CredentialStrategy, &self.credential_strategies);
+        add(Capability::ModelSource, &self.model_sources);
+        add(Capability::ProviderAdapter, &self.provider_adapters);
+        add(Capability::RoutingFacts, &self.routing_facts);
+        add(Capability::HealthProbe, &self.health_probes);
+        add(Capability::Hooks, &self.hooks);
+        out
+    }
+}
+
+impl Manifest {
+    /// The declared API major, e.g. `"1"` or `"1.2"` -> `1`.
+    pub fn api_major(&self) -> Option<u32> {
+        self.plugin_api
+            .split('.')
+            .next()
+            .and_then(|s| s.parse::<u32>().ok())
+    }
+
+    /// Whether the manifest is compatible with this host build.
+    pub fn compatible(&self) -> bool {
+        self.manifest_version == MANIFEST_VERSION && self.api_major() == Some(PLUGIN_API_MAJOR)
+    }
+}
+
+/// Runtime status of an installed plugin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PluginStatus {
+    /// Installed but not enabled; cannot be referenced by config.
+    Disabled,
+    Enabled,
+    /// Disabled by the host after repeated faults (circuit breaker).
+    Faulted,
+}
+
+impl PluginStatus {
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "enabled" => PluginStatus::Enabled,
+            "faulted" => PluginStatus::Faulted,
+            _ => PluginStatus::Disabled,
+        }
+    }
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PluginStatus::Disabled => "disabled",
+            PluginStatus::Enabled => "enabled",
+            PluginStatus::Faulted => "faulted",
+        }
+    }
+    pub fn is_enabled(&self) -> bool {
+        matches!(self, PluginStatus::Enabled)
+    }
+}
+
+/// Circuit-breaker state (§15).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CircuitState {
+    Closed,
+    Open,
+    HalfOpen,
+}
+
+impl CircuitState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            CircuitState::Closed => "closed",
+            CircuitState::Open => "open",
+            CircuitState::HalfOpen => "half_open",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "open" => CircuitState::Open,
+            "half_open" => CircuitState::HalfOpen,
+            _ => CircuitState::Closed,
+        }
+    }
+}
+
+/// Parse a human byte size like `"64MiB"`, `"2MiB"`, `"4KiB"`, or a bare
+/// number of bytes.
+pub fn parse_size(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num, mult) = if let Some(n) = s.strip_suffix("GiB") {
+        (n, 1024 * 1024 * 1024)
+    } else if let Some(n) = s.strip_suffix("MiB") {
+        (n, 1024 * 1024)
+    } else if let Some(n) = s.strip_suffix("KiB") {
+        (n, 1024)
+    } else if let Some(n) = s.strip_suffix("GB") {
+        (n, 1_000_000_000)
+    } else if let Some(n) = s.strip_suffix("MB") {
+        (n, 1_000_000)
+    } else if let Some(n) = s.strip_suffix("KB") {
+        (n, 1_000)
+    } else if let Some(n) = s.strip_suffix('B') {
+        (n, 1)
+    } else {
+        (s, 1)
+    };
+    num.trim().parse::<u64>().ok().map(|n| n * mult)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plugin_ref_round_trips() {
+        let r = PluginRef::parse("plugin:dev.example.foo/foo-oauth").unwrap();
+        assert_eq!(r.plugin_id, "dev.example.foo");
+        assert_eq!(r.capability, "foo-oauth");
+        assert_eq!(r.to_string_ref(), "plugin:dev.example.foo/foo-oauth");
+        assert!(PluginRef::parse("dev.example.foo/foo-oauth").is_none());
+        assert!(PluginRef::parse("plugin:nocap").is_none());
+    }
+
+    #[test]
+    fn parses_sizes() {
+        assert_eq!(parse_size("64MiB"), Some(64 * 1024 * 1024));
+        assert_eq!(parse_size("2MiB"), Some(2 * 1024 * 1024));
+        assert_eq!(parse_size("4KiB"), Some(4096));
+        assert_eq!(parse_size("1024"), Some(1024));
+        assert_eq!(parse_size(""), None);
+    }
+}

@@ -489,6 +489,13 @@ pub struct BootstrapProvider {
     pub timeout_ms: u64,
     #[serde(default = "default_permissive")]
     pub capability_mode: String,
+    /// §6.0 plugin capability bindings (`plugin:<id>/<cap>`).
+    #[serde(default)]
+    pub wire_plugin: Option<String>,
+    #[serde(default)]
+    pub credential_plugin: Option<String>,
+    #[serde(default)]
+    pub model_source_plugin: Option<String>,
     /// Upstream credentials (API keys) to seed into the pool.
     #[serde(default)]
     pub accounts: Vec<BootstrapAccount>,

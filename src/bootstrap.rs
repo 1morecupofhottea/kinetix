@@ -58,6 +58,9 @@ pub async fn seed_if_empty(
                 follow_redirects: false,
                 credential_hosts: "",
                 allow_insecure_tls: false,
+                wire_plugin: p.wire_plugin.as_deref().unwrap_or(""),
+                credential_plugin: p.credential_plugin.as_deref().unwrap_or(""),
+                model_source_plugin: p.model_source_plugin.as_deref().unwrap_or(""),
             },
         )
         .await?;

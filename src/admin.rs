@@ -671,6 +671,13 @@ pub struct ProviderBody {
     /// NFR-3.12: explicit dev-mode opt-out of TLS verification.
     #[serde(default)]
     pub allow_insecure_tls: bool,
+    /// §6.0: plugin capability bindings (`plugin:<id>/<cap>` or empty).
+    #[serde(default)]
+    pub wire_plugin: String,
+    #[serde(default)]
+    pub credential_plugin: String,
+    #[serde(default)]
+    pub model_source_plugin: String,
     /// Optional initial credential.
     pub api_key: Option<String>,
     pub account_label: Option<String>,
@@ -714,6 +721,9 @@ pub async fn create_provider(
             follow_redirects: body.follow_redirects,
             credential_hosts: &body.credential_hosts,
             allow_insecure_tls: body.allow_insecure_tls,
+            wire_plugin: &body.wire_plugin,
+            credential_plugin: &body.credential_plugin,
+            model_source_plugin: &body.model_source_plugin,
         },
     )
     .await
@@ -784,6 +794,9 @@ pub async fn update_provider(
         body.follow_redirects,
         &body.credential_hosts,
         body.allow_insecure_tls,
+        &body.wire_plugin,
+        &body.credential_plugin,
+        &body.model_source_plugin,
     )
     .await
     .map_err(ApiError::internal)?;
@@ -858,89 +871,50 @@ pub async fn discover_models(
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("provider not found"))?;
-    let accounts = db::accounts_for_provider(&state.pool, &id)
-        .await
-        .map_err(ApiError::internal)?;
-    let account = accounts
-        .into_iter()
-        .next()
-        .ok_or_else(|| ApiError::bad("provider has no credentials to discover with"))?;
-    let credential = state
-        .credentials
-        .resolve(&account)
-        .await
-        .map(|c| {
-            crate::alerts::record_credential_success();
-            c
-        })
-        .map_err(|e| {
-            crate::alerts::record_credential_failure();
-            ApiError::internal(e)
-        })?
-        .secret;
 
-    let wire = provider.wire();
-    let adapter = state.adapters.for_format(wire);
-    let path = provider
-        .models_path
-        .clone()
-        .unwrap_or_else(|| adapter.default_models_path().to_string());
-    let base = provider.base_url.trim_end_matches('/');
-    let url = if path.starts_with('/') {
-        format!("{base}{path}")
-    } else {
-        format!("{base}/{path}")
-    };
-
-    // Build a context so auth can be applied.
-    let dummy_model = db::ModelRow {
-        id: "discovery".into(),
-        provider_id: provider.id.clone(),
-        upstream_id: "discovery".into(),
-        display_name: "discovery".into(),
-        enabled: 1,
-        context_window: None,
-        max_output_tokens: None,
-        capabilities: "{}".into(),
-        prices: "{}".into(),
-        parameters: "{}".into(),
-        thinking_map: "{}".into(),
-        extra_request: "{}".into(),
-        discovery: "{}".into(),
-        created_at: db::now_iso(),
-    };
-    let ctx = UpstreamContext {
-        provider: &provider,
-        model: &dummy_model,
-        credential,
-    };
-    let mut req = state
-        .http
-        .get(&url)
-        .timeout(std::time::Duration::from_millis(provider.timeout_ms as u64));
-    req = adapter.apply_auth(&ctx, req);
-    for (k, v) in provider.extra_headers_map() {
-        req = req.header(k, v);
-    }
-
-    let resp = req.send().await.map_err(|e| {
-        ApiError::bad(format!(
-            "discovery request failed: {}",
-            crate::crypto::redact(&e.to_string())
-        ))
-    })?;
-    let status = resp.status();
-    let body_text = resp.text().await.unwrap_or_default();
-    if !status.is_success() {
-        return Err(ApiError::bad(format!(
-            "upstream returned HTTP {}: {}",
-            status.as_u16(),
-            crate::crypto::redact(&truncate(&body_text, 400))
-        )));
-    }
-    let parsed: Value = serde_json::from_str(&body_text)
-        .map_err(|e| ApiError::bad(format!("invalid discovery response: {e}")))?;
-    let discovered = adapter.parse_model_list(&parsed);
+    // A provider bound to a plugin model source (§6.2) discovers through that
+    // plugin instead of the built-in adapter. A bound-but-unavailable plugin
+    // fails closed rather than silently falling back to native discovery
+    // (§6.0).
+    let discovered: Vec<crate::adapters::DiscoveredModel> =
+        if let Some(pref) = provider.model_source_plugin_ref() {
+            let manager = plugin_manager(&state)?;
+            let reference = format!("plugin:{}/{}", pref.plugin_id, pref.capability);
+            if manager
+                .resolve_binding(&reference, crate::plugins::Capability::ModelSource)
+                .await
+                .is_none()
+            {
+                return Err(ApiError::bad(format!(
+                    "provider is bound to unavailable plugin model source '{reference}'"
+                )));
+            }
+            let models_path = provider.models_path.clone().unwrap_or_default();
+            let list = manager
+                .model_discover(
+                    &pref.plugin_id,
+                    &provider.id,
+                    &provider.base_url,
+                    &models_path,
+                )
+                .await
+                .map_err(|f| {
+                    ApiError::bad(format!(
+                        "plugin model discovery failed: {}",
+                        crate::crypto::redact(&f.message())
+                    ))
+                })?;
+            list.into_iter()
+                .map(|m| crate::adapters::DiscoveredModel {
+                    id: m.id,
+                    display_name: m.display_name,
+                    context_window: m.context_window.map(|v| v as i64),
+                    max_output_tokens: m.max_output_tokens.map(|v| v as i64),
+                })
+                .collect()
+        } else {
+            discover_models_native(&state, &provider).await?
+        };
 
     // Mark which are already imported and record the observation (FR-10.5).
     // Discovery never overwrites admin-edited fields — only the `discovery`
@@ -994,6 +968,98 @@ pub async fn discover_models(
         }));
     }
     Ok(Json(json!({ "models": out, "disappeared": disappeared })))
+}
+
+/// Built-in adapter discovery: resolve a credential, call the provider's models
+/// endpoint, and parse the list. Extracted so the plugin path can share the
+/// surrounding import/flag logic.
+async fn discover_models_native(
+    state: &AppState,
+    provider: &db::ProviderRow,
+) -> Result<Vec<crate::adapters::DiscoveredModel>, ApiError> {
+    let accounts = db::accounts_for_provider(&state.pool, &provider.id)
+        .await
+        .map_err(ApiError::internal)?;
+    let account = accounts
+        .into_iter()
+        .next()
+        .ok_or_else(|| ApiError::bad("provider has no credentials to discover with"))?;
+    let credential = state
+        .credential_for(provider, &account)
+        .await
+        .map(|c| {
+            crate::alerts::record_credential_success();
+            c
+        })
+        .map_err(|e| {
+            crate::alerts::record_credential_failure();
+            ApiError::internal(e)
+        })?
+        .secret;
+
+    let wire = provider.wire();
+    let adapter = state.adapters.for_provider(provider);
+    let path = provider
+        .models_path
+        .clone()
+        .unwrap_or_else(|| adapter.default_models_path().to_string());
+    let base = provider.base_url.trim_end_matches('/');
+    let url = if path.starts_with('/') {
+        format!("{base}{path}")
+    } else {
+        format!("{base}/{path}")
+    };
+    let _ = wire;
+
+    let dummy_model = db::ModelRow {
+        id: "discovery".into(),
+        provider_id: provider.id.clone(),
+        upstream_id: "discovery".into(),
+        display_name: "discovery".into(),
+        enabled: 1,
+        context_window: None,
+        max_output_tokens: None,
+        capabilities: "{}".into(),
+        prices: "{}".into(),
+        parameters: "{}".into(),
+        thinking_map: "{}".into(),
+        extra_request: "{}".into(),
+        discovery: "{}".into(),
+        created_at: db::now_iso(),
+        opaque_state_plugin: String::new(),
+    };
+    let ctx = UpstreamContext {
+        provider,
+        model: &dummy_model,
+        credential,
+    };
+    let mut req = state
+        .http
+        .get(&url)
+        .timeout(std::time::Duration::from_millis(provider.timeout_ms as u64));
+    req = adapter.apply_auth(&ctx, req);
+    for (k, v) in provider.extra_headers_map() {
+        req = req.header(k, v);
+    }
+
+    let resp = req.send().await.map_err(|e| {
+        ApiError::bad(format!(
+            "discovery request failed: {}",
+            crate::crypto::redact(&e.to_string())
+        ))
+    })?;
+    let status = resp.status();
+    let body_text = resp.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(ApiError::bad(format!(
+            "upstream returned HTTP {}: {}",
+            status.as_u16(),
+            crate::crypto::redact(&truncate(&body_text, 400))
+        )));
+    }
+    let parsed: Value = serde_json::from_str(&body_text)
+        .map_err(|e| ApiError::bad(format!("invalid discovery response: {e}")))?;
+    Ok(adapter.parse_model_list(&parsed))
 }
 
 /// `POST /admin/api/providers/:id/test` — send a minimal probe (FR-10.11).
@@ -1050,6 +1116,7 @@ pub async fn test_provider(
             extra_request: "{}".into(),
             discovery: "{}".into(),
             created_at: db::now_iso(),
+            opaque_state_plugin: String::new(),
         });
 
     let adapter = state.adapters.for_format(provider.wire());
@@ -3076,6 +3143,9 @@ pub async fn import_config(
                 follow_redirects,
                 credential_hosts,
                 allow_insecure_tls,
+                p["wire_plugin"].as_str().unwrap_or(""),
+                p["credential_plugin"].as_str().unwrap_or(""),
+                p["model_source_plugin"].as_str().unwrap_or(""),
             )
             .await
             .map_err(ApiError::internal)?;
@@ -3097,6 +3167,9 @@ pub async fn import_config(
                     follow_redirects,
                     credential_hosts,
                     allow_insecure_tls,
+                    wire_plugin: p["wire_plugin"].as_str().unwrap_or(""),
+                    credential_plugin: p["credential_plugin"].as_str().unwrap_or(""),
+                    model_source_plugin: p["model_source_plugin"].as_str().unwrap_or(""),
                 },
             )
             .await
@@ -3348,4 +3421,427 @@ pub async fn import_config(
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(json!({ "ok": true, "applied": plan })))
+}
+
+// ===========================================================================
+// Plugins (post-v1; docs/KINETIX-PLUGIN-ARCHITECTURE.md §11, §20, §21)
+// ===========================================================================
+
+#[derive(Deserialize)]
+pub struct PluginInstallBody {
+    /// Base64-encoded `.kxp` package (dashboard/API upload).
+    #[serde(default)]
+    pub package_base64: Option<String>,
+    /// Server-side path to a `.kxp` (operator convenience).
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Expected SHA-256 for a URL/remote install (§11).
+    #[serde(default)]
+    pub sha256: Option<String>,
+    /// Trusted Ed25519 publisher public keys, base64 (§12).
+    #[serde(default)]
+    pub trusted_keys: Vec<String>,
+    /// Explicit override to install an untrusted signature (§12).
+    #[serde(default)]
+    pub allow_untrusted_signature: bool,
+}
+
+fn plugin_bad(e: anyhow::Error) -> ApiError {
+    ApiError::bad(e.to_string())
+}
+
+fn plugin_manager(
+    state: &AppState,
+) -> Result<&std::sync::Arc<crate::plugins::PluginManager>, ApiError> {
+    state.plugin_manager().ok_or_else(|| {
+        ApiError(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "plugin host is not available".into(),
+        )
+    })
+}
+
+/// Register the runtime capability objects an enabled plugin provides (§6.0).
+///
+/// A plugin that declares a `credential_strategies` capability gets a
+/// `PluginCredentialStrategy` so a provider bound to it resolves through the
+/// plugin; a plugin that declares `provider_adapters` gets a plugin-backed
+/// adapter for each declared name. Registration is idempotent — enabling an
+/// already-enabled plugin simply re-registers the same object.
+pub(crate) async fn register_enabled_plugin_capabilities(state: &AppState, id: &str) {
+    let Some(manager) = state.plugin_manager().cloned() else {
+        return;
+    };
+    let crypto = state.crypto.clone();
+    let pool = state.pool.clone();
+    // `enable` has already succeeded, so the row exists and is enabled.
+    let provides = match manager.get(id).await {
+        Ok(Some(row)) => row.manifest().map(|m| m.provides).unwrap_or_default(),
+        _ => return,
+    };
+    if !provides.credential_strategies.is_empty() {
+        let strategy: std::sync::Arc<dyn crate::credentials::CredentialStrategy> =
+            std::sync::Arc::new(crate::plugins::credential::PluginCredentialStrategy::new(
+                manager.clone(),
+                pool,
+                crypto,
+                id,
+            ));
+        state.register_plugin_credential_strategy(id, strategy);
+    }
+    // ProviderAdapter registration (§6.3, §7.1): a plugin adapter is a pure
+    // translation library — core still owns the outbound streaming send. The
+    // `plugin-adapter` world imports no network capability, so registering it
+    // does not widen the plugin's authority.
+    if !provides.provider_adapters.is_empty() {
+        match crate::plugins::adapter::PluginAdapter::new((*manager).clone(), id.to_string()).await
+        {
+            Ok(adapter) => {
+                let adapter: std::sync::Arc<dyn crate::adapters::Adapter> =
+                    std::sync::Arc::new(adapter);
+                // Key by the full namespaced reference for each declared
+                // capability name, plus the bare plugin id (§6.0).
+                for name in &provides.provider_adapters {
+                    state.register_plugin_adapter(format!("plugin:{id}/{name}"), adapter.clone());
+                }
+                state.register_plugin_adapter(id.to_string(), adapter);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    plugin = %id,
+                    error = %e,
+                    "plugin declares provider_adapters but its adapter world could not be loaded; bound providers will fail closed"
+                );
+            }
+        }
+    }
+}
+
+/// `GET /admin/api/plugins` — list installed plugins.
+pub async fn list_plugins(State(state): State<AppState>, _auth: AdminAuth) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let rows = manager.list().await.map_err(ApiError::internal)?;
+    let plugins: Vec<Value> = rows
+        .iter()
+        .map(crate::plugins::manager::manifest_summary)
+        .collect();
+    Ok(Json(json!({ "plugins": plugins })))
+}
+
+/// `GET /admin/api/plugins/{id}` — plugin detail (§21).
+pub async fn get_plugin(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let row = manager
+        .get(&id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("plugin not found"))?;
+    let perms = crate::plugins::store::permissions(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
+    let runtime = crate::plugins::store::runtime_state(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
+    let mut summary = crate::plugins::manager::manifest_summary(&row);
+    summary["permissions_approved"] = json!(perms);
+    summary["runtime"] = json!(runtime);
+    Ok(Json(summary))
+}
+
+/// `POST /admin/api/plugins/install` — install (or upgrade) a package.
+pub async fn install_plugin(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Json(body): Json<PluginInstallBody>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let bytes = if let Some(b64) = &body.package_base64 {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .decode(b64.trim())
+            .map_err(|e| ApiError::bad(format!("invalid package_base64: {e}")))?
+    } else if let Some(path) = &body.path {
+        std::fs::read(path).map_err(|e| ApiError::bad(format!("cannot read {path}: {e}")))?
+    } else {
+        return Err(ApiError::bad("provide package_base64 or path"));
+    };
+
+    let trusted: Vec<[u8; 32]> = body
+        .trusted_keys
+        .iter()
+        .filter_map(|k| decode_key(k))
+        .collect();
+
+    let outcome = manager
+        .install(
+            &bytes,
+            body.sha256.as_deref(),
+            &trusted,
+            body.allow_untrusted_signature,
+        )
+        .await
+        .map_err(plugin_bad)?;
+
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_installed",
+        "plugin",
+        &outcome.id,
+        &outcome.id,
+        &format!(
+            "Installed plugin {} v{} (signature: {}, provides {} capabilities). Installed disabled.",
+            outcome.id,
+            outcome.version,
+            outcome.signature.as_str(),
+            outcome.provides.len()
+        ),
+    )
+    .await;
+
+    Ok(Json(json!({
+        "id": outcome.id,
+        "version": outcome.version,
+        "signature": outcome.signature.as_str(),
+        "provides": outcome.provides,
+        "enabled": false,
+        "note": "installed-disabled; enable is a separate operation",
+    })))
+}
+
+/// `POST /admin/api/plugins/{id}/enable`.
+pub async fn enable_plugin(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    manager.enable(&id).await.map_err(plugin_bad)?;
+    register_enabled_plugin_capabilities(&state, &id).await;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_enabled",
+        "plugin",
+        &id,
+        &id,
+        "Enabled plugin.",
+    )
+    .await;
+    Ok(Json(json!({ "ok": true, "id": id, "enabled": true })))
+}
+
+/// `POST /admin/api/plugins/{id}/disable`.
+pub async fn disable_plugin(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    manager.disable(&id).await.map_err(ApiError::internal)?;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_disabled",
+        "plugin",
+        &id,
+        &id,
+        "Disabled plugin.",
+    )
+    .await;
+    Ok(Json(json!({ "ok": true, "id": id, "enabled": false })))
+}
+
+/// `DELETE /admin/api/plugins/{id}` — remove a plugin.
+pub async fn remove_plugin(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    manager.remove(&id).await.map_err(ApiError::internal)?;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_removed",
+        "plugin",
+        &id,
+        &id,
+        "Removed plugin and its stored state.",
+    )
+    .await;
+    Ok(Json(json!({ "ok": true, "id": id })))
+}
+
+/// `POST /admin/api/plugins/{id}/validate` — re-instantiate and self-check.
+pub async fn validate_plugin(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let provides = manager.validate(&id).await.map_err(plugin_bad)?;
+    Ok(Json(json!({ "ok": true, "id": id, "provides": provides })))
+}
+
+/// `GET /admin/api/plugins/{id}/permissions` — approved grants (§20).
+pub async fn plugin_permissions(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let row = crate::plugins::store::get_plugin(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("plugin not found"))?;
+    let approved = crate::plugins::store::permissions(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
+    let requested = row.manifest().map(|m| m.permissions).unwrap_or_default();
+    Ok(Json(json!({
+        "id": id,
+        "requested": requested,
+        "approved": approved,
+    })))
+}
+
+/// `POST /admin/api/plugins/{id}/permissions/approve` — re-approve the declared
+/// set (all-or-nothing, §20).
+pub async fn approve_plugin_permissions(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let row = crate::plugins::store::get_plugin(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("plugin not found"))?;
+    let manifest = row
+        .manifest()
+        .ok_or_else(|| ApiError::bad("plugin has an unreadable manifest"))?;
+    let grants = crate::plugins::manager::permission_grants(&manifest);
+    // Replace the approved set with the currently declared set.
+    sqlx::query("DELETE FROM plugin_permissions WHERE plugin_id = ?")
+        .bind(&id)
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    for g in &grants {
+        sqlx::query(
+            "INSERT INTO plugin_permissions (plugin_id, permission, value_json, approved_at)
+             VALUES (?,?,?,?)",
+        )
+        .bind(&id)
+        .bind(&g.permission)
+        .bind(&g.value_json)
+        .bind(db::now_iso())
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    }
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_permissions_approved",
+        "plugin",
+        &id,
+        &id,
+        &format!("Approved {} permission grant(s).", grants.len()),
+    )
+    .await;
+    Ok(Json(json!({ "ok": true, "id": id, "approved": grants })))
+}
+
+/// `POST /admin/api/plugins/{id}/permissions/revoke` — revoke a grant (§20).
+/// Revocation is all-or-nothing: the plugin is disabled if the requested set is
+/// no longer fully granted. KV state is retained.
+pub async fn revoke_plugin_permissions(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+    Json(body): Json<Value>,
+) -> ApiResult {
+    let permission = body["permission"].as_str().unwrap_or("");
+    if permission.is_empty() {
+        return Err(ApiError::bad("provide a permission to revoke"));
+    }
+    sqlx::query("DELETE FROM plugin_permissions WHERE plugin_id = ? AND permission = ?")
+        .bind(&id)
+        .bind(permission)
+        .execute(&state.pool)
+        .await
+        .map_err(ApiError::internal)?;
+    let _ = db::insert_audit(
+        &state.pool,
+        "admin",
+        "plugin_permission_revoked",
+        "plugin",
+        &id,
+        &id,
+        &format!("Revoked permission '{permission}'. Plugin KV state is retained."),
+    )
+    .await;
+    Ok(Json(json!({ "ok": true, "id": id, "revoked": permission })))
+}
+
+/// `GET /admin/api/plugins/{id}/audit` — audit entries mentioning this plugin.
+pub async fn plugin_audit(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let rows = db::recent_audit(&state.pool, 500)
+        .await
+        .map_err(ApiError::internal)?;
+    let filtered: Vec<&db::AuditLogRow> = rows
+        .iter()
+        .filter(|r| r.target_type == "plugin" && r.target_id == id)
+        .collect();
+    Ok(Json(json!({ "id": id, "entries": filtered })))
+}
+
+/// `GET /admin/api/plugins/{id}/metrics` — counters + runtime state (§18).
+pub async fn plugin_metrics(
+    State(state): State<AppState>,
+    _auth: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult {
+    let manager = plugin_manager(&state)?;
+    let c = manager.counters();
+    let runtime = crate::plugins::store::runtime_state(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
+    let bytes = crate::plugins::store::kv_bytes(&state.pool, &id)
+        .await
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({
+        "id": id,
+        "host_invocations_total": c.invocations,
+        "host_faults_total": c.faults,
+        "host_timeouts_total": c.timeouts,
+        "host_cancellations_total": c.cancellations,
+        "host_http_requests_total": c.http_requests,
+        "storage_bytes": bytes,
+        "runtime": runtime,
+    })))
+}
+
+/// Decode a base64 (or hex) Ed25519 public key into 32 bytes.
+fn decode_key(k: &str) -> Option<[u8; 32]> {
+    use base64::Engine;
+    if let Ok(b) = base64::engine::general_purpose::STANDARD.decode(k.trim()) {
+        if let Ok(arr) = <[u8; 32]>::try_from(b.as_slice()) {
+            return Some(arr);
+        }
+    }
+    if let Ok(b) = hex::decode(k.trim()) {
+        if let Ok(arr) = <[u8; 32]>::try_from(b.as_slice()) {
+            return Some(arr);
+        }
+    }
+    None
 }

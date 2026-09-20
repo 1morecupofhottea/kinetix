@@ -207,6 +207,61 @@ pub struct TargetFacts<'a> {
     pub max_output_tokens: Option<i64>,
 }
 
+/// Typed facts contributed by plugin RoutingFactProvider capabilities (§6.4).
+///
+/// Facts are keyed by their fully-qualified name (`plugin.<id>.<name>`). A
+/// plugin may contribute several namespaces; a missing or stale fact is simply
+/// absent here and therefore evaluates as `unknown`.
+#[derive(Debug, Clone)]
+pub struct PluginFactEntry {
+    pub name: String,
+    pub value: Value,
+    /// Provenance for the Route Trace (§19): plugin id/version/capability.
+    pub source: Value,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PluginFacts {
+    entries: Vec<PluginFactEntry>,
+    /// Providers whose fact invocation failed this request, with the reason.
+    /// Used by the Route Trace so a failed fact is explainable (§6.4, §19).
+    pub failures: Vec<(String, String)>,
+}
+
+impl PluginFacts {
+    pub fn insert(&mut self, name: impl Into<String>, value: Value, source: Value) {
+        let name = name.into();
+        // A later plugin cannot silently shadow an earlier fact of the same
+        // name; first writer wins and the collision is ignored.
+        if self.entries.iter().any(|e| e.name == name) {
+            return;
+        }
+        self.entries.push(PluginFactEntry {
+            name,
+            value,
+            source,
+        });
+    }
+
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        self.entries
+            .iter()
+            .find(|e| e.name == name)
+            .map(|e| &e.value)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Every fact, for Route Trace rendering.
+    pub fn iter_trace(&self) -> impl Iterator<Item = (&str, &Value, &Value)> {
+        self.entries
+            .iter()
+            .map(|e| (e.name.as_str(), &e.value, &e.source))
+    }
+}
+
 /// The outcome of evaluating a predicate: a three-valued result and the
 /// explanation the Route Trace/Dry Run will show.
 #[derive(Debug, Clone, Serialize)]
@@ -231,7 +286,16 @@ impl Eval {
 }
 
 /// Evaluate a fact to a JSON value, or `None` when the fact is unknown.
-fn fact_value(fact: &FactRef, req: &RequestFacts<'_>, t: &TargetFacts<'_>) -> Option<Value> {
+fn fact_value(
+    fact: &FactRef,
+    req: &RequestFacts<'_>,
+    t: &TargetFacts<'_>,
+    plugin: &PluginFacts,
+) -> Option<Value> {
+    // A plugin-contributed fact is looked up by its fully-qualified name first.
+    if fact.name().starts_with("plugin.") {
+        return plugin.get(fact.name()).cloned();
+    }
     match fact.name() {
         "has_tools" => Some(Value::Bool(req.has_tools)),
         "has_images" => Some(Value::Bool(req.has_images)),
@@ -280,15 +344,25 @@ fn capabilities_declared(raw: &Value, name: &str) -> bool {
     keys.iter().any(|k| raw.get(k).is_some())
 }
 
-/// Evaluate a predicate tree.
+/// Evaluate a predicate tree with no plugin facts (native-only).
 pub fn eval(pred: &Predicate, req: &RequestFacts<'_>, t: &TargetFacts<'_>) -> Eval {
+    eval_with_facts(pred, req, t, &PluginFacts::default())
+}
+
+/// Evaluate a predicate tree, including plugin-contributed facts (§6.4).
+pub fn eval_with_facts(
+    pred: &Predicate,
+    req: &RequestFacts<'_>,
+    t: &TargetFacts<'_>,
+    plugin: &PluginFacts,
+) -> Eval {
     match pred {
         Predicate::Const(b) => Eval::known(*b, format!("constant {b}")),
         Predicate::And { and } => {
             let mut parts = Vec::new();
             let mut saw_unknown = false;
             for p in and {
-                let e = eval(p, req, t);
+                let e = eval_with_facts(p, req, t, plugin);
                 match e.result {
                     Tri::False => {
                         parts.push(format!("[{}]", e.explanation));
@@ -312,7 +386,7 @@ pub fn eval(pred: &Predicate, req: &RequestFacts<'_>, t: &TargetFacts<'_>) -> Ev
             let mut parts = Vec::new();
             let mut saw_unknown = false;
             for p in or {
-                let e = eval(p, req, t);
+                let e = eval_with_facts(p, req, t, plugin);
                 match e.result {
                     Tri::True => {
                         parts.push(format!("[{}]", e.explanation));
@@ -330,7 +404,7 @@ pub fn eval(pred: &Predicate, req: &RequestFacts<'_>, t: &TargetFacts<'_>) -> Ev
             }
         }
         Predicate::Not { not } => {
-            let e = eval(not, req, t);
+            let e = eval_with_facts(not, req, t, plugin);
             let result = match e.result {
                 Tri::True => Tri::False,
                 Tri::False => Tri::True,
@@ -341,7 +415,7 @@ pub fn eval(pred: &Predicate, req: &RequestFacts<'_>, t: &TargetFacts<'_>) -> Ev
                 explanation: format!("not [{}]", e.explanation),
             }
         }
-        Predicate::Cmp { fact, op, value } => eval_cmp(fact, *op, value, req, t),
+        Predicate::Cmp { fact, op, value } => eval_cmp(fact, *op, value, req, t, plugin),
     }
 }
 
@@ -351,8 +425,9 @@ fn eval_cmp(
     expected: &Value,
     req: &RequestFacts<'_>,
     t: &TargetFacts<'_>,
+    plugin: &PluginFacts,
 ) -> Eval {
-    let Some(actual) = fact_value(fact, req, t) else {
+    let Some(actual) = fact_value(fact, req, t, plugin) else {
         return Eval::unknown(format!(
             "fact '{}'{} is unknown",
             fact.name(),
@@ -447,11 +522,21 @@ pub struct Eligibility {
     pub explanation: String,
 }
 
-/// Decide eligibility from a target predicate.
+/// Decide eligibility from a target predicate (native facts only).
 pub fn eligibility(
     pred: &TargetPredicate,
     req: &RequestFacts<'_>,
     t: &TargetFacts<'_>,
+) -> Eligibility {
+    eligibility_with_facts(pred, req, t, &PluginFacts::default())
+}
+
+/// Decide eligibility from a target predicate, including plugin facts (§6.4).
+pub fn eligibility_with_facts(
+    pred: &TargetPredicate,
+    req: &RequestFacts<'_>,
+    t: &TargetFacts<'_>,
+    plugin: &PluginFacts,
 ) -> Eligibility {
     let Some(expr) = &pred.expr else {
         return Eligibility {
@@ -460,7 +545,7 @@ pub fn eligibility(
             explanation: "no predicate configured".to_string(),
         };
     };
-    let e = eval(expr, req, t);
+    let e = eval_with_facts(expr, req, t, plugin);
     let eligible = match e.result {
         Tri::True => true,
         Tri::False => false,
@@ -580,5 +665,54 @@ mod tests {
         let caps = Capabilities::default();
         let raw = json!({});
         assert!(eval(&p, &req(true), &target(&caps, &raw)).result.is_true());
+    }
+
+    #[test]
+    fn plugin_fact_is_evaluated_by_qualified_name() {
+        let caps = Capabilities::default();
+        let raw = json!({});
+        // {"fact": "plugin.dev.example.foo.region", "op": "eq", "value": "eu"}
+        let p: Predicate = serde_json::from_value(json!({
+            "fact": "plugin.dev.example.foo.region",
+            "op": "eq",
+            "value": "eu"
+        }))
+        .unwrap();
+        // With no plugin facts the fact is unknown, so it is skipped by default.
+        assert_eq!(
+            eval(&p, &req(true), &target(&caps, &raw)).result,
+            Tri::Unknown
+        );
+        // With the fact present, it evaluates.
+        let mut facts = PluginFacts::default();
+        facts.insert(
+            "plugin.dev.example.foo.region",
+            json!("eu"),
+            json!({"plugin": "dev.example.foo", "capability": "routing-facts"}),
+        );
+        let e = eval_with_facts(&p, &req(true), &target(&caps, &raw), &facts);
+        assert!(e.result.is_true(), "{}", e.explanation);
+
+        // A stale fact is absent, so it stays unknown.
+        let mut stale = PluginFacts::default();
+        stale.insert("plugin.other.pinned", json!(true), json!({}));
+        let p2: Predicate = serde_json::from_value(json!({
+            "fact": "plugin.dev.example.foo.region",
+            "op": "eq",
+            "value": "eu"
+        }))
+        .unwrap();
+        assert!(
+            eval_with_facts(&p2, &req(true), &target(&caps, &raw), &stale).result == Tri::Unknown
+        );
+    }
+
+    #[test]
+    fn a_plugin_fact_cannot_shadow_an_earlier_one() {
+        let mut facts = PluginFacts::default();
+        facts.insert("plugin.a.x", json!(1), json!({"plugin": "a"}));
+        facts.insert("plugin.a.x", json!(2), json!({"plugin": "b"}));
+        assert_eq!(facts.get("plugin.a.x"), Some(&json!(1)));
+        assert_eq!(facts.iter_trace().count(), 1);
     }
 }

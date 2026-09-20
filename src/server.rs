@@ -12,6 +12,7 @@ use crate::app::AppState;
 use crate::config::Config;
 use crate::crypto::Crypto;
 use crate::logqueue::UsageLogQueue;
+use crate::plugins::{HostPolicy, PluginManager};
 use crate::registry::Registry;
 use crate::{alerts, bootstrap, db, export, router};
 
@@ -111,6 +112,36 @@ pub async fn run(config: Arc<Config>) -> Result<()> {
         log_queue,
         config.ip_rate_limit_per_min,
     );
+    // Plugin host (post-v1, docs/KINETIX-PLUGIN-ARCHITECTURE.md). Built even
+    // when no plugins are installed so the registry participates in the runtime
+    // snapshot from the start. If the host cannot be constructed the server
+    // still starts; plugin-backed capabilities simply stay unavailable.
+    let state = match PluginManager::new(
+        pool.clone(),
+        state.crypto.clone(),
+        state.http.clone(),
+        HostPolicy::default(),
+    ) {
+        Ok(manager) => state.with_plugins(Arc::new(manager)),
+        Err(e) => {
+            tracing::warn!(error = %e, "plugin host unavailable; plugins disabled");
+            state
+        }
+    };
+
+    // Re-register capabilities for plugins that were already enabled in a
+    // previous run, so their credential strategies and adapters are available
+    // without a re-enable. (Install/enable-time registration covers the rest.)
+    if let Some(manager) = state.plugin_manager().cloned() {
+        match manager.list().await {
+            Ok(rows) => {
+                for row in rows.iter().filter(|r| r.status().is_enabled()) {
+                    crate::admin::register_enabled_plugin_capabilities(&state, &row.id).await;
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "could not enumerate plugins at startup"),
+        }
+    }
 
     spawn_background_tasks(state.clone());
 
@@ -237,6 +268,21 @@ pub fn spawn_background_tasks(state: AppState) {
         });
     }
 
+    // Per-plugin health probes (§6.5). Run on a background schedule owned by
+    // core, never lazily on the routing path, so a cold account never pays a
+    // probe's wall time inside a client request (NFR-1.1/1.2).
+    if let Some(manager) = state.plugin_manager().cloned() {
+        let st = state.clone();
+        tokio::spawn(async move {
+            let mut tick = tokio::time::interval(Duration::from_secs(15));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tick.tick().await;
+                run_plugin_health_probes(&st, &manager).await;
+            }
+        });
+    }
+
     // Webhook alerting (FR-6.6/FR-12.17).
     {
         let st = state.clone();
@@ -281,6 +327,106 @@ pub fn spawn_background_tasks(state: AppState) {
             }
         }
     });
+}
+
+/// Probe every account of a plugin-bound provider off the request path (§6.5)
+/// and fold the observation into account health so routing avoids an account a
+/// plugin knows is cooling down or out of quota. The core still owns the policy
+/// decision (cooldown windows, circuit breakers); the plugin only supplies
+/// evidence.
+async fn run_plugin_health_probes(state: &AppState, manager: &Arc<PluginManager>) {
+    let providers = match db::list_providers(&state.pool).await {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    for provider in providers {
+        let Some(pref) = provider.credential_plugin_ref() else {
+            continue;
+        };
+        // The plugin must be enabled and actually provide a health probe.
+        if manager
+            .resolve_binding(
+                &format!("plugin:{}/{}", pref.plugin_id, pref.capability),
+                crate::plugins::Capability::HealthProbe,
+            )
+            .await
+            .is_none()
+        {
+            continue;
+        }
+        let accounts = match db::accounts_for_provider(&state.pool, &provider.id).await {
+            Ok(a) => a,
+            Err(_) => continue,
+        };
+        for account in accounts {
+            if account.status == "disabled" {
+                continue;
+            }
+            let obs = match manager
+                .health_probe(&pref.plugin_id, &provider.id, &account.id)
+                .await
+            {
+                Ok(o) => o,
+                Err(e) => {
+                    tracing::debug!(plugin = %pref.plugin_id, account = %account.id,
+                        error = %e.message(), "plugin health probe failed");
+                    continue;
+                }
+            };
+            match obs.state.as_str() {
+                "healthy" => {
+                    if account.status != "healthy" {
+                        let _ = db::set_account_status(
+                            &state.pool,
+                            &account.id,
+                            "healthy",
+                            None,
+                            None,
+                            None,
+                        )
+                        .await;
+                    }
+                }
+                "degraded" => {
+                    // Advisory only: surface the reset hint in last_error without
+                    // taking the account out of rotation.
+                    let note = obs
+                        .reset_at
+                        .clone()
+                        .unwrap_or_else(|| "plugin reports degraded".into());
+                    let _ = db::set_account_status(
+                        &state.pool,
+                        &account.id,
+                        "healthy",
+                        None,
+                        None,
+                        Some(&note),
+                    )
+                    .await;
+                }
+                "unavailable" => {
+                    // Core owns the cooldown window; the plugin only says the
+                    // account is not usable right now.
+                    let until = obs.reset_at.clone().or_else(|| {
+                        obs.retry_after.map(|s| {
+                            (chrono::Utc::now() + chrono::Duration::seconds(s as i64)).to_rfc3339()
+                        })
+                    });
+                    let _ = db::set_account_status(
+                        &state.pool,
+                        &account.id,
+                        "cooldown",
+                        until.as_deref(),
+                        None,
+                        Some("plugin health probe: unavailable"),
+                    )
+                    .await;
+                }
+                // "unknown" and anything else: leave the account as-is.
+                _ => {}
+            }
+        }
+    }
 }
 
 /// Startup diagnostic: warn about enabled Routes with no eligible target so an

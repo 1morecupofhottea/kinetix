@@ -19,12 +19,11 @@ use tokio::sync::mpsc;
 use crate::adapters::{Adapter, UpstreamContext};
 use crate::app::AppState;
 use crate::cost;
-use crate::credentials::CredentialStrategy;
 use crate::db::{self, UsageLogRow};
 use crate::frontends::{self, Encoder, EncoderCtx, FrontendFormat};
 use crate::passthrough;
 use crate::pool;
-use crate::predicate::{self, RequestFacts, TargetFacts, TargetPredicate};
+use crate::predicate::{self, PluginFacts, RequestFacts, TargetFacts, TargetPredicate};
 use crate::registry::{Resolved, ResolvedTarget};
 use crate::trace::RouteTrace;
 use crate::types::{
@@ -180,6 +179,27 @@ pub async fn run(
         input_tokens: req.approx_input_tokens(),
     };
 
+    // 2b. Read-only request hook (§6.6): observe the normalized request before
+    // routing. Fire-and-forget on the bounded async queue; it can never block,
+    // fail, or slow a client request.
+    if let Some(manager) = state.plugin_manager().cloned() {
+        let json = serde_json::json!({
+            "request_id": meta.request_id,
+            "frontend": format.as_str(),
+            "requested_model": req.requested_model,
+            "has_tools": needs.tools,
+            "has_images": needs.vision,
+            "has_reasoning": needs.reasoning,
+            "input_tokens": req.approx_input_tokens(),
+        })
+        .to_string();
+        state.spawn_hook(move || async move {
+            for id in manager.plugins_with_hook("on_request_normalized").await {
+                let _ = manager.hook_request_normalized(&id, &json).await;
+            }
+        });
+    }
+
     let (mut targets, route) = match resolved {
         Resolved::Single {
             provider_id,
@@ -221,7 +241,42 @@ pub async fn run(
                 ..request_facts
             };
             let ordered = order_route_targets(state, &route, targets).await;
+            // Read-only target hook (§6.6): observe each candidate target before
+            // eligibility filtering. Fire-and-forget; never blocks routing.
+            if let Some(manager) = state.plugin_manager().cloned() {
+                let req_id = meta.request_id.clone();
+                for t in &ordered {
+                    let json = serde_json::json!({
+                        "request_id": req_id,
+                        "route": route.name,
+                        "model_id": t.model.id,
+                        "provider_id": t.provider.id,
+                        "provider": t.provider.name,
+                        "account": t.account.label,
+                        "priority": t.priority,
+                    })
+                    .to_string();
+                    let manager = manager.clone();
+                    state.spawn_hook(move || async move {
+                        for id in manager.plugins_with_hook("on_target_candidate").await {
+                            let _ = manager.hook_target_candidate(&id, &json).await;
+                        }
+                    });
+                }
+            }
             // Evaluate predicates for the trace and eligibility filtering.
+            // Plugin routing facts (§6.4) are gathered once, before evaluation,
+            // and exposed as `plugin.<id>.<name>` facts. A missing, failed, or
+            // stale fact is left absent so it evaluates as `unknown`.
+            let plugin_facts =
+                gather_plugin_facts(state, &request_facts, Some(&meta.disconnected)).await;
+            // Surface plugin facts and failures once, not per target (§19).
+            for (name, value, source) in plugin_facts.iter_trace() {
+                trace.plugin_fact(name, value, source);
+            }
+            for (plugin_id, reason) in &plugin_facts.failures {
+                trace.plugin_fact_failure(plugin_id, reason);
+            }
             let mut kept = Vec::new();
             for t in ordered {
                 let tgt_facts = TargetFacts {
@@ -235,7 +290,12 @@ pub async fn run(
                     context_window: t.model.context_window,
                     max_output_tokens: t.model.max_output_tokens,
                 };
-                let elig = predicate::eligibility(&t.predicate, &request_facts, &tgt_facts);
+                let elig = predicate::eligibility_with_facts(
+                    &t.predicate,
+                    &request_facts,
+                    &tgt_facts,
+                    &plugin_facts,
+                );
                 trace.candidate(
                     format!("{} @ {}", t.model.display_name, t.account.label),
                     elig.eligible,
@@ -417,8 +477,13 @@ pub async fn run(
             continue;
         }
 
-        // Credential.
-        let credential = match state.credentials.resolve(&target.account).await {
+        // Credential. A provider bound to a plugin credential strategy
+        // (§6.0) resolves through the plugin; otherwise the built-in static
+        // strategy is used. A disabled/unavailable plugin fails closed.
+        let credential = match state
+            .credential_for(&target.provider, &target.account)
+            .await
+        {
             Ok(c) => {
                 crate::alerts::record_credential_success();
                 c.secret
@@ -436,7 +501,9 @@ pub async fn run(
             }
         };
 
-        let adapter = state.adapters.for_format(target.provider.wire());
+        // Adapter selection honours a plugin wire-format binding (§6.0); a
+        // bound-but-unavailable plugin adapter fails closed.
+        let adapter = state.adapters.for_provider(&target.provider);
 
         // Continuity / portability policy on cross-provider fallback (FR-2.11).
         if attempts_done > 0 {
@@ -971,6 +1038,128 @@ fn select_accounts(
         available.sort_by_key(|a| a.priority);
     }
     Ok(available)
+}
+
+/// Gather plugin routing facts for a request (§6.4).
+///
+/// Every enabled plugin that declares a `routing_facts` capability is invoked
+/// once, within its 25 ms budget. Facts are namespaced `plugin.<id>.<name>` and
+/// are treated as `unknown` when absent. A provider that fails or times out
+/// contributes no facts and is recorded as a failure so the Route Trace can
+/// explain the `unknown`.
+///
+/// Determinism (§6.4): the manifest is required to be `pure` (no `host-http`
+/// import; the host refuses buffered HTTP to routing-fact worlds) or `cached`
+/// (the guest returns precomputed values with `observed_at`/`max_age_ms`).
+/// Stale cached facts are dropped here and therefore evaluate as `unknown`.
+async fn gather_plugin_facts(
+    state: &AppState,
+    req: &RequestFacts<'_>,
+    disconnected: Option<&Arc<std::sync::atomic::AtomicBool>>,
+) -> PluginFacts {
+    let mut facts = PluginFacts::default();
+    let Some(manager) = state.plugin_manager() else {
+        return facts;
+    };
+    let plugins = match manager.list().await {
+        Ok(p) => p,
+        Err(_) => return facts,
+    };
+    // Only request/config facts core already knows are exposed to the plugin.
+    let request_json = serde_json::json!({
+        "frontend": req.frontend,
+        "requested_model": req.requested_model,
+        "requested_route": req.requested_route,
+        "key_tag": req.key_tag,
+        "has_tools": req.has_tools,
+        "has_images": req.has_images,
+        "has_reasoning": req.has_reasoning,
+        "input_tokens": req.input_tokens,
+    })
+    .to_string();
+
+    for row in plugins {
+        if !row.status().is_enabled() {
+            continue;
+        }
+        let Some(manifest) = row.manifest() else {
+            continue;
+        };
+        if manifest.provides.routing_facts.is_empty() {
+            continue;
+        }
+        // §6.4 `cached` mode: read the host-stamped snapshot the plugin published
+        // on its background schedule. No guest call, no network, no wall time on
+        // the request path — the determinism guarantee.
+        if manifest.routing_facts_mode == "cached" {
+            match manager.cached_facts(&row.id).await {
+                Ok(entries) => {
+                    for (name, value, observed, max_age) in entries {
+                        let full = format!("plugin.{}.{}", row.id, name);
+                        if let (Some(observed), Some(max_age)) = (&observed, max_age) {
+                            if let Some(ts) = db::parse_dt(observed) {
+                                let age = chrono::Utc::now().signed_duration_since(ts);
+                                if age.num_milliseconds() > max_age as i64 {
+                                    continue; // stale => absent => unknown
+                                }
+                            }
+                        }
+                        let source = serde_json::json!({
+                            "plugin": row.id,
+                            "version": row.version,
+                            "capability": "routing-facts",
+                            "mode": "cached",
+                            "observed_at": observed,
+                        });
+                        facts.insert(full, value, source);
+                    }
+                }
+                Err(e) => {
+                    facts.failures.push((row.id.clone(), e.to_string()));
+                }
+            }
+            continue;
+        }
+        let call = match disconnected {
+            Some(flag) => {
+                manager
+                    .routing_facts_cancellable(&row.id, &request_json, flag.clone())
+                    .await
+            }
+            None => manager.routing_facts(&row.id, &request_json).await,
+        };
+        match call {
+            Ok(list) => {
+                for f in list {
+                    // Staleness: a cached fact past its max_age is `unknown`.
+                    if let (Some(observed), Some(max_age)) = (&f.observed_at, f.max_age_ms) {
+                        if let Some(ts) = db::parse_dt(observed) {
+                            let age = chrono::Utc::now().signed_duration_since(ts);
+                            if age.num_milliseconds() > max_age as i64 {
+                                continue; // stale => absent => unknown
+                            }
+                        }
+                    }
+                    let value: Value = serde_json::from_str(&f.value_json)
+                        .unwrap_or(Value::String(f.value_json.clone()));
+                    let source = serde_json::json!({
+                        "plugin": row.id,
+                        "version": row.version,
+                        "capability": "routing-facts",
+                    });
+                    facts.insert(f.name, value, source);
+                }
+            }
+            Err(fault) => {
+                // A client-driven cancellation is not a fact-provider failure
+                // (§7.2); it simply yields no facts, which evaluate as unknown.
+                if fault.code() != "cancelled" {
+                    facts.failures.push((row.id.clone(), fault.message()));
+                }
+            }
+        }
+    }
+    facts
 }
 
 /// Order route targets according to the route strategy (FR-12.5).
@@ -1878,6 +2067,33 @@ async fn finalize_log(
         opaque_route_id: Some(trace.opaque_route_id.clone()),
     };
     state.log_queue.enqueue(row);
+
+    // Read-only usage hook (§6.6): fire-and-forget on the bounded async queue,
+    // after accounting is recorded, so it can never block or fail the request.
+    if let Some(manager) = state.plugin_manager().cloned() {
+        let json = serde_json::json!({
+            "request_id": meta.request_id,
+            "model": model_display,
+            "provider": attempt.target.provider.name,
+            "account": attempt.target.account.label,
+            "route": meta.route_name,
+            "status": status,
+            "commit_state": meta.commit_state,
+            "retry_count": meta.retry_count,
+            "input_tokens": usage.input,
+            "output_tokens": usage.output,
+            "cached_tokens": usage.cached,
+            "thinking_tokens": usage.thinking,
+            "cost_usd": cost,
+            "latency_ms": started.elapsed().as_millis() as i64,
+        })
+        .to_string();
+        state.spawn_hook(move || async move {
+            for id in manager.plugins_with_hook("on_usage_finalized").await {
+                let _ = manager.hook_usage_finalized(&id, &json).await;
+            }
+        });
+    }
 
     // Route Trace (metadata only, FR-12.14).
     let _ = db::insert_route_trace(&state.pool, &trace).await;

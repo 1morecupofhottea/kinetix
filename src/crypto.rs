@@ -9,21 +9,48 @@ use sha2::{Digest, Sha256};
 
 pub struct Crypto {
     cipher: Aes256Gcm,
+    /// A separate cipher for host-managed plugin KV, derived from the same
+    /// master key under a distinct label (§10). Kept separate so plugin KV is
+    /// never encrypted under the provider-credential key.
+    kv_cipher: Aes256Gcm,
 }
 
 impl Crypto {
     pub fn new(master_key: &[u8; 32]) -> Self {
         let key = Key::<Aes256Gcm>::from_slice(master_key);
+        // Derive a distinct 32-byte key for plugin KV: SHA-256("kinetix-plugin-kv" || master).
+        let mut hasher = Sha256::new();
+        hasher.update(b"kinetix-plugin-kv");
+        hasher.update(master_key);
+        let derived = hasher.finalize();
+        let kv_key = Key::<Aes256Gcm>::from_slice(&derived);
         Crypto {
             cipher: Aes256Gcm::new(key),
+            kv_cipher: Aes256Gcm::new(kv_key),
         }
     }
 
     /// Encrypt a secret, returning base64(nonce || ciphertext).
     pub fn encrypt(&self, plaintext: &str) -> Result<String> {
+        Self::encrypt_with(&self.cipher, plaintext)
+    }
+
+    pub fn decrypt(&self, encoded: &str) -> Result<String> {
+        Self::decrypt_with(&self.cipher, encoded)
+    }
+
+    /// Encrypt plugin KV under the separate derived key label (§10).
+    pub fn encrypt_kv(&self, plaintext: &str) -> Result<String> {
+        Self::encrypt_with(&self.kv_cipher, plaintext)
+    }
+
+    pub fn decrypt_kv(&self, encoded: &str) -> Result<String> {
+        Self::decrypt_with(&self.kv_cipher, encoded)
+    }
+
+    fn encrypt_with(cipher: &Aes256Gcm, plaintext: &str) -> Result<String> {
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-        let ct = self
-            .cipher
+        let ct = cipher
             .encrypt(&nonce, plaintext.as_bytes())
             .map_err(|_| anyhow!("encryption failed"))?;
         let mut out = Vec::with_capacity(nonce.len() + ct.len());
@@ -32,7 +59,7 @@ impl Crypto {
         Ok(base64::engine::general_purpose::STANDARD.encode(out))
     }
 
-    pub fn decrypt(&self, encoded: &str) -> Result<String> {
+    fn decrypt_with(cipher: &Aes256Gcm, encoded: &str) -> Result<String> {
         let raw = base64::engine::general_purpose::STANDARD
             .decode(encoded)
             .map_err(|e| anyhow!("invalid ciphertext encoding: {e}"))?;
@@ -41,8 +68,7 @@ impl Crypto {
         }
         let (nonce_bytes, ct) = raw.split_at(12);
         let nonce = Nonce::from_slice(nonce_bytes);
-        let pt = self
-            .cipher
+        let pt = cipher
             .decrypt(nonce, ct)
             .map_err(|_| anyhow!("decryption failed (wrong master key?)"))?;
         String::from_utf8(pt).map_err(|e| anyhow!("decrypted secret not utf-8: {e}"))
@@ -140,5 +166,17 @@ mod tests {
     fn redacts_prefixes() {
         let out = redact("key=AIzaSyABCDEFGHIJKLMNOP");
         assert!(out.contains("[REDACTED]"));
+    }
+
+    #[test]
+    fn kv_uses_a_separate_key_label() {
+        let c = Crypto::new(&[7u8; 32]);
+        // KV ciphertext must not decrypt under the credential key (or vice
+        // versa) because the two ciphers use different derived keys.
+        let kv = c.encrypt_kv("refresh-token").unwrap();
+        assert!(c.decrypt(&kv).is_err());
+        assert_eq!(c.decrypt_kv(&kv).unwrap(), "refresh-token");
+        let cred = c.encrypt("sk-secret").unwrap();
+        assert!(c.decrypt_kv(&cred).is_err());
     }
 }

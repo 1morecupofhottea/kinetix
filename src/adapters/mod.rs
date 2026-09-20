@@ -90,6 +90,10 @@ pub struct AdapterRegistry {
     gemini: Arc<dyn Adapter>,
     openai: Arc<dyn Adapter>,
     anthropic: Arc<dyn Adapter>,
+    /// Plugin-host-backed adapters keyed by `plugin:<id>/<capability>` (§6.0).
+    /// A `DashMap` so a plugin adapter can be registered at enable time without
+    /// rebuilding the shared registry.
+    plugin: Arc<dashmap::DashMap<String, Arc<dyn Adapter>>>,
 }
 
 impl AdapterRegistry {
@@ -98,6 +102,7 @@ impl AdapterRegistry {
             gemini: Arc::new(crate::adapters::gemini::GeminiAdapter::new()),
             openai: Arc::new(crate::adapters::openai::OpenAiAdapter::new()),
             anthropic: Arc::new(crate::adapters::anthropic::AnthropicAdapter::new()),
+            plugin: Arc::new(dashmap::DashMap::new()),
         }
     }
 
@@ -107,6 +112,35 @@ impl AdapterRegistry {
             WireFormat::Openai => self.openai.clone(),
             WireFormat::Anthropic => self.anthropic.clone(),
         }
+    }
+
+    /// Select the adapter for a provider. A provider bound to a plugin adapter
+    /// (`wire_plugin`, §6.0) resolves to the plugin adapter when the host
+    /// provides it and the plugin is usable; otherwise selection fails closed
+    /// with an unimplemented-format error (never a silent native fallback).
+    pub fn for_provider(&self, provider: &crate::db::ProviderRow) -> Arc<dyn Adapter> {
+        if let Some(r) = provider.wire_plugin_ref() {
+            let key = r.to_string_ref();
+            if let Some(adapter) = self.plugin.get(&key) {
+                return adapter.clone();
+            }
+            // Registration keys by plugin id (one adapter capability per plugin);
+            // accept a bare-id reference too.
+            if let Some(adapter) = self.plugin.get(&r.plugin_id) {
+                return adapter.clone();
+            }
+            return Arc::new(UnimplementedAdapter {
+                format: Box::leak(
+                    format!("plugin adapter '{key}' is unavailable").into_boxed_str(),
+                ),
+            });
+        }
+        self.for_format(provider.wire())
+    }
+
+    /// Register a plugin-backed adapter under its namespaced reference.
+    pub fn register_plugin(&self, reference: impl Into<String>, adapter: Arc<dyn Adapter>) {
+        self.plugin.insert(reference.into(), adapter);
     }
 }
 

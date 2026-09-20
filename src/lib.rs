@@ -33,6 +33,7 @@ pub mod logqueue;
 pub mod passthrough;
 pub mod paths;
 pub mod pipeline;
+pub mod plugins;
 pub mod pool;
 pub mod predicate;
 pub mod ratelimit;

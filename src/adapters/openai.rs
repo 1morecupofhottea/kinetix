@@ -485,6 +485,9 @@ mod tests {
             credential_hosts: String::new(),
             allow_insecure_tls: 0,
             created_at: "2026-01-01T00:00:00Z".into(),
+            wire_plugin: String::new(),
+            credential_plugin: String::new(),
+            model_source_plugin: String::new(),
         }
     }
 
@@ -504,6 +507,7 @@ mod tests {
             extra_request: "{}".into(),
             discovery: "{}".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
+            opaque_state_plugin: String::new(),
         }
     }
 
@@ -575,6 +579,9 @@ mod param_default_tests {
             credential_hosts: String::new(),
             allow_insecure_tls: 0,
             created_at: "2026-01-01T00:00:00Z".into(),
+            wire_plugin: String::new(),
+            credential_plugin: String::new(),
+            model_source_plugin: String::new(),
         }
     }
 
@@ -594,6 +601,7 @@ mod param_default_tests {
             extra_request: "{}".into(),
             discovery: "{}".into(),
             created_at: "2026-01-01T00:00:00Z".into(),
+            opaque_state_plugin: String::new(),
         }
     }
 
