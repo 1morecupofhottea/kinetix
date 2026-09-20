@@ -70,8 +70,10 @@ if printf '%s' "$VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+'; then
     fi
 
     mkdir -p "$BIN_DIR"
-    tar -xzf /tmp/kinetix-dl.tar.gz -C "$BIN_DIR" kinetix 2>/dev/null \
-      || tar -xzf /tmp/kinetix-dl.tar.gz -C /tmp && install -m 0755 /tmp/kinetix "$BIN_DIR/kinetix"
+    if ! tar -xzf /tmp/kinetix-dl.tar.gz -C "$BIN_DIR" kinetix 2>/dev/null; then
+      tar -xzf /tmp/kinetix-dl.tar.gz -C /tmp
+      install -m 0755 /tmp/kinetix "$BIN_DIR/kinetix"
+    fi
     chmod 0755 "$BIN_DIR/kinetix"
     rm -f /tmp/kinetix-dl.tar.gz /tmp/kinetix
     log "Installed prebuilt $BIN_DIR/kinetix"
