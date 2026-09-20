@@ -21,8 +21,15 @@ permissions:
   attestations: write
 
 jobs:
-  release:
+  binaries:
+    name: build (${{ matrix.target }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-gnu
     steps:
       - uses: actions/checkout@v4
         with:
@@ -43,20 +50,34 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
 
-      # Builds the requested targets (using `cross` for the non-native one) and
-      # uploads `kinetix-<tag>-<target>.tar.gz` to the release, creating it if
-      # needed. The asset name matches the installer's download convention.
+      # Builds the target (using `cross` for non-native targets) and
+      # uploads `kinetix-<tag>-<target>.tar.gz` to the release.
       - name: Build and upload binaries
         uses: taiki-e/upload-rust-binary-action@v1
         with:
           bin: kinetix
-          target: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu
+          target: ${{ matrix.target }}
           archive: kinetix-$tag-$target
           checksum: sha256
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      # Compute unified SHA256SUMS file and upload to the release
+  provenance:
+    name: attestations & checksums
+    needs: [binaries]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      # Download all matrix release archives and compute unified SHA256SUMS
       - name: Generate SHA256SUMS and attach to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -69,7 +90,7 @@ jobs:
           cat SHA256SUMS
           gh release upload "$TAG" SHA256SUMS --repo "${{ github.repository }}" --clobber
 
-      # Attest build provenance for the released binaries and checksum file
+      # Attest build provenance for released binary archives
       - name: Attest build provenance
         uses: actions/attest-build-provenance@v2
         with:
