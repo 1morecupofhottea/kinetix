@@ -5,6 +5,15 @@ import { WobblyCard, SketchButton, SketchBadge } from '../HandDrawnElements';
 import { DESIGN_TOKENS } from '../../lib/designSystem';
 import { Kinetix, DiscoveredModel } from '../../lib/resources';
 
+/**
+ * Fallback token metadata used when an upstream does not declare a context
+ * window / max output. Applied both as the model form's initial values and as
+ * the final fallback when creating, importing, or rendering a model, so an
+ * "unknown" value never round-trips as 0.
+ */
+const DEFAULT_CONTEXT_WINDOW = 200000;
+const DEFAULT_MAX_OUTPUT = 8192;
+
 interface ProvidersViewProps {
   providers: Provider[];
   models: ModelConfig[];
@@ -76,8 +85,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
   // New Custom Model Form State
   const [modelUpstreamId, setModelUpstreamId] = useState('');
   const [modelDisplayName, setModelDisplayName] = useState('');
-  const [modelContextWindow, setModelContextWindow] = useState(128000);
-  const [modelMaxOutput, setModelMaxOutput] = useState(8192);
+  const [modelContextWindow, setModelContextWindow] = useState(DEFAULT_CONTEXT_WINDOW);
+  const [modelMaxOutput, setModelMaxOutput] = useState(DEFAULT_MAX_OUTPUT);
   const [modelInputPrice, setModelInputPrice] = useState(1.0);
   const [modelOutputPrice, setModelOutputPrice] = useState(4.0);
   const [capText, setCapText] = useState(true);
@@ -160,8 +169,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
       upstreamModelId: m.id,
       displayName: m.display_name || m.id,
       enabled: true,
-      contextWindow: m.context_window ?? 128000,
-      maxOutputTokens: m.max_output_tokens ?? 8192,
+      contextWindow: m.context_window ?? DEFAULT_CONTEXT_WINDOW,
+      maxOutputTokens: m.max_output_tokens ?? DEFAULT_MAX_OUTPUT,
       capabilities: {
         text: true,
         vision: false,
@@ -315,8 +324,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     setEditingModelId(m.id);
     setModelUpstreamId(m.upstreamModelId);
     setModelDisplayName(m.displayName);
-    setModelContextWindow(m.contextWindow);
-    setModelMaxOutput(m.maxOutputTokens);
+    setModelContextWindow(m.contextWindow || DEFAULT_CONTEXT_WINDOW);
+    setModelMaxOutput(m.maxOutputTokens || DEFAULT_MAX_OUTPUT);
     setModelInputPrice(m.prices.inputPer1M || 0);
     setModelOutputPrice(m.prices.outputPer1M || 0);
     setCapText(m.capabilities.text);
@@ -331,8 +340,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     setEditingModelId(null);
     setModelUpstreamId('');
     setModelDisplayName('');
-    setModelContextWindow(128000);
-    setModelMaxOutput(8192);
+    setModelContextWindow(DEFAULT_CONTEXT_WINDOW);
+    setModelMaxOutput(DEFAULT_MAX_OUTPUT);
     setModelInputPrice(1.0);
     setModelOutputPrice(4.0);
     setCapText(true);
@@ -355,8 +364,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
       enabled: editingModelId
         ? (models.find((m) => m.id === editingModelId)?.enabled ?? true)
         : true,
-      contextWindow: Number(modelContextWindow) || 128000,
-      maxOutputTokens: Number(modelMaxOutput) || 8192,
+      contextWindow: Number(modelContextWindow) || DEFAULT_CONTEXT_WINDOW,
+      maxOutputTokens: Number(modelMaxOutput) || DEFAULT_MAX_OUTPUT,
       capabilities: {
         text: capText,
         vision: capVision,
@@ -390,8 +399,8 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
     upstream_id: modelUpstreamId.trim(),
     display_name: modelDisplayName.trim() || modelUpstreamId.trim(),
     enabled: true,
-    context_window: Number(modelContextWindow) || 128000,
-    max_output_tokens: Number(modelMaxOutput) || 8192,
+    context_window: Number(modelContextWindow) || DEFAULT_CONTEXT_WINDOW,
+    max_output_tokens: Number(modelMaxOutput) || DEFAULT_MAX_OUTPUT,
     capabilities: { text: capText, vision: capVision, reasoning: capReasoning, tool_calling: capTools, audio: false },
     prices: {
       input_per_1m: Number(modelInputPrice) || null,
@@ -727,7 +736,7 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                               </span>
                             </div>
                             <span className="text-xs font-mono text-[var(--ink)]/70">
-                              Context: {m.contextWindow.toLocaleString()} tokens • Max Output: {m.maxOutputTokens}
+                              Context: {(m.contextWindow || DEFAULT_CONTEXT_WINDOW).toLocaleString()} tokens • Max Output: {m.maxOutputTokens || DEFAULT_MAX_OUTPUT}
                             </span>
                           </div>
 
@@ -1167,9 +1176,9 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     </label>
                     <input
                       type="number"
-                      required
-                      min={1000}
+                      min={0}
                       step={1000}
+                      placeholder={`${DEFAULT_CONTEXT_WINDOW} (default)`}
                       value={modelContextWindow}
                       onChange={(e) => setModelContextWindow(Number(e.target.value))}
                       className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
@@ -1182,14 +1191,19 @@ export const ProvidersView: React.FC<ProvidersViewProps> = ({
                     </label>
                     <input
                       type="number"
-                      required
-                      min={100}
+                      min={0}
+                      placeholder={`${DEFAULT_MAX_OUTPUT} (default)`}
                       value={modelMaxOutput}
                       onChange={(e) => setModelMaxOutput(Number(e.target.value))}
                       className="w-full bg-[var(--surface)] border-2 border-[var(--ink)] px-3 py-2 text-base font-mono sketch-shadow-sm focus:outline-none"
                     />
                   </div>
                 </div>
+
+                <p className="text-xs font-body text-[var(--ink)]/60">
+                  If a value is unknown, leave it as 0 (or blank) to apply the defaults:{' '}
+                  {DEFAULT_CONTEXT_WINDOW.toLocaleString()} context window · {DEFAULT_MAX_OUTPUT.toLocaleString()} max output.
+                </p>
 
                 {/* Token Pricing */}
                 <div className="grid grid-cols-2 gap-3 bg-[var(--erased-soft)] p-3 border border-[var(--ink)] rounded">
