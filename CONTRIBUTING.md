@@ -8,6 +8,7 @@ Thank you for your interest in contributing to Kinetix! Kinetix is a streaming-f
 2. **Streaming-First Architecture**: Responses must stream incrementally with low Time-To-First-Token (TTFT). Non-streaming is supported via stream aggregation.
 3. **Topology Privacy**: Client-facing endpoints must never leak upstream account details, provider names, or routing topologies.
 4. **Supply Chain Hygiene**: Dependencies must pass strict `cargo-deny` checks for licenses (OSI permissive only), vulnerability advisories, and banned crates.
+5. **Living Agent Instructions**: Guidelines and constraints for AI coding agents are maintained in [`AGENTS.md`](AGENTS.md). Whenever architecture, tools, conventions, or commands change, update `AGENTS.md` accordingly.
 
 ## Prerequisites
 
@@ -77,7 +78,8 @@ scripts/ci.sh
 2. Keep commits atomic and write descriptive commit messages (e.g. `feat(frontends): add foo`, `fix(adapters): handle bar`).
 3. If introducing changes to wire formats, add corresponding test cases in `tests/decode_fixtures.rs`, `tests/wire_fixtures.rs`, or the compatibility matrix.
 4. Run `scripts/ci.sh` locally to ensure all checks pass before pushing.
-5. **Conserve GitHub Actions resources**: Do not push every intermediate commit. Batch commits locally and push when a cohesive milestone is ready.
+5. Keep [`AGENTS.md`](AGENTS.md) synchronized if your changes affect architecture, commands, dependencies, schemas, or conventions.
+6. **Conserve GitHub Actions resources**: Do not push every intermediate commit. Batch commits locally and push when a cohesive milestone is ready.
 
 ## Local Release & Publishing
 
