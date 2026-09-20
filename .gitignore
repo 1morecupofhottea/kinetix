@@ -5,6 +5,10 @@ node_modules
 
 # Rust
 /target
+/plugins/target
+
+# Built plugin packages (produced by scripts/build-plugin.sh)
+*.kxp
 
 # Local runtime state
 *.db
