@@ -346,10 +346,8 @@ fn clean_schema(v: Value) -> Value {
                 }
                 out.insert(k, clean_schema(val));
             }
-            if !out.contains_key("type") {
-                if out.contains_key("properties") {
-                    out.insert("type".into(), json!("object"));
-                }
+            if !out.contains_key("type") && out.contains_key("properties") {
+                out.insert("type".into(), json!("object"));
             }
             Value::Object(out)
         }
@@ -408,21 +406,20 @@ fn part_to_gemini(p: &Value) -> Option<Value> {
 pub fn classify_error(status: u16, body: &str, headers_json: &str) -> Result<String, AdapterError> {
     let headers: Value = serde_json::from_str(headers_json).unwrap_or(Value::Null);
     let retry_after = parse_retry_after(&headers, body);
-    let message = extract_error_message(body).unwrap_or_else(|| format!("upstream HTTP {status}"));
+    let mut message =
+        extract_error_message(body).unwrap_or_else(|| format!("upstream HTTP {status}"));
 
     let kind = if status == 429 {
         "quota_exhausted"
     } else if status == 401 || status == 403 {
         "auth_error"
     } else if status >= 500 {
-        // Transient upstream errors (high traffic, capacity, stream ended) are
-        // surfaced in the message so the host's trace shows why a retry helped;
-        // the host owns the actual retry policy.
+        // Any 5xx is a server error; transient ones (high traffic, capacity,
+        // stream ended) are annotated so the host's trace explains a retry.
         if is_transient(&message) {
-            "server_error"
-        } else {
-            "server_error"
+            message = format!("transient upstream error: {message}");
         }
+        "server_error"
     } else if status >= 400 {
         "bad_request"
     } else {
