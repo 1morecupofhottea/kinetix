@@ -23,6 +23,7 @@ This wiki is the detailed, task-oriented companion to the repo
 | [Dashboard](Dashboard) | The embedded web UI |
 | [Authentication](Authentication) | Virtual keys, admin sessions, Cloudflare Access |
 | [Providers](Providers) | Wire formats, auth schemes, discovery, security |
+| [Plugins](Plugins) | WebAssembly plugins, capability seams, packaging, and SDK |
 | [Usage, Cost and Accounting](Usage-Cost-and-Accounting) | Tokens, prices, budgets, truthfulness |
 | [Observability](Observability) | Metrics, Route Trace, flight recorder, live view, alerts |
 | [Deployment](Deployment) | systemd, Cloudflare Tunnel, Docker, backups |

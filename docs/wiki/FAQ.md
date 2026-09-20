@@ -57,8 +57,14 @@ Update: install the new binary and restart (migrations run automatically after a
 pre-migration backup). Uninstall: `kinetix uninstall` or `uninstall.sh`.
 
 **Is there a plugin system?**
-Not in v1. Internal extension seams exist, but a public plugin/runtime ABI is
-deferred to a separate decision.
+Yes. Kinetix features an opt-in WebAssembly Component Model plugin host powered
+by Wasmtime 48. Plugins run in a strict sandbox (zero ambient authority,
+preemptive epoch interruption, encrypted namespaced storage) and can contribute
+custom provider wire adapters (`wire_plugin`), dynamic credential strategies
+(`credential_plugin`), routing facts (`plugin.<id>.<name>`), health probes, and
+model discovery. Native providers remain zero-overhead and completely unaffected
+by installed plugins. See [Plugins](Plugins) and
+[docs/KINETIX-PLUGIN-ARCHITECTURE.md](https://github.com/LazyGreed/kinetix/blob/main/docs/KINETIX-PLUGIN-ARCHITECTURE.md).
 
 **Is it multi-tenant / highly available?**
 No. It's a single-machine, small-team gateway. Multi-tenant SaaS and HA are

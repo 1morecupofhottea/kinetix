@@ -34,6 +34,7 @@ fails a serviceable request.
 | Usage exports | `src/export.rs` |
 | Alerts | `src/alerts.rs` |
 | SQLite persistence + migrations | `src/db.rs`, `migrations/` |
+| Plugin host, runtime & seams (Wasmtime sandbox, package, KV) | `src/plugins/` |
 | Embedded dashboard assets | `src/assets.rs`, `dashboard/` |
 
 ## The internal model
@@ -95,6 +96,56 @@ extracting usage.
 - Alert evaluation.
 - Hourly purge of expired body logs and old Route Traces.
 - Hourly usage export.
+- Background health probes for enabled plugin providers.
+
+## Plugin architecture and runtime sandbox
+
+Kinetix embeds a WebAssembly Component Model host (powered by Wasmtime 48) to support
+isolated external integrations without altering core routing guarantees or stability.
+
+```
++-------------------------------------------------------------+
+|                        Kinetix Core                         |
+|  [Pipeline]   [Router / Predicates]   [Account Pools / DB]   |
++------------------------------+------------------------------+
+                               | Typed WIT Seams
+                               v
++-------------------------------------------------------------+
+|                 Wasmtime Component Sandbox                  |
+|  +-----------------------+     +-------------------------+  |
+|  |     Plugin World      |     |  Plugin-Adapter World   |  |
+|  | - CredentialStrategy  |     | - Pure wire translation |  |
+|  | - RoutingFactProvider |     | - No network imports    |  |
+|  | - ModelSource         |     | - SSE framing owned by  |  |
+|  | - HealthProbe         |     |   Kinetix core host     |  |
+|  | - Read-only Hooks     |     +-------------------------+  |
+|  +-----------------------+                                  |
+|          | (Host-mediated capabilities)                     |
+|          v                                                  |
+|  [Encrypted Namespaced KV]    [Host HTTP (Approved Hosts)]  |
++-------------------------------------------------------------+
+```
+
+### Capability seams
+
+A plugin is inert until bound to a provider or Route by its namespaced reference (`plugin:<id>/<capability>`):
+
+1. **ProviderAdapter (`wire_plugin`)**: Operates as a pure translation library implementing the `plugin-adapter` world (`build_url`, `apply_auth`, `build_body`, `parse_stream_chunk`, `classify_error`). It imports **no network capabilities**; Kinetix core owns the HTTP connection, streaming, and byte-robust SSE framing.
+2. **CredentialStrategy (`credential_plugin`)**: Handles dynamic token acquisition and refresh (e.g. OAuth 2.0). The secret is safely passed back to the host and stored as an encrypted lease (`lease:<handle>`) in host-managed storage.
+3. **ModelSource (`model_source_plugin`)**: Contributes upstream model discovery observations (`POST /admin/api/providers/:id/discover`).
+4. **HealthProbe**: Runs on a core-owned background schedule to supply quota and health evidence for provider accounts. Core retains full ownership of cooldown and circuit policies.
+5. **RoutingFactProvider**: Evaluates typed facts surfaced to Route predicates under `plugin.<id>.<name>`. Facts are evaluated once before target planning. Pure facts cannot make network calls; cached facts expire after a declared TTL.
+6. **Request/Response Hooks**: Read-only observation hooks (`on_request_normalized`, `on_target_candidate`, `on_usage_finalized`) dispatched asynchronously on a bounded fire-and-forget queue so they can never stall or crash a client request.
+
+### Isolation and fault tolerance
+
+- **Zero ambient authority**: Plugins cannot access the host filesystem, environment variables, system sockets, or the raw SQLite database.
+- **Preemptive resource limits**: Memory is capped (default 64 MiB per store), execution is preempted via epoch interruption, and strict call deadlines are enforced.
+- **Fail-closed semantics**: If a provider or Route references a plugin that is uninstalled, disabled, or tripping its circuit, requests to that target fail closed and are explained in the Route Trace.
+- **Per-plugin circuit breaker**: Persisted in SQLite (`plugin_runtime_state`). Repeated unhandled traps or errors trip the circuit to `open`, protecting the proxy from runaway failures while keeping native providers unaffected.
+- **Cancellation neutrality**: Client aborts interrupt the guest via epoch ticks and are marked as cancellations, never penalizing the plugin's circuit breaker.
+
+See [Plugins](Plugins) for packaging, installation, and SDK documentation.
 
 See [Routing and Fallback](Routing-and-Fallback), [Observability](Observability),
 and [Security](Security) for the details of each subsystem.

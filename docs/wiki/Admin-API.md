@@ -37,11 +37,11 @@ expose it behind Cloudflare Access plus the in-Kinetix password/session check.
 | Method & path | Purpose |
 | --- | --- |
 | `GET /admin/api/providers` | List with `accounts_count` / `models_count` / `healthy_accounts`. |
-| `POST /admin/api/providers` | Create; optional `api_key` + `account_label` create the first account. |
-| `GET /admin/api/providers/{id}` | Full config (incl. `follow_redirects`, `credential_hosts`, `allow_insecure_tls`). |
-| `PUT /admin/api/providers/{id}` | Update; a non-empty `api_key` rotates the first account's credential. |
+| `POST /admin/api/providers` | Create; optional `api_key` + `account_label` create the first account. Supports plugin capability bindings (`wire_plugin`, `credential_plugin`, `model_source_plugin`). |
+| `GET /admin/api/providers/{id}` | Full config (incl. `follow_redirects`, `credential_hosts`, `allow_insecure_tls`, and plugin bindings). |
+| `PUT /admin/api/providers/{id}` | Update; a non-empty `api_key` rotates the first account's credential. Supports updating plugin bindings. |
 | `DELETE /admin/api/providers/{id}` | Delete. |
-| `POST /admin/api/providers/{id}/discover` | Fetch the upstream model list; flags already-imported and disappeared models. |
+| `POST /admin/api/providers/{id}/discover` | Fetch the upstream model list (via HTTP or bound `model_source_plugin`); flags already-imported and disappeared models. |
 | `POST /admin/api/providers/{id}/test` | Minimal connectivity probe; returns status + latency + a bounded preview. |
 
 ## Models
@@ -116,6 +116,25 @@ expose it behind Cloudflare Access plus the in-Kinetix password/session check.
 | `POST /admin/api/exports` | Export a day (default yesterday UTC). |
 | `DELETE /admin/api/exports/{name}` | Delete an export file. |
 | `POST /admin/api/test-stream` | Run a real request through the pipeline for a key id + model (used by the Live Tester; the raw key never enters the browser). |
+
+## Plugins
+
+Manage WebAssembly Component plugins (`.kxp` packages).
+
+| Method & path | Purpose |
+| --- | --- |
+| `GET /admin/api/plugins` | List all installed plugins with manifest summaries, status, and provided capabilities. |
+| `POST /admin/api/plugins/install` | Install or upgrade a `.kxp` package from `package_base64` or a server-local `path`. Accepts `sha256`, `trusted_keys` array, and `allow_untrusted_signature`. Plugins are installed disabled. |
+| `GET /admin/api/plugins/{id}` | Plugin detail: manifest metadata, requested permissions, approved permission grants, and runtime circuit state. |
+| `DELETE /admin/api/plugins/{id}` | Remove a plugin and cascade-delete its permissions, circuit state, and encrypted KV storage. |
+| `POST /admin/api/plugins/{id}/enable` | Enable an installed plugin. Verifies component linking and registers capabilities. |
+| `POST /admin/api/plugins/{id}/disable` | Disable a plugin. Bound providers/routes fail closed immediately. |
+| `POST /admin/api/plugins/{id}/validate` | Re-instantiate the component in a test store to verify exports and linking. |
+| `GET /admin/api/plugins/{id}/permissions` | View requested permissions from manifest vs currently approved grants. |
+| `POST /admin/api/plugins/{id}/permissions/approve` | Approve all permissions declared by the plugin manifest (all-or-nothing). |
+| `POST /admin/api/plugins/{id}/permissions/revoke` | Revoke a single permission grant (`{"permission": "..."}`). Disables the plugin while retaining its KV state. |
+| `GET /admin/api/plugins/{id}/audit` | Filtered audit log entries where target is this plugin. |
+| `GET /admin/api/plugins/{id}/metrics` | Plugin metrics: host invocations, faults, timeouts, cancellations, HTTP calls, runtime state, and encrypted KV storage bytes. |
 
 ## Error shape
 

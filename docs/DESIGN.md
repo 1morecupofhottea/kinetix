@@ -47,6 +47,7 @@ internal seams. The earlier draft's plugin material (FR-11.3–FR-11.6, NFR-8, a
 ## Related documents
 - Pi custom provider docs: <https://pi.dev/docs/latest/custom-provider>
 - Repository README, `docs/wiki/`, `docs/compatibility.md`, `docs/pi-compatibility.md`, `docs/benchmarks.md`
+- Plugin architecture & specification: `docs/KINETIX-PLUGIN-ARCHITECTURE.md`
 - Test plan: the protocol torture suite and compatibility fixtures in FR-9 are part of the
   implementation acceptance criteria.
 
@@ -505,6 +506,11 @@ Everything else is optional; **unset means not sent, not assumed, or unknown**.
 ### FR-11 Internal extensibility seams
 Kinetix v1 has **no public plugin runtime or ABI commitment**. These interfaces exist so future
 integration work does not require rewriting core routing/frontends.
+
+> **Implementation Note:** Post-v1, the WebAssembly Component Model plugin host has been implemented
+> as documented in `docs/KINETIX-PLUGIN-ARCHITECTURE.md` and `docs/wiki/Plugins.md`, fulfilling FR-11.5,
+> FR-11.6, and NFR-8 through Wasmtime 48 sandboxing, typed WIT capability seams, encrypted KV storage,
+> and the `kinetix plugin` CLI and admin API surface.
 
 | ID | Requirement | Priority | Phase |
 |---|---|---|---|

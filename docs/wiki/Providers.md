@@ -15,6 +15,8 @@ Kinetix has three outbound adapters, selected by the provider's configured
 | `anthropic` | Anthropic `/messages` (streaming) | `/models` |
 | `gemini` | Gemini `:streamGenerateContent?alt=sse` | `/models` |
 
+Providers can also bind to external WebAssembly plugin adapters via `wire_plugin` (e.g. `plugin:dev.kinetix.antigravity-oauth/antigravity`).
+
 Inbound formats are OpenAI Chat Completions and Anthropic Messages. When inbound
 and outbound formats match, Kinetix uses **same-format passthrough** and forwards
 the client body byte-for-byte (preserving unknown/vendor fields) while extracting
@@ -87,9 +89,24 @@ kinetix model add --provider "My Provider" --upstream-id gpt-4o-mini --display-n
 Or through the dashboard's **Upstream Providers** page (which also offers Test
 Ping, Fetch Models, and Validate/Dry Run).
 
+## Plugin-backed providers & capability bindings
+
+When an upstream provider requires non-standard protocols, token refresh flows, or specialized discovery, operators can bind the provider to capabilities exposed by installed WebAssembly plugins:
+
+* **`wire_plugin`** (`plugin:<id>/<capability>`): Delegates wire formatting, error classification, and stream event parsing to a WebAssembly plugin adapter implementing the `plugin-adapter` world. The plugin functions as a pure translation engine; Kinetix core retains full control over the underlying HTTP transport, connection pooling, and client SSE streaming.
+* **`credential_plugin`** (`plugin:<id>/<capability>`): Delegates credential acquisition or refresh (e.g., OAuth 2.0 refresh-token exchanges, GCP access tokens) to a WebAssembly credential strategy. Fresh credentials are stored as encrypted leases (`lease:<handle>`) inside the host-managed KV store and automatically attached to requests.
+* **`model_source_plugin`** (`plugin:<id>/<capability>`): Delegates upstream model discovery to the plugin when `POST /admin/api/providers/{id}/discover` is executed.
+
+### Fail-closed behavior
+
+If a provider references a plugin that is not installed, is disabled, or whose circuit breaker is tripped:
+- The provider **fails closed** immediately.
+- Requests targeting this provider are skipped before making outbound connections.
+- An explicit failure reason is recorded in the Route Trace (e.g. `plugin '...' is disabled; bound provider fails closed`).
+- Native providers and other plugins in the Route remain completely unaffected.
+
 ## Notes
 
 - Multiple accounts are for legitimate **resilience and cost ordering**, not limit
   evasion. Confirm each provider's terms before team rollout.
-- The core ships no consumer-account login integrations; upstream keys are static
-  API keys (a credential-strategy seam exists for future extensions).
+- Built-in providers use static API keys. For dynamic token refresh (such as OAuth 2.0 refresh tokens) or custom upstream protocols, use sandboxed WebAssembly plugins (see [Plugins](Plugins)).

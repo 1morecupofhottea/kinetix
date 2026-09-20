@@ -52,6 +52,26 @@ fallback causes, the commit point, and the final result.
 Trace steps look like `resolve → candidate → skip → attempt → commit → result`
 with per-step timings and warnings.
 
+When a request evaluates plugin routing facts (`plugin.<id>.<name>`) or targets a plugin-backed provider (`wire_plugin` / `credential_plugin`), the Route Trace records:
+- Evaluated fact values and their source (`plugin_id`, `plugin_version`, `capability`).
+- Explicit skip reasons if a bound plugin is uninstalled, disabled, or tripping its circuit breaker.
+- Credential lease acquisition or refresh steps.
+
+## Plugin metrics and audit
+
+Plugin performance and reliability are monitored independently of core proxy traffic:
+
+* **Per-plugin metrics (`GET /admin/api/plugins/{id}/metrics`)**:
+  * `host_invocations_total`: Total guest function invocations.
+  * `host_faults_total`: Traps, panics, and internal plugin errors.
+  * `host_timeouts_total`: Executions preempted by epoch interruption.
+  * `host_cancellations_total`: Client disconnects during guest execution (never penalizes circuit).
+  * `host_http_requests_total`: Outbound HTTP requests made through the host HTTP capability.
+  * `circuit_state` & `consecutive_failures`: Current circuit-breaker status (`closed`, `open`, `half_open`).
+  * `kv_bytes`: Total encrypted storage consumed by the plugin in `plugin_kv`.
+* **Usage log attribution**: The `usage_logs` database table records `plugin_id` and `plugin_version` on every completed request that used a plugin, ensuring complete auditability and usage analytics.
+* **Plugin audit trail (`GET /admin/api/plugins/{id}/audit`)**: Dedicated view of lifecycle actions (install, enable, disable, permission approvals/revocations, removal).
+
 ## Flight recorder (FR-13)
 
 A bounded, metadata-only ring of lifecycle events (request accepted, auth

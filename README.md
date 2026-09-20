@@ -23,6 +23,7 @@ Kinetix puts those concerns behind one endpoint.
 | **Account pools**             | Multiple credentials per provider with health state, cooldowns, quotas, and automatic failover       |
 | **Executable Routes**         | Priority, round-robin, weighted, and least-used target selection with configurable fallback          |
 | **Streaming-safe failover**   | Retry another eligible target before response bytes are committed to the client                      |
+| **Extensibility (WASM)**      | Sandboxed WebAssembly (Wasmtime) plugins for custom wire formats, OAuth/credential strategies, routing facts, and probes |
 | **Cost accounting**           | Versioned prices, token usage, cached/thinking-aware accounting, exports, and spend views            |
 | **Routing diagnostics**       | Route traces, request inspection, and flight-recorder diagnostics                                    |
 | **Self-hosted control plane** | SQLite, embedded dashboard, admin API, CLI, backups, and exports                                     |
@@ -230,6 +231,26 @@ Adapters are selected by configured `wire_format`, not by vendor identity.
 
 Each provider can have multiple credential accounts. Kinetix tracks account health and supports cooldown on `429`, `Retry-After`, quota exhaustion, authentication failures, soft spend quotas, and routing across eligible accounts.
 
+Providers can also bind to WebAssembly plugins for custom wire formats (`wire_plugin`), credential strategies (`credential_plugin`), and model discovery (`model_source_plugin`).
+
+## Plugins and extensibility
+
+When an upstream integration cannot be expressed through standard configuration or built-in wire formats, Kinetix supports sandboxed WebAssembly Component plugins (built on Wasmtime 48):
+
+* **Provider adapters (`wire_plugin`)**: Custom outbound wire translations (such as the bundled `antigravity` adapter for Google's internal API) while Kinetix manages HTTP transport and SSE framing.
+* **Credential strategies (`credential_plugin`)**: Dynamic credential acquisition and refresh (such as OAuth 2.0 refresh-token exchanges) with host-managed encrypted leases.
+* **Routing facts (`plugin.<id>.<name>`)**: Custom typed facts evaluated by Route predicates during target selection.
+* **Health probes**: Core-scheduled background health and quota verification.
+* **Model sources (`model_source_plugin`)**: Custom upstream model discovery.
+
+Plugins run with zero ambient authority in a strictly isolated WebAssembly sandbox:
+
+* Packaged as signed or hash-verified `.kxp` archives.
+* Declared, all-or-nothing permission grants (host HTTP allowlists, storage).
+* Private, encrypted per-plugin KV storage (`plugin_kv`).
+* Preemptive epoch interruption and per-store memory limits.
+* Automatic circuit breakers that fail closed on repeated faults without impacting native adapters or the core proxy.
+
 ## Cost and usage tracking
 
 Kinetix records usage in SQLite through a non-blocking queue.
@@ -286,6 +307,7 @@ kinetix account --help
 kinetix route --help
 kinetix alias --help
 kinetix key --help
+kinetix plugin --help
 ```
 
 Administrative commands operate directly on the SQLite control plane, so most configuration changes work even when the proxy server is stopped and do not require the dashboard or admin password.
@@ -307,6 +329,7 @@ Kinetix handles upstream credentials and client authentication keys, so its defa
 Highlights include:
 
 * AES-256-GCM encryption for upstream credentials at rest
+* WebAssembly Component sandbox (Wasmtime) with all-or-nothing permissions and encrypted KV storage
 * hashed virtual-key storage
 * SSRF protections for administrator-configured upstream endpoints
 * request/response bodies not persisted by default
@@ -404,6 +427,7 @@ The [Kinetix Wiki](https://github.com/LazyGreed/kinetix/wiki) contains task-orie
 * Providers
 * Routing and Fallback
 * Authentication
+* Plugins
 * Admin API
 * Dashboard
 * Observability
@@ -419,6 +443,7 @@ Wiki sources live in [docs/wiki/](docs/wiki).
 Additional technical documentation:
 
 * [docs/DESIGN.md](docs/DESIGN.md) — product and technical design
+* [docs/KINETIX-PLUGIN-ARCHITECTURE.md](docs/KINETIX-PLUGIN-ARCHITECTURE.md) — WebAssembly plugin architecture and WIT specification
 * [docs/compatibility.md](docs/compatibility.md) — protocol compatibility and documented deviations
 * [docs/pi-compatibility.md](docs/pi-compatibility.md) — Pi setup and acceptance notes
 * [docs/benchmarks.md](docs/benchmarks.md) — benchmark methodology and results

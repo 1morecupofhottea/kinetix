@@ -112,6 +112,54 @@ kinetix alias list
 kinetix alias remove <ALIAS>      # remove takes the alias NAME, not an id
 ```
 
+### `plugin`
+Manage WebAssembly plugins (`.kxp` packages). Plugins are installed disabled by default and require explicit permission approval and enablement.
+
+```bash
+# Install a .kxp package (installed-disabled by default)
+kinetix plugin install <PATH> [--sha256 <HEX>] [--trusted-key <KEY>]... [--allow-untrusted-signature]
+
+# Enumerate installed plugins
+kinetix plugin list
+
+# Show detailed manifest, approved permissions, and circuit state
+kinetix plugin show <ID>
+
+# Validate component instantiation and capability exports
+kinetix plugin validate <ID>
+
+# Approve declared permissions (all-or-nothing)
+kinetix plugin approve <ID>
+
+# Enable an installed plugin
+kinetix plugin enable <ID>
+
+# Disable a plugin (new requests stop referencing it)
+kinetix plugin disable <ID>
+
+# List approved permission grants
+kinetix plugin permissions <ID>
+
+# Revoke a single permission grant (disables plugin, retains KV state)
+kinetix plugin revoke <ID> <PERMISSION>
+
+# Remove a plugin and cascade-delete its permissions, circuit state, and KV storage
+kinetix plugin remove <ID>
+```
+
+| Subcommand | Purpose |
+| --- | --- |
+| `install` | Validates archive integrity, records SHA-256, checks optional Ed25519 publisher signature against trusted keys (base64 or hex), stores component bytes in SQLite, and leaves plugin disabled. |
+| `list` | Lists installed plugin id, version, status (`enabled` / `disabled`), and display name. |
+| `show <id>` | Prints the full manifest summary, declared capabilities, requested permissions, and runtime circuit-breaker state as JSON. |
+| `validate <id>` | Instantiates the WebAssembly component in a test store to verify linking and export conformance. |
+| `approve <id>` | Approves all declared permissions for the installed version. |
+| `enable <id>` | Validates exports, checks that all requested permissions are approved, and marks the plugin active in memory and SQLite. |
+| `disable <id>` | Marks the plugin disabled; any bound provider or Route fails closed immediately. |
+| `permissions <id>` | Prints approved permissions and their parameters. |
+| `revoke <id> <perm>` | Revokes an approved permission grant. |
+| `remove <id>` | Cascades removal of the plugin, its approved permissions, runtime state, and encrypted KV store. |
+
 ### `export`
 ```bash
 kinetix export run [--day YYYY-MM-DD]   # default: yesterday (UTC)

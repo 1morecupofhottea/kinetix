@@ -55,6 +55,7 @@ Fact vocabulary:
 | `target_provider` / `target_provider_id` | The candidate provider. |
 | `target_capability(arg)` | A declared capability (unknown if unconfigured). |
 | `target_context_window` / `target_max_output_tokens` | Model limits. |
+| `plugin.<id>.<name>` | Typed fact contributed by an installed plugin (unknown if missing or stale). |
 
 Wire format (as stored/returned by the admin API):
 
@@ -77,6 +78,18 @@ targets: [
   { "model": "9router/free",            "predicate": { "expr": { "fact": "has_tools", "op": "eq", "value": false } } }
 ]
 ```
+
+### Plugin-contributed routing facts
+
+Plugins implementing the `RoutingFactProvider` capability can export typed facts into the predicate engine:
+
+* **Naming convention**: `plugin.<plugin-id>.<fact-name>` (e.g. `plugin.dev.example.geo.region` or `plugin.dev.example.compute.capacity_tier`).
+* **Evaluation timing**: Fact providers run once per request before target candidate planning, caching values across the evaluation of all Route targets.
+* **Determinism**:
+  * `pure` fact providers are side-effect-free and forbidden from making outbound network calls.
+  * `cached` fact providers periodically poll their upstream source. If a cached observation exceeds `max_age_ms`, it is dropped.
+* **Failures and unknowns**: If a plugin fact provider times out, traps, or is disabled, the fact evaluates as `unknown`. The Route's `when_unknown` policy (`skip` or `allow`) then governs target eligibility.
+* **Traceability**: The Route Trace records the evaluated fact values along with their source plugin ID and version, or the exact failure reason (e.g. timeout or circuit open).
 
 ## Fallback and the commit point (FR-4.5)
 

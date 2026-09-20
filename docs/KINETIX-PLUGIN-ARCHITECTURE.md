@@ -1,20 +1,20 @@
-# Kinetix Plugin Architecture — Post-v1 Design Proposal
+# Kinetix Plugin Architecture
 
 ## Status
 
-**Proposal.** This turns Kinetix's existing internal extension seams into a secure external plugin
-architecture without changing v1's current promise. Plugins remain opt-in and post-v1.
+**Implemented (post-v1).** This turns Kinetix's existing internal extension seams into a secure external plugin
+architecture using the WebAssembly Component Model (Wasmtime 48). Plugins remain opt-in and post-v1.
 
-The proposal deliberately preserves Kinetix's current rule that provider behavior should remain
+The architecture deliberately preserves Kinetix's rule that provider behavior should remain
 configuration-driven whenever possible. A plugin exists only when an integration cannot be expressed
-through supported wire formats, credential schemes, model discovery configuration, or current
+through supported wire formats, credential schemes, model discovery configuration, or built-in
 internal seams.
 
-This document is the "separate requirements decision" that NFR-5.6 requires before any external
-extension API is committed; until it is approved, FR-11.3/11.4 and NFR-5.6 continue to hold. Where it
-is more restrictive than the earlier post-v1 sketch (FR-11.6, which described plugins registering
-whole providers that could join Routes), the narrower capability model in §6 is a deliberate,
-recorded refinement, not an accidental divergence.
+This document serves as both the technical design and the implementation reference for the plugin
+subsystem (§28 records what is landed in the repository). Where it is more restrictive than the
+earlier post-v1 sketch (FR-11.6 in `docs/DESIGN.md`, which described plugins registering whole
+providers that could join Routes), the narrower capability model in §6 is a deliberate, recorded
+refinement, not an accidental divergence.
 
 ## 1. Goals
 

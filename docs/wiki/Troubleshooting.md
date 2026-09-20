@@ -48,6 +48,21 @@ by the same loop.
 A reasoning model can spend its whole token budget on thinking tokens before
 emitting text (finish_reason `length`, empty content). Raise `max_tokens`.
 
+## Plugin-backed provider fails or is skipped
+
+If a provider bound to a plugin (`wire_plugin` or `credential_plugin`) is skipped or fails:
+
+1. **Verify plugin status**: Run `kinetix plugin show <id>`. The plugin must have `status: enabled`. If it is `disabled`, run `kinetix plugin enable <id>`.
+2. **Check approved permissions**: Run `kinetix plugin permissions <id>`. Approval is all-or-nothing: if any declared permission is missing or was revoked, run `kinetix plugin approve <id>` followed by `kinetix plugin enable <id>`.
+3. **Check circuit breaker**: Check the `runtime` section in `kinetix plugin show <id>` or `GET /admin/api/plugins/{id}/metrics`. If `circuit_state` is `open`, the plugin suffered repeated unhandled traps or timeouts. Run `kinetix plugin validate <id>` to test component linking, and check logs for guest panic messages.
+4. **Inspect the Route Trace**: Request diagnostics via `GET /admin/api/requests/{id}/route-trace`. If a plugin was disabled or failed during execution, the trace records the exact explanation.
+
+## Plugin installation or validation fails
+
+- **"archive is invalid or tar traversal detected"**: The `.kxp` package format must be a clean archive containing `plugin.toml` and `plugin.wasm` at the root, with no absolute paths or symlinks. Build packages using `scripts/build-plugin.sh`.
+- **"untrusted signature"**: If the plugin contains `plugin.sig`, provide the publisher's Ed25519 public key via `--trusted-key <key>` (base64 or hex), or use `--allow-untrusted-signature` in development.
+- **"component linking failed"**: The component was compiled against an incompatible WIT version or missing required exports. Recompile the plugin using `plugins/sdk` and `wit-bindgen 0.62`.
+
 ## A client stays logged in after a restart
 
 It shouldn't — sessions are in-memory and a restart invalidates them. If you see

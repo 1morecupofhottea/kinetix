@@ -83,6 +83,19 @@ custom_header_name = "x-goog-api-key"
   upstream_id = "gemini-2.5-flash"
   display_name = "Gemini 2.5 Flash"
 
+# Example provider backed by a WebAssembly plugin
+[[providers]]
+name = "Google Antigravity"
+base_url = "https://autopush-alkalimakersuite-pa.sandbox.googleapis.com"
+wire_format = "antigravity"
+auth_scheme = "bearer"
+wire_plugin = "plugin:dev.kinetix.antigravity-oauth/antigravity"
+credential_plugin = "plugin:dev.kinetix.antigravity-oauth/antigravity-oauth"
+
+  [[providers.accounts]]
+  label = "antigravity-dev"
+  api_key = "refresh_token_or_client_payload"
+
 [[aliases]]
 alias = "coder"
 target_type = "model"
@@ -110,6 +123,21 @@ curl -b cookie.txt -X POST http://127.0.0.1:8080/admin/api/config/import \
 
 Import is upsert-by-name, never deletes, and never overwrites an existing
 credential.
+
+## Plugin storage and host configuration
+
+WebAssembly plugins require no external files on disk once installed:
+
+* **Single-store persistence**: The `.wasm` component bytes, manifest JSON, version metadata, approved permissions, circuit-breaker runtime state, and encrypted key-value pairs are all stored in `kinetix.db` (`plugins`, `plugin_permissions`, `plugin_kv`, `plugin_runtime_state` tables).
+* **Zero-config backup and replication**: Because plugin components and data reside inside SQLite, normal database backups (`kinetix backup run`) and SQLite replication fully encompass all installed plugins and their states.
+* **Encrypted storage isolation**: Plugin KV entries are encrypted at rest with AES-256-GCM using a key derived from `KINETIX_MASTER_KEY` under the context label `kinetix-plugin-kv`. Plugins have private logical namespaces and cannot access host master keys or each other's KV pairs.
+* **Default Host Policy (`HostPolicy`)**:
+  * Max memory per store: 64 MiB (`min(manifest requested, 64 MiB)`)
+  * Epoch interruption interval: 10 ms
+  * Execution timeout: 10 s for pure/cached evaluations; 30 s for adapter stream setup
+  * Max KV storage per plugin: 10 MiB
+  * Max HTTP response body size: 10 MiB
+  * Concurrency cap: 32 concurrent instances per plugin
 
 ## Backups and restore
 
