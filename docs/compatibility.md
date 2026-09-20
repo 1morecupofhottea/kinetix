@@ -45,6 +45,35 @@ routed independently. Pi sends `X-Session-Id` when configured with
 `sendSessionAffinityHeaders` and `sessionAffinityFormat: "openrouter"`, or
 `Session-Id` with the `"openai"` format (see `docs/pi-compatibility.md`).
 
+## OpenAI Responses API Clients (Next-Gen Coding Agents)
+
+Kinetix serves `POST /v1/responses` for modern agentic tools and coding CLI agents
+(such as Codex CLI):
+
+- **Lifecycle events**: Full hierarchical SSE emission (`response.created`,
+  `response.in_progress`, `response.output_item.added`, `response.content_part.added`,
+  `response.output_text.delta`, `response.output_text.done`, `response.content_part.done`,
+  `response.output_item.done`, `response.completed`).
+- **Function calling**: First-class streaming via `response.output_item.added` (item type
+  `function_call`), argument streaming deltas, and completion item.
+- **Multi-turn input**: Accepts flat text prompts, structured `instructions`, and input item
+  arrays chaining messages, function calls, and function call outputs.
+
+## Coding-Agent Compatibility CI Matrix
+
+Wire compatibility across coding agents is exercised continuously via
+`scripts/compat-matrix.sh` (backed by `scripts/compat-matrix.py`) against synthetic
+upstreams:
+
+| Client Profile | Inbound API | Scenarios Tested |
+|---|---|---|
+| **Pi Coding Agent** | `/v1/chat/completions` | Plain streaming, tool calls & delta reassembly, multi-turn continuation, session affinity, sync fallback |
+| **Next-Gen / Codex CLI** | `/v1/responses` | Plain streaming, tool calling, input chaining, session affinity, sync fallback |
+| **Claude Code / Anthropic Agent** | `/v1/messages` | Plain streaming, tool calling, tool result continuation, session affinity, sync fallback |
+
+Every scenario is tested against both same-format passthrough (OpenAI) and cross-format
+translating adapters (Gemini) with zero external test runner dependencies.
+
 ## Anthropic-format clients
 
 `POST /v1/messages` accepts the Anthropic Messages shape with `x-api-key` auth

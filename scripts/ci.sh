@@ -45,6 +45,9 @@ cargo build 2>&1 | tail -1
 step "end-to-end smoke (FR-9.2, FR-9.4)"
 scripts/smoke.sh 127.0.0.1:8180 2>&1 | tail -3
 
+step "coding-agent compatibility matrix (FR-9.2, FR-9.3)"
+scripts/compat-matrix.sh 127.0.0.1:8186 2>&1 | tail -5
+
 step "benchmark matrix (NFR-1)"
 scripts/bench-rust.sh "1 10 100" 500 2>&1 | tail -5
 

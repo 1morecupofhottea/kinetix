@@ -101,7 +101,7 @@ class Handler(BaseHTTPRequestHandler):
         tool_fragments = int(req.get("tool_fragments", 0) or 0)
 
         if "/gemini/" in self.path:
-            self._gemini(model)
+            self._gemini(model, want_tools)
         else:
             self._openai(model, stream, want_tools, tool_fragments)
 
@@ -188,7 +188,7 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     # -- Gemini SSE -------------------------------------------------------
-    def _gemini(self, model):
+    def _gemini(self, model, want_tools=False):
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("cache-control", "no-cache")
@@ -206,6 +206,12 @@ class Handler(BaseHTTPRequestHandler):
 
         try:
             time.sleep(TTFT_MS / 1000.0)
+            if want_tools:
+                frame({"candidates": [{"content": {"role": "model", "parts": [{"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}]}}]})
+                frame({"candidates": [{"content": {"role": "model", "parts": []}, "finishReason": "STOP"}],
+                       "usageMetadata": {"promptTokenCount": 100, "candidatesTokenCount": 10,
+                                         "totalTokenCount": 110}})
+                return
             for _ in range(TOKENS):
                 frame({"candidates": [{"content": {"role": "model", "parts": [{"text": WORD}]}}]})
                 if DELAY_MS:
