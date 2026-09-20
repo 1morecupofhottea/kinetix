@@ -466,6 +466,21 @@ export const PluginsView: React.FC = () => {
     }
   };
 
+  const setupProvider = async (pluginId: string, integrationId: string) => {
+    setBusy(`setup:${integrationId}`);
+    setError(null);
+    setNotice(null);
+    try {
+      await Kinetix.setupPluginIntegrationProvider(pluginId, integrationId);
+      setNotice('Provider created successfully.');
+      await refresh(selectedId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const connectAccount = async (
     pluginId: string,
     flowName: string,
@@ -1004,6 +1019,54 @@ export const PluginsView: React.FC = () => {
                             </code>
                           )}
                         </div>
+
+                        {providers.some(
+                          (p) =>
+                            p.baseUrl === integration.provider?.base_url &&
+                            (!integration.provider_adapter ||
+                              p.wirePlugin === `plugin:${selected.id}/${integration.provider_adapter}`)
+                        ) && (
+                          <div className="mt-3 flex items-center gap-1.5 text-xs font-heading font-bold text-emerald-700">
+                            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                            <span>
+                              Active in Upstream Providers (
+                              {providers.find(
+                                (p) =>
+                                  p.baseUrl === integration.provider?.base_url &&
+                                  (!integration.provider_adapter ||
+                                    p.wirePlugin === `plugin:${selected.id}/${integration.provider_adapter}`)
+                              )?.name}
+                              )
+                            </span>
+                          </div>
+                        )}
+
+                        {!providers.some(
+                          (p) =>
+                            p.baseUrl === integration.provider?.base_url &&
+                            (!integration.provider_adapter ||
+                              p.wirePlugin === `plugin:${selected.id}/${integration.provider_adapter}`)
+                        ) &&
+                          integration.provider &&
+                          selected.ui.actions.filter((action) => action.integration === integration.id).length === 0 && (
+                            <div className="mt-4 space-y-2">
+                              <div className="text-xs font-mono text-[var(--ink)]/55 break-all">
+                                {integration.provider.base_url}
+                              </div>
+                              <SketchButton
+                                variant="primary"
+                                className="gap-2"
+                                disabled={busy !== null || selected.status !== 'enabled'}
+                                onClick={() => void setupProvider(selected.id, integration.id)}
+                              >
+                                <PackagePlus className="w-4 h-4" />
+                                {busy === `setup:${integration.id}` ? 'Setting up…' : 'Set up Provider'}
+                              </SketchButton>
+                              <p className="text-xs font-body text-[var(--ink)]/60">
+                                Create the upstream provider from the plugin&apos;s validated defaults.
+                              </p>
+                            </div>
+                          )}
 
                         {selected.ui.actions
                           .filter((action) => action.integration === integration.id)

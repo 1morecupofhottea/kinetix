@@ -3625,6 +3625,130 @@ pub(crate) async fn register_enabled_plugin_capabilities(state: &AppState, id: &
             }
         }
     }
+
+    auto_provision_plugin_providers(state, id).await;
+}
+
+pub(crate) async fn auto_provision_plugin_providers(state: &AppState, id: &str) {
+    let Some(manager) = state.plugin_manager().cloned() else {
+        return;
+    };
+    let row = match manager.get(id).await {
+        Ok(Some(row)) if row.enabled != 0 => row,
+        _ => return,
+    };
+    let Some(manifest) = row.manifest() else {
+        return;
+    };
+    for integration in &manifest.integrations {
+        let Some(template) = &integration.provider else {
+            continue;
+        };
+        if validate_outbound_url(state, &template.base_url).is_err() {
+            continue;
+        }
+        let wire_plugin = integration
+            .provider_adapter
+            .as_deref()
+            .map(|name| format!("plugin:{id}/{name}"))
+            .unwrap_or_default();
+        let credential_plugin = integration
+            .credential_strategy
+            .as_deref()
+            .map(|name| format!("plugin:{id}/{name}"))
+            .unwrap_or_default();
+        let model_source_plugin = integration
+            .model_source
+            .as_deref()
+            .map(|name| format!("plugin:{id}/{name}"))
+            .unwrap_or_default();
+
+        let Some(wire) = WireFormat::parse(&template.wire_format) else {
+            continue;
+        };
+        let Some(auth) = AuthScheme::parse(&template.auth_scheme) else {
+            continue;
+        };
+
+        let Ok(providers) = db::list_providers(&state.pool).await else {
+            continue;
+        };
+        let exists = providers.into_iter().any(|provider| {
+            provider.base_url == template.base_url
+                && provider.wire_plugin == wire_plugin
+                && provider.credential_plugin == credential_plugin
+                && provider.model_source_plugin == model_source_plugin
+        });
+        if exists {
+            continue;
+        }
+
+        let credential_hosts = template.credential_hosts.join(",");
+        let extra_headers = serde_json::to_value(&template.extra_headers).unwrap_or(json!({}));
+        let insert_res = db::insert_provider(
+            &state.pool,
+            &db::NewProvider {
+                name: &integration.name,
+                base_url: &template.base_url,
+                wire_format: wire,
+                auth_scheme: auth,
+                custom_header_name: template.custom_header_name.as_deref(),
+                custom_param_name: template.custom_param_name.as_deref(),
+                extra_headers,
+                timeout_ms: template.timeout_ms as i64,
+                capability_mode: &template.capability_mode,
+                models_path: template.models_path.as_deref(),
+                rate_limit_rules: json!({}),
+                follow_redirects: template.follow_redirects,
+                credential_hosts: &credential_hosts,
+                allow_insecure_tls: false,
+                wire_plugin: &wire_plugin,
+                credential_plugin: &credential_plugin,
+                model_source_plugin: &model_source_plugin,
+            },
+        )
+        .await;
+
+        if let Ok(id_created) = insert_res {
+            let _ = db::insert_audit(
+                &state.pool,
+                "admin",
+                "plugin_integration_provider_created",
+                "provider",
+                &id_created,
+                &integration.name,
+                &format!(
+                    "Created provider from plugin {} integration {}.",
+                    id, integration.id
+                ),
+            )
+            .await;
+
+            // If this integration requires no external credential strategy, provision a default public account.
+            if credential_plugin.is_empty() {
+                if let Ok(accounts) = db::accounts_for_provider(&state.pool, &id_created).await {
+                    if accounts.is_empty() {
+                        if let Ok(secret_enc) = state.crypto.encrypt("public") {
+                            let mask = crate::crypto::mask_secret("public");
+                            let _ = db::insert_account(
+                                &state.pool,
+                                &id_created,
+                                "public",
+                                &secret_enc,
+                                &mask,
+                                1,
+                                1,
+                                None,
+                                "none",
+                            )
+                            .await;
+                        }
+                    }
+                }
+            }
+            let _ = state.registry.reload(&state.pool).await;
+        }
+    }
 }
 
 /// `GET /admin/api/plugins/catalog` — embedded official discovery metadata.
